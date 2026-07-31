@@ -1,0 +1,175 @@
+@page "{id:guid}"
+@model FindFamiliar.Server.Pages.Tasks.DetailsModel
+@{
+    ViewData["Title"] = Model.Document?.Task.Title ?? "Task";
+}
+
+@if (Model.Document is not null)
+{
+    <section class="dashboard-intro" aria-labelledby="task-title">
+        <p class="eyebrow">@Model.Document.Project.Name · context revision @Model.Document.Project.ContextRevision</p>
+        <h1 id="task-title">@Model.Document.Task.Title</h1>
+        <p class="intro-copy">@Model.Document.Task.RequestedOutcome</p>
+        <p>
+            <a asp-page="../Projects/Details" asp-route-id="@Model.Document.Project.Id">Back to project</a>
+            · <a href="/tasks/@Model.Document.Task.Id/context.md">Markdown context</a>
+            · <a href="/tasks/@Model.Document.Task.Id/context.json">JSON context</a>
+        </p>
+    </section>
+
+    @if (TempData["StatusMessage"] is string statusMessage)
+    {
+        <p role="status">@statusMessage</p>
+    }
+
+    <section aria-labelledby="task-status-title">
+        <div class="section-heading">
+            <div>
+                <p class="eyebrow">Task state</p>
+                <h2 id="task-status-title">@Model.Document.Task.Status</h2>
+            </div>
+        </div>
+        <form method="post" asp-page-handler="UpdateStatus">
+            <label asp-for="NewTaskStatus">Change status</label>
+            <select asp-for="NewTaskStatus">
+                @foreach (var status in Model.TaskStatuses)
+                {
+                    <option value="@status">@status</option>
+                }
+            </select>
+            <button type="submit">Update task</button>
+        </form>
+    </section>
+
+    <section aria-labelledby="sessions-title">
+        <div class="section-heading">
+            <div>
+                <p class="eyebrow">Independent work</p>
+                <h2 id="sessions-title">Agent sessions</h2>
+            </div>
+        </div>
+
+        <p>Start a role, open the Markdown context in a clean conversation, then record the durable result below.</p>
+        <form method="post" asp-page-handler="StartSession">
+            <p>
+                <label asp-for="NewSession.Role"></label><br />
+                <select asp-for="NewSession.Role">
+                    @foreach (var role in Model.AgentSessionRoles)
+                    {
+                        <option value="@role">@role</option>
+                    }
+                </select>
+            </p>
+            <p>
+                <label asp-for="NewSession.Provider"></label><br />
+                <input asp-for="NewSession.Provider" />
+            </p>
+            <p>
+                <label asp-for="NewSession.ExternalSessionReference"></label><br />
+                <input asp-for="NewSession.ExternalSessionReference" />
+            </p>
+            <button type="submit">Start session</button>
+        </form>
+
+        @if (Model.Document.Sessions.Count == 0)
+        {
+            <p>No sessions have started for this task.</p>
+        }
+        else
+        {
+            <ul>
+                @foreach (var session in Model.Document.Sessions)
+                {
+                    <li>
+                        <strong>@session.Role</strong> — @session.Status; read revision @session.ContextRevisionRead; started @session.StartedUtc.ToLocalTime().ToString("g")
+                        @if (!string.IsNullOrWhiteSpace(session.Provider))
+                        {
+                            <span> via @session.Provider</span>
+                        }
+                        @if (session.Status == FindFamiliar.Server.Domain.AgentSessionStatus.Started)
+                        {
+                            <form method="post" asp-page-handler="CompleteSession" style="display:inline">
+                                <input type="hidden" name="sessionId" value="@session.Id" />
+                                <button type="submit">Complete</button>
+                            </form>
+                        }
+                    </li>
+                }
+            </ul>
+        }
+    </section>
+
+    <section aria-labelledby="context-title">
+        <div class="section-heading">
+            <div>
+                <p class="eyebrow">Canonical knowledge</p>
+                <h2 id="context-title">Context entries</h2>
+            </div>
+        </div>
+
+        @if (Model.Document.ProjectEntries.Count == 0 && Model.Document.TaskEntries.Count == 0)
+        {
+            <p>No durable context has been recorded for this task yet.</p>
+        }
+        else
+        {
+            @if (Model.Document.ProjectEntries.Count > 0)
+            {
+                <h3>Project context</h3>
+                @foreach (var entry in Model.Document.ProjectEntries)
+                {
+                    <article>
+                        <h4>@entry.Kind: @entry.Title</h4>
+                        <p>@entry.Content</p>
+                    </article>
+                }
+            }
+
+            @if (Model.Document.TaskEntries.Count > 0)
+            {
+                <h3>Task context</h3>
+                @foreach (var entry in Model.Document.TaskEntries)
+                {
+                    <article>
+                        <h4>@entry.Kind: @entry.Title</h4>
+                        <p>@entry.Content</p>
+                    </article>
+                }
+            }
+        }
+
+        <form method="post" asp-page-handler="CreateContextEntry">
+            <p>
+                <label asp-for="NewContextEntry.Kind"></label><br />
+                <select asp-for="NewContextEntry.Kind">
+                    @foreach (var kind in Model.ContextEntryKinds)
+                    {
+                        <option value="@kind">@kind</option>
+                    }
+                </select>
+            </p>
+            <p>
+                <label asp-for="NewContextEntry.Title"></label><br />
+                <input asp-for="NewContextEntry.Title" />
+                <span asp-validation-for="NewContextEntry.Title"></span>
+            </p>
+            <p>
+                <label asp-for="NewContextEntry.Content"></label><br />
+                <textarea asp-for="NewContextEntry.Content" rows="6"></textarea>
+                <span asp-validation-for="NewContextEntry.Content"></span>
+            </p>
+            <p>
+                <label asp-for="NewContextEntry.SourceSessionId"></label><br />
+                <select asp-for="NewContextEntry.SourceSessionId">
+                    <option value="">Human / no session</option>
+                    @foreach (var session in Model.Document.Sessions)
+                    {
+                        <option value="@session.Id">@session.Role — @session.Status</option>
+                    }
+                </select>
+                <span asp-validation-for="NewContextEntry.SourceSessionId"></span>
+            </p>
+            <button type="submit">Record durable context</button>
+        </form>
+    </section>
+}

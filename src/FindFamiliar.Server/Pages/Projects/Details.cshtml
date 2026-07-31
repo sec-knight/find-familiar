@@ -1,0 +1,107 @@
+@page "{id:guid}"
+@model FindFamiliar.Server.Pages.Projects.DetailsModel
+@{
+    ViewData["Title"] = Model.Project?.Name ?? "Project";
+}
+
+@if (Model.Project is not null)
+{
+    <section class="dashboard-intro" aria-labelledby="project-title">
+        <p class="eyebrow">Project · revision @Model.Project.ContextRevision</p>
+        <h1 id="project-title">@Model.Project.Name</h1>
+        <p class="intro-copy">@Model.Project.Purpose</p>
+        <p><a asp-page="./Index">All projects</a></p>
+    </section>
+
+    @if (TempData["StatusMessage"] is string statusMessage)
+    {
+        <p role="status">@statusMessage</p>
+    }
+
+    <section aria-labelledby="project-context-title">
+        <div class="section-heading">
+            <div>
+                <p class="eyebrow">Durable knowledge</p>
+                <h2 id="project-context-title">Project context</h2>
+            </div>
+        </div>
+
+        @if (Model.ProjectEntries.Count == 0)
+        {
+            <p>No project-wide context yet. Record the goal or constraints that every task should inherit.</p>
+        }
+        else
+        {
+            @foreach (var entry in Model.ProjectEntries)
+            {
+                <article>
+                    <h3>@entry.Kind: @entry.Title</h3>
+                    <p>@entry.Content</p>
+                </article>
+            }
+        }
+
+        <form method="post" asp-page-handler="CreateProjectContext">
+            <p>
+                <label asp-for="NewProjectContext.Kind"></label><br />
+                <select asp-for="NewProjectContext.Kind">
+                    @foreach (var kind in Model.ContextEntryKinds)
+                    {
+                        <option value="@kind">@kind</option>
+                    }
+                </select>
+            </p>
+            <p>
+                <label asp-for="NewProjectContext.Title"></label><br />
+                <input asp-for="NewProjectContext.Title" />
+                <span asp-validation-for="NewProjectContext.Title"></span>
+            </p>
+            <p>
+                <label asp-for="NewProjectContext.Content"></label><br />
+                <textarea asp-for="NewProjectContext.Content" rows="5"></textarea>
+                <span asp-validation-for="NewProjectContext.Content"></span>
+            </p>
+            <button type="submit">Record project context</button>
+        </form>
+    </section>
+
+    <section aria-labelledby="tasks-title">
+        <div class="section-heading">
+            <div>
+                <p class="eyebrow">Work</p>
+                <h2 id="tasks-title">Tasks</h2>
+            </div>
+        </div>
+
+        @if (Model.Tasks.Count == 0)
+        {
+            <p>No tasks yet. Add the first bounded piece of work for an isolated AI session.</p>
+        }
+        else
+        {
+            <ul>
+                @foreach (var task in Model.Tasks)
+                {
+                    <li>
+                        <a asp-page="../Tasks/Details" asp-route-id="@task.Id">@task.Title</a>
+                        — @task.Status
+                    </li>
+                }
+            </ul>
+        }
+
+        <form method="post" asp-page-handler="CreateTask">
+            <p>
+                <label asp-for="NewTask.Title"></label><br />
+                <input asp-for="NewTask.Title" />
+                <span asp-validation-for="NewTask.Title"></span>
+            </p>
+            <p>
+                <label asp-for="NewTask.RequestedOutcome"></label><br />
+                <textarea asp-for="NewTask.RequestedOutcome" rows="4"></textarea>
+                <span asp-validation-for="NewTask.RequestedOutcome"></span>
+            </p>
+            <button type="submit">Create task</button>
+        </form>
+    </section>
+}

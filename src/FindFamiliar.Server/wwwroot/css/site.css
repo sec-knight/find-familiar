@@ -1,31 +1,328 @@
+:root {
+  color-scheme: light dark;
+  --page-background: #f6f7fb;
+  --surface: #ffffff;
+  --surface-muted: #f0f2f7;
+  --text-primary: #172033;
+  --text-secondary: #586176;
+  --border: #dfe3ec;
+  --accent: #4b4eed;
+  --accent-strong: #3638c9;
+  --online: #198754;
+  --online-background: #e8f7ef;
+  --focus-ring: #797cff;
+}
+
+* {
+  box-sizing: border-box;
+}
+
 html {
-  font-size: 14px;
-}
-
-@media (min-width: 768px) {
-  html {
-    font-size: 16px;
-  }
-}
-
-.btn:focus, .btn:active:focus, .btn-link.nav-link:focus, .form-control:focus, .form-check-input:focus {
-  box-shadow: 0 0 0 0.1rem white, 0 0 0 0.25rem #258cfb;
-}
-
-html {
-  position: relative;
   min-height: 100%;
 }
 
 body {
-  margin-bottom: 60px;
+  min-width: 320px;
+  min-height: 100vh;
+  margin: 0;
+  background: var(--page-background);
+  color: var(--text-primary);
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  line-height: 1.5;
 }
 
-.form-floating > .form-control-plaintext::placeholder, .form-floating > .form-control::placeholder {
-  color: var(--bs-secondary-color);
-  text-align: end;
+a {
+  color: inherit;
 }
 
-.form-floating > .form-control-plaintext:focus::placeholder, .form-floating > .form-control:focus::placeholder {
-  text-align: start;
+.app-shell {
+  display: flex;
+  flex-direction: column;
+}
+
+.site-frame {
+  width: min(100% - 3rem, 70rem);
+  margin: 0 auto;
+}
+
+.site-header {
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+
+.site-header-content {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 4.5rem;
+  gap: 1.5rem;
+}
+
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.75rem;
+  color: var(--text-primary);
+  font-weight: 750;
+  letter-spacing: -0.02em;
+  text-decoration: none;
+}
+
+.brand-mark {
+  display: grid;
+  width: 2rem;
+  height: 2rem;
+  place-items: center;
+  border-radius: 0.625rem;
+  background: var(--accent);
+  color: #ffffff;
+  font-size: 0.6875rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+}
+
+.site-nav {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.nav-link {
+  border-radius: 0.5rem;
+  color: var(--text-secondary);
+  font-size: 0.9375rem;
+  font-weight: 650;
+  padding: 0.5rem 0.75rem;
+  text-decoration: none;
+}
+
+.nav-link:hover,
+.nav-link.is-active {
+  background: var(--surface-muted);
+  color: var(--text-primary);
+}
+
+.nav-link:focus-visible,
+.brand:focus-visible {
+  outline: 3px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.site-main {
+  flex: 1;
+  padding-block: clamp(3rem, 7vw, 5.5rem);
+}
+
+.dashboard-intro,
+.about-page {
+  max-width: 48rem;
+}
+
+.eyebrow {
+  margin: 0 0 0.5rem;
+  color: var(--accent);
+  font-size: 0.75rem;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+h1,
+h2,
+p {
+  margin-top: 0;
+}
+
+h1,
+h2 {
+  color: var(--text-primary);
+  letter-spacing: -0.035em;
+}
+
+h1 {
+  max-width: 43rem;
+  margin-bottom: 1rem;
+  font-size: clamp(2.25rem, 5vw, 4rem);
+  line-height: 1.08;
+}
+
+h2 {
+  margin-bottom: 0;
+  font-size: clamp(1.5rem, 3vw, 2rem);
+  line-height: 1.2;
+}
+
+.intro-copy,
+.about-page p:not(.eyebrow) {
+  max-width: 40rem;
+  color: var(--text-secondary);
+  font-size: 1.125rem;
+}
+
+.dashboard-overview {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+  margin-top: clamp(2.5rem, 5vw, 4rem);
+}
+
+.overview-card,
+.statistic-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 1rem;
+}
+
+.overview-card {
+  padding: 1.5rem;
+}
+
+.card-label,
+.statistic-card dt {
+  margin-bottom: 0.625rem;
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+  font-weight: 700;
+}
+
+.status-value,
+.version-value {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.375rem;
+  color: var(--text-primary);
+  font-size: 1.5rem;
+  font-weight: 750;
+  letter-spacing: -0.03em;
+}
+
+.status-indicator {
+  width: 0.625rem;
+  height: 0.625rem;
+  border-radius: 50%;
+  background: var(--online);
+  box-shadow: 0 0 0 0.25rem var(--online-background);
+}
+
+.card-description,
+.section-heading > p {
+  margin-bottom: 0;
+  color: var(--text-secondary);
+  font-size: 0.9375rem;
+}
+
+.statistics-section {
+  margin-top: clamp(3.5rem, 8vw, 6rem);
+}
+
+.section-heading {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 2rem;
+  margin-bottom: 1.5rem;
+}
+
+.section-heading > p {
+  max-width: 20rem;
+  text-align: right;
+}
+
+.statistics-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 1rem;
+  margin: 0;
+}
+
+.statistic-card {
+  padding: 1.25rem;
+}
+
+.statistic-card dt {
+  margin-bottom: 0.25rem;
+}
+
+.statistic-card dd {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 2rem;
+  font-weight: 750;
+  letter-spacing: -0.04em;
+  line-height: 1.1;
+}
+
+.about-page p:not(.eyebrow) + p {
+  margin-top: 1.5rem;
+}
+
+.site-footer {
+  padding-block: 1.5rem;
+  border-top: 1px solid var(--border);
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+}
+
+@media (max-width: 48rem) {
+  .statistics-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 36rem) {
+  .site-frame {
+    width: min(100% - 2rem, 70rem);
+  }
+
+  .site-header-content,
+  .section-heading {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 1rem;
+  }
+
+  .site-header-content {
+    padding-block: 1rem;
+  }
+
+  .site-nav {
+    width: 100%;
+  }
+
+  .nav-link {
+    flex: 1;
+    text-align: center;
+  }
+
+  .dashboard-overview,
+  .statistics-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .section-heading > p {
+    max-width: none;
+    text-align: left;
+  }
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --page-background: #11131a;
+    --surface: #191c26;
+    --surface-muted: #252937;
+    --text-primary: #f2f4fb;
+    --text-secondary: #abb3c7;
+    --border: #303545;
+    --accent: #a8a9ff;
+    --accent-strong: #c1c2ff;
+    --online: #5ad995;
+    --online-background: #153d2a;
+    --focus-ring: #c1c2ff;
+  }
+
+  .brand-mark {
+    background: var(--accent-strong);
+    color: #17192a;
+  }
 }

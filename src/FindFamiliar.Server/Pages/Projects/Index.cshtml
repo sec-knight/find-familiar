@@ -1,0 +1,67 @@
+@page
+@model FindFamiliar.Server.Pages.Projects.IndexModel
+@{
+    ViewData["Title"] = "Projects";
+}
+
+<section class="dashboard-intro" aria-labelledby="projects-title">
+    <p class="eyebrow">Workspace</p>
+    <h1 id="projects-title">Projects</h1>
+    <p class="intro-copy">Create the durable home for a project before handing work to an AI session.</p>
+</section>
+
+@if (TempData["StatusMessage"] is string statusMessage)
+{
+    <p role="status">@statusMessage</p>
+}
+
+<section aria-labelledby="new-project-title">
+    <div class="section-heading">
+        <div>
+            <p class="eyebrow">Start here</p>
+            <h2 id="new-project-title">Create a project</h2>
+        </div>
+    </div>
+
+    <form method="post" asp-page-handler="Create">
+        <p>
+            <label asp-for="NewProject.Name"></label><br />
+            <input asp-for="NewProject.Name" />
+            <span asp-validation-for="NewProject.Name"></span>
+        </p>
+        <p>
+            <label asp-for="NewProject.Purpose"></label><br />
+            <textarea asp-for="NewProject.Purpose" rows="4"></textarea>
+            <span asp-validation-for="NewProject.Purpose"></span>
+        </p>
+        <button type="submit">Create project</button>
+    </form>
+</section>
+
+<section aria-labelledby="project-list-title">
+    <div class="section-heading">
+        <div>
+            <p class="eyebrow">Durable workspaces</p>
+            <h2 id="project-list-title">Your projects</h2>
+        </div>
+    </div>
+
+    @if (Model.Projects.Count == 0)
+    {
+        <p>No projects yet. Create one to begin preserving its context.</p>
+    }
+    else
+    {
+        <div class="statistics-grid">
+            @foreach (var project in Model.Projects)
+            {
+                <article class="statistic-card">
+                    <h3><a asp-page="./Details" asp-route-id="@project.Id">@project.Name</a></h3>
+                    <p>@project.Purpose</p>
+                    <p>@project.Status · revision @project.ContextRevision</p>
+                    <p>@project.TaskCount task(s) · @project.ActiveContextEntryCount active context entry/entries</p>
+                </article>
+            }
+        </div>
+    }
+</section>

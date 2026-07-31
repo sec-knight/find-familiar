@@ -6,6 +6,9 @@
 # dotenv files
 .env
 
+# Local application data
+src/FindFamiliar.Server/App_Data/
+
 # User-specific files
 *.rsuser
 *.suo

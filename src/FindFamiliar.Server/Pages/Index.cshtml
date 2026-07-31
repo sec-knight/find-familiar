@@ -1,10 +1,53 @@
-﻿@page
-@model IndexModel
+@page
 @{
-    ViewData["Title"] = "Home page";
+    ViewData["Title"] = "Dashboard";
 }
 
-<div class="text-center">
-    <h1 class="display-4">Welcome</h1>
-    <p>Learn about <a href="https://learn.microsoft.com/aspnet/core">building Web apps with ASP.NET Core</a>.</p>
-</div>
+<section class="dashboard-intro" aria-labelledby="dashboard-title">
+    <p class="eyebrow">Find Familiar</p>
+    <h1 id="dashboard-title">Preserving context between people, projects, and AI.</h1>
+    <p class="intro-copy">Your familiar is online and ready to become the long-term home for the work that matters.</p>
+</section>
+
+<section class="dashboard-overview" aria-label="Application status">
+    <article class="overview-card">
+        <p class="card-label">Server Status</p>
+        <p class="status-value"><span class="status-indicator" aria-hidden="true"></span>Online</p>
+        <p class="card-description">The Find Familiar server is running normally.</p>
+    </article>
+
+    <article class="overview-card">
+        <p class="card-label">Version</p>
+        <p class="version-value">0.1.0</p>
+        <p class="card-description">Initial dashboard milestone.</p>
+    </article>
+</section>
+
+<section class="statistics-section" aria-labelledby="statistics-title">
+    <div class="section-heading">
+        <div>
+            <p class="eyebrow">Workspace</p>
+            <h2 id="statistics-title">System overview</h2>
+        </div>
+        <p>Placeholder values will become live data in future milestones.</p>
+    </div>
+
+    <dl class="statistics-grid">
+        <div class="statistic-card">
+            <dt>Projects</dt>
+            <dd>0</dd>
+        </div>
+        <div class="statistic-card">
+            <dt>Tasks</dt>
+            <dd>0</dd>
+        </div>
+        <div class="statistic-card">
+            <dt>Workers</dt>
+            <dd>0</dd>
+        </div>
+        <div class="statistic-card">
+            <dt>Memory Entries</dt>
+            <dd>0</dd>
+        </div>
+    </dl>
+</section>
