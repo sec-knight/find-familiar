@@ -1,0 +1,5 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/FindFamiliar.Server/FindFamiliar.Server.csproj" />
+  </Folder>
+</Solution>
