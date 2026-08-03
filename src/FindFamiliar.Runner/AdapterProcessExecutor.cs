@@ -25,7 +25,8 @@ public sealed class AdapterProcessExecutor
         IReadOnlyList<string> adapterArguments,
         string stdinJson,
         TimeSpan timeout,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string? workingDirectory = null)
     {
         var startInfo = new ProcessStartInfo
         {
@@ -35,9 +36,18 @@ public sealed class AdapterProcessExecutor
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             CreateNoWindow = true,
+            // All three streams are pinned to UTF-8 without a BOM. Leaving stdin unset would let
+            // it default to the console's OEM codepage on Windows, corrupting any non-ASCII
+            // character in the assignment for an adapter that decodes its stdin as UTF-8.
+            StandardInputEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
             StandardOutputEncoding = Encoding.UTF8,
             StandardErrorEncoding = Encoding.UTF8
         };
+
+        if (workingDirectory is not null)
+        {
+            startInfo.WorkingDirectory = workingDirectory;
+        }
 
         foreach (var argument in adapterArguments)
         {
