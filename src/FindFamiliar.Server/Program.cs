@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using FindFamiliar.Server.Api.Runner;
 using FindFamiliar.Server.Data;
 using FindFamiliar.Server.Domain;
 using FindFamiliar.Server.Services;
@@ -26,6 +27,9 @@ builder.Services.AddDbContext<FamiliarDbContext>(options =>
     options.UseSqlite(builder.Configuration.GetConnectionString("FindFamiliar")));
 builder.Services.AddScoped<IContextProjectionService, ContextProjectionService>();
 builder.Services.AddScoped<IWorkQueueService, WorkQueueService>();
+builder.Services.AddScoped<ISessionResultCaptureService, SessionResultCaptureService>();
+builder.Services.AddScoped<ISessionCancellationService, SessionCancellationService>();
+builder.Services.Configure<RunnerBridgeOptions>(builder.Configuration.GetSection(RunnerBridgeOptions.SectionName));
 
 var app = builder.Build();
 
@@ -107,6 +111,8 @@ app.MapGet("/tasks/{taskId:guid}/sessions/{sessionId:guid}/assignment.md", async
     var markdown = SessionAssignmentMarkdownRenderer.RenderAssignment(document, session);
     return Results.Text(markdown, "text/markdown; charset=utf-8");
 });
+
+app.MapRunnerEndpoints();
 
 app.Run();
 

@@ -21,6 +21,8 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\FindFamiliar.Server\FindFamiliar.Server.csproj" />
+    <ProjectReference Include="..\..\src\FindFamiliar.Runner\FindFamiliar.Runner.csproj" />
+    <ProjectReference Include="..\FindFamiliar.FakeAdapter\FindFamiliar.FakeAdapter.csproj" />
   </ItemGroup>
 
 </Project>

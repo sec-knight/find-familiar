@@ -1,0 +1,343 @@
+using System.Net.Http;
+using FindFamiliar.Runner;
+using FindFamiliar.Server.Data;
+using FindFamiliar.Server.Domain;
+using FindFamiliar.Server.Tests.Infrastructure;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
+using TaskStatus = FindFamiliar.Server.Domain.TaskStatus;
+
+namespace FindFamiliar.Server.Tests.Runner;
+
+/// <summary>
+/// End-to-end coverage of the real <see cref="RunnerEngine"/> and <see cref="AdapterProcessExecutor"/>
+/// against the real machine API (through the shared in-process TestServer) and the real,
+/// separately-built <c>FindFamiliar.FakeAdapter</c> executable — launched as a genuine child
+/// process, not simulated. The mode env var (<c>FAKE_ADAPTER_MODE</c>) selects fixture behavior;
+/// tests in this class run sequentially (the collection disables parallelization) so mutating it
+/// around each run is safe.
+/// </summary>
+[Collection(IntegrationTestCollection.Name)]
+public sealed class RunnerProcessEndToEndTests(FindFamiliarWebApplicationFactory factory)
+{
+    private static readonly string FakeAdapterPath = ResolveExecutablePath("FindFamiliar.FakeAdapter");
+
+    [Fact]
+    public async Task Success_round_trip_captures_four_entries_and_completes_the_session()
+    {
+        var (project, task, session) = await SeedStartedSessionAsync(AgentSessionRole.Planner);
+        var arguments = BuildArguments(task.Id, session.Id, TimeSpan.FromSeconds(15));
+
+        var exitCode = await WithFakeAdapterModeAsync("success", () => RunEngineAsync(arguments));
+
+        Assert.Equal(RunnerExitCode.Success, exitCode);
+
+        using var scope = factory.Services.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<FamiliarDbContext>();
+        var entries = await dbContext.ContextEntries.Where(e => e.SourceSessionId == session.Id).ToListAsync();
+
+        Assert.Equal(4, entries.Count);
+        Assert.All(entries, e => Assert.Equal(project.Id, e.ProjectId));
+        Assert.Contains(entries, e => e.Kind == ContextEntryKind.Plan);
+
+        var refreshedSession = await dbContext.AgentSessions.SingleAsync(s => s.Id == session.Id);
+        Assert.Equal(AgentSessionStatus.Completed, refreshedSession.Status);
+    }
+
+    [Fact]
+    public async Task Adapter_receives_the_versioned_stdin_document_over_a_real_pipe()
+    {
+        var (_, task, session) = await SeedStartedSessionAsync(AgentSessionRole.Implementer);
+        var arguments = BuildArguments(task.Id, session.Id, TimeSpan.FromSeconds(15));
+
+        var exitCode = await WithFakeAdapterModeAsync("success", () => RunEngineAsync(arguments));
+        Assert.Equal(RunnerExitCode.Success, exitCode);
+
+        using var scope = factory.Services.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<FamiliarDbContext>();
+        var rawOutput = await dbContext.ContextEntries
+            .Where(e => e.SourceSessionId == session.Id && e.Kind == ContextEntryKind.RawOutput)
+            .Select(e => e.Content)
+            .SingleAsync();
+
+        // The fixture echoes the stdin byte count it actually read; a non-zero count proves the
+        // runner delivered the real versioned JSON document over the child's stdin pipe.
+        Assert.DoesNotContain("Received 0 stdin bytes", rawOutput);
+    }
+
+    [Fact]
+    public async Task Child_environment_does_not_contain_the_familiar_token()
+    {
+        var (_, task, session) = await SeedStartedSessionAsync(AgentSessionRole.Planner);
+        var arguments = BuildArguments(task.Id, session.Id, TimeSpan.FromSeconds(15));
+
+        var exitCode = await WithFakeAdapterModeAsync("echo-env", () => RunEngineAsync(arguments));
+        Assert.Equal(RunnerExitCode.Success, exitCode);
+
+        using var scope = factory.Services.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<FamiliarDbContext>();
+        var rawOutput = await dbContext.ContextEntries
+            .Where(e => e.SourceSessionId == session.Id && e.Kind == ContextEntryKind.RawOutput)
+            .Select(e => e.Content)
+            .SingleAsync();
+
+        Assert.Contains("token-present:False", rawOutput);
+    }
+
+    [Fact]
+    public async Task Bounded_stderr_does_not_deadlock_and_stdout_still_captured()
+    {
+        var (_, task, session) = await SeedStartedSessionAsync(AgentSessionRole.Planner);
+        var arguments = BuildArguments(task.Id, session.Id, TimeSpan.FromSeconds(15));
+
+        var exitCode = await WithFakeAdapterModeAsync("stderr-noise", () => RunEngineAsync(arguments));
+
+        Assert.Equal(RunnerExitCode.Success, exitCode);
+    }
+
+    [Fact]
+    public async Task Timeout_kills_the_adapter_and_cancels_durably_with_one_handoff()
+    {
+        var (_, task, session) = await SeedStartedSessionAsync(AgentSessionRole.Planner);
+        var arguments = BuildArguments(task.Id, session.Id, TimeSpan.FromSeconds(2));
+
+        var exitCode = await WithFakeAdapterModeAsync("timeout", () => RunEngineAsync(arguments));
+
+        Assert.Equal(RunnerExitCode.CancelledAfterAdapterFailure, exitCode);
+        await AssertDurablyCancelledWithOneHandoffAsync(session.Id);
+    }
+
+    [Fact]
+    public async Task Adapter_that_never_reads_stdin_still_times_out_and_cancels_durably()
+    {
+        // Regression coverage: the timeout must bound the stdin write itself, not only the
+        // later wait-for-exit. Assignment Markdown can be far larger than a typical OS pipe
+        // buffer, so an adapter that never drains stdin would otherwise block the write forever
+        // and the process-tree kill would never run.
+        var (_, task, session) = await SeedStartedSessionAsync(AgentSessionRole.Planner);
+        var arguments = BuildArguments(task.Id, session.Id, TimeSpan.FromSeconds(2));
+
+        var exitCode = await WithFakeAdapterModeAsync("stall-stdin", () => RunEngineAsync(arguments));
+
+        Assert.Equal(RunnerExitCode.CancelledAfterAdapterFailure, exitCode);
+        await AssertDurablyCancelledWithOneHandoffAsync(session.Id);
+    }
+
+    [Fact]
+    public async Task Non_zero_exit_cancels_durably_with_one_handoff()
+    {
+        var (_, task, session) = await SeedStartedSessionAsync(AgentSessionRole.Planner);
+        var arguments = BuildArguments(task.Id, session.Id, TimeSpan.FromSeconds(15));
+
+        var exitCode = await WithFakeAdapterModeAsync("nonzero", () => RunEngineAsync(arguments));
+
+        Assert.Equal(RunnerExitCode.CancelledAfterAdapterFailure, exitCode);
+        await AssertDurablyCancelledWithOneHandoffAsync(session.Id);
+    }
+
+    [Fact]
+    public async Task Malformed_json_cancels_durably_with_one_handoff()
+    {
+        var (_, task, session) = await SeedStartedSessionAsync(AgentSessionRole.Planner);
+        var arguments = BuildArguments(task.Id, session.Id, TimeSpan.FromSeconds(15));
+
+        var exitCode = await WithFakeAdapterModeAsync("malformed", () => RunEngineAsync(arguments));
+
+        Assert.Equal(RunnerExitCode.CancelledAfterAdapterFailure, exitCode);
+        await AssertDurablyCancelledWithOneHandoffAsync(session.Id);
+    }
+
+    [Fact]
+    public async Task Multiple_json_documents_cancels_durably_with_one_handoff()
+    {
+        var (_, task, session) = await SeedStartedSessionAsync(AgentSessionRole.Planner);
+        var arguments = BuildArguments(task.Id, session.Id, TimeSpan.FromSeconds(15));
+
+        var exitCode = await WithFakeAdapterModeAsync("multiple-json", () => RunEngineAsync(arguments));
+
+        Assert.Equal(RunnerExitCode.CancelledAfterAdapterFailure, exitCode);
+        await AssertDurablyCancelledWithOneHandoffAsync(session.Id);
+    }
+
+    [Fact]
+    public async Task Missing_result_fields_cancels_durably_with_one_handoff()
+    {
+        var (_, task, session) = await SeedStartedSessionAsync(AgentSessionRole.Planner);
+        var arguments = BuildArguments(task.Id, session.Id, TimeSpan.FromSeconds(15));
+
+        var exitCode = await WithFakeAdapterModeAsync("missing-fields", () => RunEngineAsync(arguments));
+
+        Assert.Equal(RunnerExitCode.CancelledAfterAdapterFailure, exitCode);
+        await AssertDurablyCancelledWithOneHandoffAsync(session.Id);
+    }
+
+    [Fact]
+    public async Task Oversized_stdout_cancels_durably_with_one_handoff()
+    {
+        var (_, task, session) = await SeedStartedSessionAsync(AgentSessionRole.Planner);
+        var arguments = BuildArguments(task.Id, session.Id, TimeSpan.FromSeconds(15));
+
+        var exitCode = await WithFakeAdapterModeAsync("oversized", () => RunEngineAsync(arguments));
+
+        Assert.Equal(RunnerExitCode.CancelledAfterAdapterFailure, exitCode);
+        await AssertDurablyCancelledWithOneHandoffAsync(session.Id);
+    }
+
+    [Fact]
+    public async Task Nonexistent_adapter_executable_is_a_launch_failure_that_cancels_durably()
+    {
+        var (_, task, session) = await SeedStartedSessionAsync(AgentSessionRole.Planner);
+        var arguments = new RunnerArguments(
+            new Uri("http://localhost/"),
+            task.Id,
+            session.Id,
+            FindFamiliarWebApplicationFactory.RunnerBridgeTestToken,
+            Path.Combine(AppContext.BaseDirectory, "definitely-does-not-exist-adapter"),
+            [],
+            TimeSpan.FromSeconds(10));
+
+        var exitCode = await RunEngineAsync(arguments);
+
+        Assert.Equal(RunnerExitCode.CancelledAfterAdapterFailure, exitCode);
+        await AssertDurablyCancelledWithOneHandoffAsync(session.Id);
+    }
+
+    [Fact]
+    public async Task Ambiguous_result_submission_failure_does_not_auto_cancel()
+    {
+        var (_, task, session) = await SeedStartedSessionAsync(AgentSessionRole.Planner);
+        var arguments = BuildArguments(task.Id, session.Id, TimeSpan.FromSeconds(15));
+
+        using var innerHandler = factory.Server.CreateHandler();
+        using var throwingHandler = new ThrowOnResultRequestHandler(innerHandler);
+        using var httpClient = new HttpClient(throwingHandler) { BaseAddress = factory.Server.BaseAddress };
+        var engine = new RunnerEngine(httpClient, new AdapterProcessExecutor(), TextWriter.Null);
+
+        var exitCode = await WithFakeAdapterModeAsync("success", () => engine.RunAsync(arguments, CancellationToken.None));
+
+        Assert.Equal(RunnerExitCode.ResultSubmissionAmbiguous, exitCode);
+
+        using var scope = factory.Services.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<FamiliarDbContext>();
+        var refreshedSession = await dbContext.AgentSessions.SingleAsync(s => s.Id == session.Id);
+
+        // Ambiguity must never trigger an automatic cancellation — capture may already have
+        // committed on the server even though the runner never saw the response.
+        Assert.Equal(AgentSessionStatus.Started, refreshedSession.Status);
+        Assert.Equal(0, await dbContext.ContextEntries.CountAsync(e => e.SourceSessionId == session.Id));
+    }
+
+    private async Task AssertDurablyCancelledWithOneHandoffAsync(Guid sessionId)
+    {
+        using var scope = factory.Services.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<FamiliarDbContext>();
+
+        var refreshedSession = await dbContext.AgentSessions.SingleAsync(s => s.Id == sessionId);
+        Assert.Equal(AgentSessionStatus.Cancelled, refreshedSession.Status);
+
+        var entries = await dbContext.ContextEntries.Where(e => e.SourceSessionId == sessionId).ToListAsync();
+        Assert.Single(entries);
+        Assert.Equal(ContextEntryKind.Handoff, entries[0].Kind);
+    }
+
+    private async Task<RunnerExitCode> RunEngineAsync(RunnerArguments arguments)
+    {
+        using var httpClient = factory.CreateClient();
+        var engine = new RunnerEngine(httpClient, new AdapterProcessExecutor(), TextWriter.Null);
+        return await engine.RunAsync(arguments, CancellationToken.None);
+    }
+
+    private static async Task<T> WithFakeAdapterModeAsync<T>(string mode, Func<Task<T>> action)
+    {
+        const string variable = "FAKE_ADAPTER_MODE";
+        var previous = Environment.GetEnvironmentVariable(variable);
+        Environment.SetEnvironmentVariable(variable, mode);
+        try
+        {
+            return await action();
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(variable, previous);
+        }
+    }
+
+    private static RunnerArguments BuildArguments(Guid taskId, Guid sessionId, TimeSpan timeout) => new(
+        new Uri("http://localhost/"),
+        taskId,
+        sessionId,
+        FindFamiliarWebApplicationFactory.RunnerBridgeTestToken,
+        FakeAdapterPath,
+        [],
+        timeout);
+
+    private static string ResolveExecutablePath(string projectName)
+    {
+        var fileName = OperatingSystem.IsWindows() ? $"{projectName}.exe" : projectName;
+        var path = Path.Combine(AppContext.BaseDirectory, fileName);
+        if (!File.Exists(path))
+        {
+            throw new FileNotFoundException(
+                $"Expected the built executable '{fileName}' next to the test assembly " +
+                $"(add '{projectName}' as a ProjectReference so its apphost is copied to output).",
+                path);
+        }
+
+        return path;
+    }
+
+    private async Task<(FamiliarProject Project, FamiliarTask Task, AgentSession Session)> SeedStartedSessionAsync(AgentSessionRole role)
+    {
+        using var scope = factory.Services.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<FamiliarDbContext>();
+
+        var project = new FamiliarProject
+        {
+            Id = Guid.NewGuid(),
+            Name = $"Test project {Guid.NewGuid():N}",
+            Purpose = "Seeded for RunnerProcessEndToEndTests.",
+            Status = ProjectStatus.Active,
+            CreatedUtc = DateTime.UtcNow,
+            UpdatedUtc = DateTime.UtcNow
+        };
+
+        var task = new FamiliarTask
+        {
+            Id = Guid.NewGuid(),
+            ProjectId = project.Id,
+            Title = $"Seeded task {Guid.NewGuid():N}",
+            RequestedOutcome = "Seeded for RunnerProcessEndToEndTests.",
+            Status = TaskStatus.Ready,
+            CreatedUtc = DateTime.UtcNow,
+            UpdatedUtc = DateTime.UtcNow
+        };
+
+        var session = new AgentSession
+        {
+            Id = Guid.NewGuid(),
+            TaskId = task.Id,
+            Role = role,
+            Status = AgentSessionStatus.Started,
+            ContextRevisionRead = 0,
+            StartedUtc = DateTime.UtcNow
+        };
+
+        dbContext.AddRange(project, task, session);
+        await dbContext.SaveChangesAsync();
+
+        return (project, task, session);
+    }
+
+    private sealed class ThrowOnResultRequestHandler(HttpMessageHandler inner) : DelegatingHandler(inner)
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            if (request.RequestUri is not null && request.RequestUri.AbsolutePath.EndsWith("/result", StringComparison.Ordinal))
+            {
+                throw new HttpRequestException("Simulated transport failure after the result request was sent.");
+            }
+
+            return base.SendAsync(request, cancellationToken);
+        }
+    }
+}

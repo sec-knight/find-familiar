@@ -11,7 +11,9 @@ namespace FindFamiliar.Server.Pages.Tasks;
 
 public sealed class DetailsModel(
     FamiliarDbContext dbContext,
-    IContextProjectionService contextProjection) : PageModel
+    IContextProjectionService contextProjection,
+    ISessionResultCaptureService resultCapture,
+    ISessionCancellationService cancellation) : PageModel
 {
     public TaskContextDocument? Document { get; private set; }
 
@@ -203,97 +205,44 @@ public sealed class DetailsModel(
             return Page();
         }
 
-        var session = await dbContext.AgentSessions
-            .Include(candidate => candidate.Task)
-            .ThenInclude(task => task.Project)
-            .SingleOrDefaultAsync(
-                candidate => candidate.Id == SessionResult.SessionId && candidate.TaskId == id,
-                cancellationToken);
+        var outcome = await resultCapture.CaptureAsync(
+            new SessionResultCaptureRequest(
+                id,
+                SessionResult.SessionId ?? Guid.Empty,
+                SessionResult.Prompt,
+                SessionResult.RawOutput,
+                SessionResult.Summary,
+                SessionResult.ArtifactTitle,
+                SessionResult.ArtifactContent),
+            cancellationToken);
 
-        if (session is null)
+        switch (outcome.Status)
         {
-            return NotFound();
+            case SessionResultCaptureStatus.Success:
+                var roleLabel = outcome.Role!.Value.ToString().ToLowerInvariant();
+                TempData["StatusMessage"] = $"Captured the {roleLabel} result and completed the session.";
+                return RedirectToPage(new { id });
+
+            case SessionResultCaptureStatus.NotFound:
+                return NotFound();
+
+            case SessionResultCaptureStatus.NotStarted:
+                ModelState.AddModelError(
+                    "SessionResult.SessionId",
+                    "That session is no longer Started. A result can only be captured once for a Started session.");
+                await LoadContextAsync(id, cancellationToken);
+                return Page();
+
+            case SessionResultCaptureStatus.ValidationFailed:
+            default:
+                foreach (var (field, message) in outcome.ValidationErrors ?? new Dictionary<string, string>())
+                {
+                    ModelState.AddModelError($"SessionResult.{field}", message);
+                }
+
+                await LoadContextAsync(id, cancellationToken);
+                return Page();
         }
-
-        if (session.Status != AgentSessionStatus.Started)
-        {
-            ModelState.AddModelError(
-                "SessionResult.SessionId",
-                "That session is no longer Started. A result can only be captured once for a Started session.");
-            await LoadContextAsync(id, cancellationToken);
-            return Page();
-        }
-
-        var artifactKind = session.Role switch
-        {
-            AgentSessionRole.Planner => ContextEntryKind.Plan,
-            AgentSessionRole.Implementer => ContextEntryKind.Implementation,
-            AgentSessionRole.Reviewer => ContextEntryKind.Review,
-            _ => throw new InvalidOperationException($"Unmapped agent session role '{session.Role}'.")
-        };
-
-        var roleLabel = session.Role.ToString().ToLowerInvariant();
-        var capturedUtc = DateTime.UtcNow;
-
-        dbContext.ContextEntries.AddRange(
-            new ContextEntry
-            {
-                Id = Guid.NewGuid(),
-                ProjectId = session.Task.ProjectId,
-                TaskId = session.TaskId,
-                SourceSessionId = session.Id,
-                Kind = ContextEntryKind.Prompt,
-                Title = $"{session.Role} session prompt",
-                Content = SessionResult.Prompt.Trim(),
-                State = ContextEntryState.Active,
-                CreatedUtc = capturedUtc
-            },
-            new ContextEntry
-            {
-                Id = Guid.NewGuid(),
-                ProjectId = session.Task.ProjectId,
-                TaskId = session.TaskId,
-                SourceSessionId = session.Id,
-                Kind = ContextEntryKind.RawOutput,
-                Title = $"{session.Role} raw output",
-                Content = SessionResult.RawOutput.Trim(),
-                State = ContextEntryState.Active,
-                CreatedUtc = capturedUtc
-            },
-            new ContextEntry
-            {
-                Id = Guid.NewGuid(),
-                ProjectId = session.Task.ProjectId,
-                TaskId = session.TaskId,
-                SourceSessionId = session.Id,
-                Kind = ContextEntryKind.Summary,
-                Title = $"{session.Role} summary",
-                Content = SessionResult.Summary.Trim(),
-                State = ContextEntryState.Active,
-                CreatedUtc = capturedUtc
-            },
-            new ContextEntry
-            {
-                Id = Guid.NewGuid(),
-                ProjectId = session.Task.ProjectId,
-                TaskId = session.TaskId,
-                SourceSessionId = session.Id,
-                Kind = artifactKind,
-                Title = SessionResult.ArtifactTitle.Trim(),
-                Content = SessionResult.ArtifactContent.Trim(),
-                State = ContextEntryState.Active,
-                CreatedUtc = capturedUtc
-            });
-
-        session.Status = AgentSessionStatus.Completed;
-        session.CompletedUtc = capturedUtc;
-        session.Task.UpdatedUtc = capturedUtc;
-        session.Task.Project.IncrementContextRevision();
-
-        await dbContext.SaveChangesAsync(cancellationToken);
-
-        TempData["StatusMessage"] = $"Captured the {roleLabel} result and completed the session.";
-        return RedirectToPage(new { id });
     }
 
     public async Task<IActionResult> OnPostCancelSessionAsync(Guid id, CancellationToken cancellationToken)
@@ -306,52 +255,36 @@ public sealed class DetailsModel(
             return Page();
         }
 
-        var session = await dbContext.AgentSessions
-            .Include(candidate => candidate.Task)
-            .ThenInclude(task => task.Project)
-            .SingleOrDefaultAsync(
-                candidate => candidate.Id == SessionCancellation.SessionId && candidate.TaskId == id,
-                cancellationToken);
+        var outcome = await cancellation.CancelAsync(
+            new SessionCancellationRequest(id, SessionCancellation.SessionId ?? Guid.Empty, SessionCancellation.Reason),
+            cancellationToken);
 
-        if (session is null)
+        switch (outcome.Status)
         {
-            return NotFound();
+            case SessionCancellationStatus.Success:
+                TempData["StatusMessage"] = $"Cancelled the {outcome.Role!.Value.ToString().ToLowerInvariant()} session.";
+                return RedirectToPage(new { id });
+
+            case SessionCancellationStatus.NotFound:
+                return NotFound();
+
+            case SessionCancellationStatus.NotStarted:
+                ModelState.AddModelError(
+                    "SessionCancellation.SessionId",
+                    "That session is no longer Started. Only a Started session can be cancelled.");
+                await LoadContextAsync(id, cancellationToken);
+                return Page();
+
+            case SessionCancellationStatus.ValidationFailed:
+            default:
+                foreach (var (field, message) in outcome.ValidationErrors ?? new Dictionary<string, string>())
+                {
+                    ModelState.AddModelError($"SessionCancellation.{field}", message);
+                }
+
+                await LoadContextAsync(id, cancellationToken);
+                return Page();
         }
-
-        if (session.Status != AgentSessionStatus.Started)
-        {
-            ModelState.AddModelError(
-                "SessionCancellation.SessionId",
-                "That session is no longer Started. Only a Started session can be cancelled.");
-            await LoadContextAsync(id, cancellationToken);
-            return Page();
-        }
-
-        var cancelledUtc = DateTime.UtcNow;
-        var role = session.Role;
-
-        dbContext.ContextEntries.Add(new ContextEntry
-        {
-            Id = Guid.NewGuid(),
-            ProjectId = session.Task.ProjectId,
-            TaskId = session.TaskId,
-            SourceSessionId = session.Id,
-            Kind = ContextEntryKind.Handoff,
-            Title = $"{role} session cancelled",
-            Content = SessionCancellation.Reason.Trim(),
-            State = ContextEntryState.Active,
-            CreatedUtc = cancelledUtc
-        });
-
-        session.Status = AgentSessionStatus.Cancelled;
-        session.CompletedUtc = cancelledUtc;
-        session.Task.UpdatedUtc = cancelledUtc;
-        session.Task.Project.IncrementContextRevision();
-
-        await dbContext.SaveChangesAsync(cancellationToken);
-
-        TempData["StatusMessage"] = $"Cancelled the {role.ToString().ToLowerInvariant()} session.";
-        return RedirectToPage(new { id });
     }
 
     private async Task<bool> LoadContextAsync(Guid id, CancellationToken cancellationToken)

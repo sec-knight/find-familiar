@@ -11,9 +11,17 @@ public sealed class FindFamiliarWebApplicationFactory : WebApplicationFactory<Pr
 {
     private const string DataDirectoryVariable = "Familiar__DataDirectory";
     private const string ConnectionStringVariable = "ConnectionStrings__FindFamiliar";
+    private const string RunnerBridgeTokenVariable = "RunnerBridge__Token";
+
+    /// <summary>
+    /// Obviously-fake configured runner bridge credential, used only by tests. Never a real
+    /// secret; deliberately labeled so it cannot be mistaken for one.
+    /// </summary>
+    public const string RunnerBridgeTestToken = "ffa-test-fixture-runner-bridge-token-not-a-real-secret";
 
     private readonly string? _previousDataDirectory;
     private readonly string? _previousConnectionString;
+    private readonly string? _previousRunnerBridgeToken;
 
     public string TempDirectory { get; }
 
@@ -24,11 +32,13 @@ public sealed class FindFamiliarWebApplicationFactory : WebApplicationFactory<Pr
 
         _previousDataDirectory = Environment.GetEnvironmentVariable(DataDirectoryVariable);
         _previousConnectionString = Environment.GetEnvironmentVariable(ConnectionStringVariable);
+        _previousRunnerBridgeToken = Environment.GetEnvironmentVariable(RunnerBridgeTokenVariable);
 
         Environment.SetEnvironmentVariable(DataDirectoryVariable, TempDirectory);
         Environment.SetEnvironmentVariable(
             ConnectionStringVariable,
             $"Data Source={Path.Combine(TempDirectory, "find-familiar-test.db")}");
+        Environment.SetEnvironmentVariable(RunnerBridgeTokenVariable, RunnerBridgeTestToken);
 
         // Force the host (and Program.cs's top-level statements, including SQLitePCL
         // provider selection and the real startup migration) to run now, before any
@@ -47,6 +57,7 @@ public sealed class FindFamiliarWebApplicationFactory : WebApplicationFactory<Pr
 
         Environment.SetEnvironmentVariable(DataDirectoryVariable, _previousDataDirectory);
         Environment.SetEnvironmentVariable(ConnectionStringVariable, _previousConnectionString);
+        Environment.SetEnvironmentVariable(RunnerBridgeTokenVariable, _previousRunnerBridgeToken);
 
         if (Directory.Exists(TempDirectory))
         {

@@ -1,8 +1,10 @@
 <Solution>
   <Folder Name="/src/">
     <Project Path="src/FindFamiliar.Server/FindFamiliar.Server.csproj" />
+    <Project Path="src/FindFamiliar.Runner/FindFamiliar.Runner.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/FindFamiliar.Server.Tests/FindFamiliar.Server.Tests.csproj" />
+    <Project Path="tests/FindFamiliar.FakeAdapter/FindFamiliar.FakeAdapter.csproj" />
   </Folder>
 </Solution>

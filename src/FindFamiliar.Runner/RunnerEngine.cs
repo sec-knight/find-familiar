@@ -1,0 +1,259 @@
+using System.Net.Http.Headers;
+using System.Net.Http.Json;
+using System.Text;
+using System.Text.Json;
+
+namespace FindFamiliar.Runner;
+
+/// <summary>
+/// Orchestrates one explicit runner invocation end to end: fetch assignment, run the configured
+/// adapter, submit exactly one result. Pre-submission adapter failures cancel durably through the
+/// same cancellation application service the web UI uses; a network failure after the result
+/// request has been sent never triggers an automatic cancellation, because capture may already
+/// have committed on the server.
+/// </summary>
+public sealed class RunnerEngine(HttpClient httpClient, AdapterProcessExecutor adapterExecutor, TextWriter diagnostics)
+{
+    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+
+    public async Task<RunnerExitCode> RunAsync(RunnerArguments arguments, CancellationToken cancellationToken)
+    {
+        diagnostics.WriteLine($"runner: fetching assignment (task={arguments.TaskId}, session={arguments.SessionId}).");
+
+        var assignment = await FetchAssignmentAsync(arguments, cancellationToken);
+        if (assignment is null)
+        {
+            return RunnerExitCode.AssignmentFetchFailed;
+        }
+
+        if (!IsAssignmentValid(assignment, arguments))
+        {
+            diagnostics.WriteLine("runner: assignment failed contract/identity/size validation.");
+            return RunnerExitCode.AssignmentInvalid;
+        }
+
+        diagnostics.WriteLine($"runner: assignment validated (role={assignment.Role}). Launching adapter.");
+
+        var stdinPayload = new AdapterInvocation(
+            RunnerProtocol.ContractVersion,
+            assignment.TaskId,
+            assignment.SessionId,
+            assignment.Role,
+            assignment.RolePrompt,
+            assignment.AssignmentMarkdown);
+        var stdinJson = JsonSerializer.Serialize(stdinPayload, JsonOptions);
+
+        var execution = await adapterExecutor.RunAsync(
+            arguments.AdapterPath,
+            arguments.AdapterArguments,
+            stdinJson,
+            arguments.Timeout,
+            cancellationToken);
+
+        var failureReason = ClassifyAdapterFailure(execution, out var adapterResult);
+        if (failureReason is not null)
+        {
+            diagnostics.WriteLine($"runner: adapter failure ({failureReason}). Requesting durable cancellation.");
+            var cancelled = await CancelDurablyAsync(arguments, failureReason, cancellationToken);
+            return cancelled ? RunnerExitCode.CancelledAfterAdapterFailure : RunnerExitCode.CancellationFailed;
+        }
+
+        diagnostics.WriteLine("runner: adapter result validated. Submitting result.");
+
+        return await SubmitResultAsync(arguments, assignment.RolePrompt, adapterResult!, cancellationToken);
+    }
+
+    private async Task<AssignmentResponse?> FetchAssignmentAsync(RunnerArguments arguments, CancellationToken cancellationToken)
+    {
+        try
+        {
+            using var request = new HttpRequestMessage(
+                HttpMethod.Get,
+                $"api/runner/tasks/{arguments.TaskId}/sessions/{arguments.SessionId}/assignment");
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", arguments.FamiliarToken);
+
+            using var response = await httpClient.SendAsync(request, cancellationToken);
+            if (!response.IsSuccessStatusCode)
+            {
+                diagnostics.WriteLine($"runner: assignment request returned status {(int)response.StatusCode}.");
+                return null;
+            }
+
+            await using var body = await response.Content.ReadAsStreamAsync(cancellationToken);
+            return await JsonSerializer.DeserializeAsync<AssignmentResponse>(body, JsonOptions, cancellationToken);
+        }
+        catch (Exception ex) when (ex is HttpRequestException or JsonException or TaskCanceledException)
+        {
+            diagnostics.WriteLine("runner: assignment request failed (transport or parse error).");
+            return null;
+        }
+    }
+
+    private static bool IsAssignmentValid(AssignmentResponse assignment, RunnerArguments arguments)
+    {
+        return assignment.ContractVersion == RunnerProtocol.ContractVersion
+            && assignment.TaskId == arguments.TaskId
+            && assignment.SessionId == arguments.SessionId
+            && !string.IsNullOrWhiteSpace(assignment.Role)
+            && !string.IsNullOrWhiteSpace(assignment.RolePrompt)
+            && !string.IsNullOrWhiteSpace(assignment.AssignmentMarkdown)
+            && assignment.AssignmentMarkdown.Length <= RunnerProtocol.MaxAssignmentMarkdownLength;
+    }
+
+    private static string? ClassifyAdapterFailure(AdapterExecutionResult execution, out AdapterResult? adapterResult)
+    {
+        adapterResult = null;
+
+        if (execution.LaunchFailed)
+        {
+            return "adapter-launch-failed";
+        }
+
+        if (execution.TimedOut)
+        {
+            return "adapter-timeout";
+        }
+
+        if (execution.ExitCode != 0)
+        {
+            return "adapter-non-zero-exit";
+        }
+
+        if (execution.StdoutOversized)
+        {
+            return "adapter-output-oversized";
+        }
+
+        AdapterResult? parsed;
+        try
+        {
+            parsed = ParseSingleJsonDocument<AdapterResult>(execution.StdoutBytes);
+        }
+        catch (JsonException)
+        {
+            return "adapter-output-malformed";
+        }
+
+        if (parsed is null || !IsAdapterResultValid(parsed))
+        {
+            return "adapter-output-invalid";
+        }
+
+        adapterResult = parsed;
+        return null;
+    }
+
+    private static bool IsAdapterResultValid(AdapterResult result)
+    {
+        return result.ContractVersion == RunnerProtocol.ContractVersion
+            && !string.IsNullOrWhiteSpace(result.RawOutput) && result.RawOutput.Length <= RunnerProtocol.MaxLongFieldLength
+            && !string.IsNullOrWhiteSpace(result.Summary) && result.Summary.Length <= RunnerProtocol.MaxSummaryLength
+            && !string.IsNullOrWhiteSpace(result.ArtifactTitle) && result.ArtifactTitle.Length <= RunnerProtocol.MaxArtifactTitleLength
+            && !string.IsNullOrWhiteSpace(result.ArtifactContent) && result.ArtifactContent.Length <= RunnerProtocol.MaxLongFieldLength;
+    }
+
+    /// <summary>
+    /// Deserializes exactly one JSON document from <paramref name="bytes"/>, rejecting empty
+    /// input, a second concatenated document, or any trailing non-whitespace content.
+    /// </summary>
+    private static T? ParseSingleJsonDocument<T>(byte[] bytes)
+    {
+        if (bytes.Length == 0)
+        {
+            throw new JsonException("Adapter produced no output.");
+        }
+
+        using var document = JsonDocument.Parse(bytes);
+
+        var reader = new Utf8JsonReader(bytes);
+        reader.Read();
+        reader.Skip();
+        var consumed = checked((int)reader.BytesConsumed);
+
+        for (var i = consumed; i < bytes.Length; i++)
+        {
+            if (!IsJsonWhitespace(bytes[i]))
+            {
+                throw new JsonException("Adapter produced more than one JSON document.");
+            }
+        }
+
+        return document.Deserialize<T>(JsonOptions);
+    }
+
+    private static bool IsJsonWhitespace(byte value) => value is 0x20 or 0x09 or 0x0A or 0x0D;
+
+    private async Task<RunnerExitCode> SubmitResultAsync(
+        RunnerArguments arguments,
+        string rolePrompt,
+        AdapterResult adapterResult,
+        CancellationToken cancellationToken)
+    {
+        var payload = new ResultRequest(
+            RunnerProtocol.ContractVersion,
+            rolePrompt,
+            adapterResult.RawOutput,
+            adapterResult.Summary,
+            adapterResult.ArtifactTitle,
+            adapterResult.ArtifactContent);
+
+        try
+        {
+            using var request = new HttpRequestMessage(
+                HttpMethod.Post,
+                $"api/runner/tasks/{arguments.TaskId}/sessions/{arguments.SessionId}/result")
+            {
+                Content = JsonContent.Create(payload, options: JsonOptions)
+            };
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", arguments.FamiliarToken);
+
+            using var response = await httpClient.SendAsync(request, cancellationToken);
+            if (response.IsSuccessStatusCode)
+            {
+                diagnostics.WriteLine("runner: result captured successfully.");
+                return RunnerExitCode.Success;
+            }
+
+            diagnostics.WriteLine($"runner: result submission rejected with status {(int)response.StatusCode}.");
+            return RunnerExitCode.ResultSubmissionRejected;
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
+        {
+            diagnostics.WriteLine(
+                "runner: result submission outcome is ambiguous (transport failure after the request was sent). " +
+                "Not cancelling automatically — capture may already have committed.");
+            return RunnerExitCode.ResultSubmissionAmbiguous;
+        }
+    }
+
+    private async Task<bool> CancelDurablyAsync(RunnerArguments arguments, string reasonCategory, CancellationToken cancellationToken)
+    {
+        try
+        {
+            using var request = new HttpRequestMessage(
+                HttpMethod.Post,
+                $"api/runner/tasks/{arguments.TaskId}/sessions/{arguments.SessionId}/cancel")
+            {
+                Content = JsonContent.Create(
+                    new CancelRequest(RunnerProtocol.ContractVersion, $"Runner cancelled: {reasonCategory}."),
+                    options: JsonOptions)
+            };
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", arguments.FamiliarToken);
+
+            using var response = await httpClient.SendAsync(request, cancellationToken);
+            if (response.IsSuccessStatusCode)
+            {
+                diagnostics.WriteLine($"runner: durable cancellation recorded ({reasonCategory}).");
+                return true;
+            }
+
+            diagnostics.WriteLine($"runner: cancellation request rejected with status {(int)response.StatusCode}.");
+            return false;
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
+        {
+            diagnostics.WriteLine("runner: cancellation request failed (transport failure).");
+            return false;
+        }
+    }
+}
