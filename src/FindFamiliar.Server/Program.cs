@@ -1,5 +1,6 @@
 using System.Text.Json.Serialization;
 using FindFamiliar.Server.Data;
+using FindFamiliar.Server.Domain;
 using FindFamiliar.Server.Services;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.EntityFrameworkCore;
@@ -8,7 +9,10 @@ using SQLitePCL;
 ConfigureSqliteProvider();
 
 var builder = WebApplication.CreateBuilder(args);
-var applicationDataDirectory = Path.Combine(builder.Environment.ContentRootPath, "App_Data");
+var configuredDataDirectory = builder.Configuration["Familiar:DataDirectory"];
+var applicationDataDirectory = string.IsNullOrWhiteSpace(configuredDataDirectory)
+    ? Path.Combine(builder.Environment.ContentRootPath, "App_Data")
+    : configuredDataDirectory;
 Directory.CreateDirectory(applicationDataDirectory);
 
 // Add services to the container.
@@ -21,6 +25,7 @@ builder.Services.ConfigureHttpJsonOptions(options =>
 builder.Services.AddDbContext<FamiliarDbContext>(options =>
     options.UseSqlite(builder.Configuration.GetConnectionString("FindFamiliar")));
 builder.Services.AddScoped<IContextProjectionService, ContextProjectionService>();
+builder.Services.AddScoped<IWorkQueueService, WorkQueueService>();
 
 var app = builder.Build();
 
@@ -51,6 +56,8 @@ app.MapStaticAssets();
 app.MapRazorPages()
    .WithStaticAssets();
 
+app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
+
 app.MapGet("/tasks/{taskId:guid}/context.md", async (
     Guid taskId,
     IContextProjectionService contextProjection,
@@ -71,6 +78,36 @@ app.MapGet("/tasks/{taskId:guid}/context.json", async (
     return document is null ? Results.NotFound() : Results.Ok(document);
 });
 
+app.MapGet("/tasks/{taskId:guid}/sessions/{sessionId:guid}/assignment.md", async (
+    Guid taskId,
+    Guid sessionId,
+    IContextProjectionService contextProjection,
+    CancellationToken cancellationToken) =>
+{
+    var document = await contextProjection.GetTaskContextAsync(taskId, cancellationToken);
+    if (document is null)
+    {
+        return Results.NotFound();
+    }
+
+    var session = document.Sessions.SingleOrDefault(candidate => candidate.Id == sessionId);
+    if (session is null)
+    {
+        return Results.NotFound();
+    }
+
+    if (session.Status != AgentSessionStatus.Started)
+    {
+        return Results.Conflict(new
+        {
+            message = "This session is no longer Started. An assignment packet can only be generated for a Started session."
+        });
+    }
+
+    var markdown = SessionAssignmentMarkdownRenderer.RenderAssignment(document, session);
+    return Results.Text(markdown, "text/markdown; charset=utf-8");
+});
+
 app.Run();
 
 static void ConfigureSqliteProvider()
@@ -86,3 +123,5 @@ static void ConfigureSqliteProvider()
 
     raw.FreezeProvider();
 }
+
+public partial class Program { }

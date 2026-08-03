@@ -36,7 +36,8 @@ public static class MarkdownContextRenderer
             foreach (var session in document.Sessions)
             {
                 var provider = string.IsNullOrWhiteSpace(session.Provider) ? "Unspecified provider" : session.Provider;
-                markdown.AppendLine($"- **{session.Role}** — {session.Status}; {provider}; read revision {session.ContextRevisionRead}; started {session.StartedUtc:u}");
+                var completed = session.CompletedUtc.HasValue ? $"; completed {session.CompletedUtc:u}" : string.Empty;
+                markdown.AppendLine($"- **{session.Role}** (`{session.Id}`) — {session.Status}; {provider}; read revision {session.ContextRevisionRead}; started {session.StartedUtc:u}{completed}");
             }
         }
 
@@ -63,8 +64,13 @@ public static class MarkdownContextRenderer
 
         foreach (var entry in entries)
         {
+            var provenance = entry.SourceSessionId.HasValue
+                ? $"source session `{entry.SourceSessionId}`"
+                : "Unlinked/human";
             markdown.AppendLine();
             markdown.AppendLine($"### {entry.Kind}: {entry.Title}");
+            markdown.AppendLine();
+            markdown.AppendLine($"*Created {entry.CreatedUtc:u} — {provenance}*");
             markdown.AppendLine();
             markdown.AppendLine(entry.Content.Trim());
         }

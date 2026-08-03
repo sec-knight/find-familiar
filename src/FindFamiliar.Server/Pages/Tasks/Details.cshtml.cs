@@ -15,6 +15,10 @@ public sealed class DetailsModel(
 {
     public TaskContextDocument? Document { get; private set; }
 
+    public IReadOnlyList<AgentSessionDocument> StartedSessions =>
+        Document?.Sessions.Where(session => session.Status == AgentSessionStatus.Started).ToList()
+            ?? new List<AgentSessionDocument>();
+
     public IReadOnlyList<AgentSessionRole> AgentSessionRoles { get; } = Enum.GetValues<AgentSessionRole>();
 
     public IReadOnlyList<ContextEntryKind> ContextEntryKinds { get; } = Enum.GetValues<ContextEntryKind>();
@@ -26,6 +30,12 @@ public sealed class DetailsModel(
 
     [BindProperty]
     public NewTaskContextEntryInput NewContextEntry { get; set; } = new();
+
+    [BindProperty]
+    public SessionResultInput SessionResult { get; set; } = new();
+
+    [BindProperty]
+    public SessionCancellationInput SessionCancellation { get; set; } = new();
 
     [BindProperty]
     public TaskStatus NewTaskStatus { get; set; }
@@ -40,6 +50,14 @@ public sealed class DetailsModel(
         if (sessionId.HasValue && Document!.Sessions.Any(session => session.Id == sessionId.Value))
         {
             NewContextEntry.SourceSessionId = sessionId;
+
+            var startedSession = Document.Sessions.FirstOrDefault(
+                session => session.Id == sessionId.Value && session.Status == AgentSessionStatus.Started);
+            if (startedSession is not null)
+            {
+                SessionResult.SessionId = startedSession.Id;
+                SessionResult.Prompt = SessionAssignmentMarkdownRenderer.RenderRolePrompt(startedSession.Role, Document);
+            }
         }
 
         NewTaskStatus = Document!.Task.Status;
@@ -48,7 +66,9 @@ public sealed class DetailsModel(
 
     public async Task<IActionResult> OnPostStartSessionAsync(Guid id, CancellationToken cancellationToken)
     {
-        if (!ModelState.IsValid)
+        ModelState.Clear();
+
+        if (!TryValidateModel(NewSession, nameof(NewSession)))
         {
             await LoadContextAsync(id, cancellationToken);
             return Page();
@@ -63,6 +83,23 @@ public sealed class DetailsModel(
             return NotFound();
         }
 
+        var hasStartedSession = await dbContext.AgentSessions.AnyAsync(
+            candidate => candidate.TaskId == id && candidate.Status == AgentSessionStatus.Started,
+            cancellationToken);
+
+        if (hasStartedSession)
+        {
+            ModelState.AddModelError(
+                "NewSession.Role",
+                "This task already has a Started session. Capture its result or cancel it before starting another.");
+            await LoadContextAsync(id, cancellationToken);
+            return Page();
+        }
+
+        var startedUtc = DateTime.UtcNow;
+
+        task.Project.IncrementContextRevision();
+
         var session = new AgentSession
         {
             Id = Guid.NewGuid(),
@@ -72,10 +109,9 @@ public sealed class DetailsModel(
             ExternalSessionReference = NullIfWhiteSpace(NewSession.ExternalSessionReference),
             Status = AgentSessionStatus.Started,
             ContextRevisionRead = task.Project.ContextRevision,
-            StartedUtc = DateTime.UtcNow
+            StartedUtc = startedUtc
         };
 
-        task.Project.IncrementContextRevision();
         dbContext.AgentSessions.Add(session);
         await dbContext.SaveChangesAsync(cancellationToken);
 
@@ -85,7 +121,9 @@ public sealed class DetailsModel(
 
     public async Task<IActionResult> OnPostCreateContextEntryAsync(Guid id, CancellationToken cancellationToken)
     {
-        if (!ModelState.IsValid)
+        ModelState.Clear();
+
+        if (!TryValidateModel(NewContextEntry, nameof(NewContextEntry)))
         {
             await LoadContextAsync(id, cancellationToken);
             return Page();
@@ -155,27 +193,164 @@ public sealed class DetailsModel(
         return RedirectToPage(new { id });
     }
 
-    public async Task<IActionResult> OnPostCompleteSessionAsync(Guid id, Guid sessionId, CancellationToken cancellationToken)
+    public async Task<IActionResult> OnPostCaptureSessionResultAsync(Guid id, CancellationToken cancellationToken)
     {
+        ModelState.Clear();
+
+        if (!TryValidateModel(SessionResult, nameof(SessionResult)))
+        {
+            await LoadContextAsync(id, cancellationToken);
+            return Page();
+        }
+
         var session = await dbContext.AgentSessions
             .Include(candidate => candidate.Task)
             .ThenInclude(task => task.Project)
-            .SingleOrDefaultAsync(candidate => candidate.Id == sessionId && candidate.TaskId == id, cancellationToken);
+            .SingleOrDefaultAsync(
+                candidate => candidate.Id == SessionResult.SessionId && candidate.TaskId == id,
+                cancellationToken);
 
         if (session is null)
         {
             return NotFound();
         }
 
-        if (session.Status == AgentSessionStatus.Started)
+        if (session.Status != AgentSessionStatus.Started)
         {
-            session.Status = AgentSessionStatus.Completed;
-            session.CompletedUtc = DateTime.UtcNow;
-            session.Task.Project.IncrementContextRevision();
-            await dbContext.SaveChangesAsync(cancellationToken);
-            TempData["StatusMessage"] = $"Completed the {session.Role.ToString().ToLowerInvariant()} session.";
+            ModelState.AddModelError(
+                "SessionResult.SessionId",
+                "That session is no longer Started. A result can only be captured once for a Started session.");
+            await LoadContextAsync(id, cancellationToken);
+            return Page();
         }
 
+        var artifactKind = session.Role switch
+        {
+            AgentSessionRole.Planner => ContextEntryKind.Plan,
+            AgentSessionRole.Implementer => ContextEntryKind.Implementation,
+            AgentSessionRole.Reviewer => ContextEntryKind.Review,
+            _ => throw new InvalidOperationException($"Unmapped agent session role '{session.Role}'.")
+        };
+
+        var roleLabel = session.Role.ToString().ToLowerInvariant();
+        var capturedUtc = DateTime.UtcNow;
+
+        dbContext.ContextEntries.AddRange(
+            new ContextEntry
+            {
+                Id = Guid.NewGuid(),
+                ProjectId = session.Task.ProjectId,
+                TaskId = session.TaskId,
+                SourceSessionId = session.Id,
+                Kind = ContextEntryKind.Prompt,
+                Title = $"{session.Role} session prompt",
+                Content = SessionResult.Prompt.Trim(),
+                State = ContextEntryState.Active,
+                CreatedUtc = capturedUtc
+            },
+            new ContextEntry
+            {
+                Id = Guid.NewGuid(),
+                ProjectId = session.Task.ProjectId,
+                TaskId = session.TaskId,
+                SourceSessionId = session.Id,
+                Kind = ContextEntryKind.RawOutput,
+                Title = $"{session.Role} raw output",
+                Content = SessionResult.RawOutput.Trim(),
+                State = ContextEntryState.Active,
+                CreatedUtc = capturedUtc
+            },
+            new ContextEntry
+            {
+                Id = Guid.NewGuid(),
+                ProjectId = session.Task.ProjectId,
+                TaskId = session.TaskId,
+                SourceSessionId = session.Id,
+                Kind = ContextEntryKind.Summary,
+                Title = $"{session.Role} summary",
+                Content = SessionResult.Summary.Trim(),
+                State = ContextEntryState.Active,
+                CreatedUtc = capturedUtc
+            },
+            new ContextEntry
+            {
+                Id = Guid.NewGuid(),
+                ProjectId = session.Task.ProjectId,
+                TaskId = session.TaskId,
+                SourceSessionId = session.Id,
+                Kind = artifactKind,
+                Title = SessionResult.ArtifactTitle.Trim(),
+                Content = SessionResult.ArtifactContent.Trim(),
+                State = ContextEntryState.Active,
+                CreatedUtc = capturedUtc
+            });
+
+        session.Status = AgentSessionStatus.Completed;
+        session.CompletedUtc = capturedUtc;
+        session.Task.UpdatedUtc = capturedUtc;
+        session.Task.Project.IncrementContextRevision();
+
+        await dbContext.SaveChangesAsync(cancellationToken);
+
+        TempData["StatusMessage"] = $"Captured the {roleLabel} result and completed the session.";
+        return RedirectToPage(new { id });
+    }
+
+    public async Task<IActionResult> OnPostCancelSessionAsync(Guid id, CancellationToken cancellationToken)
+    {
+        ModelState.Clear();
+
+        if (!TryValidateModel(SessionCancellation, nameof(SessionCancellation)))
+        {
+            await LoadContextAsync(id, cancellationToken);
+            return Page();
+        }
+
+        var session = await dbContext.AgentSessions
+            .Include(candidate => candidate.Task)
+            .ThenInclude(task => task.Project)
+            .SingleOrDefaultAsync(
+                candidate => candidate.Id == SessionCancellation.SessionId && candidate.TaskId == id,
+                cancellationToken);
+
+        if (session is null)
+        {
+            return NotFound();
+        }
+
+        if (session.Status != AgentSessionStatus.Started)
+        {
+            ModelState.AddModelError(
+                "SessionCancellation.SessionId",
+                "That session is no longer Started. Only a Started session can be cancelled.");
+            await LoadContextAsync(id, cancellationToken);
+            return Page();
+        }
+
+        var cancelledUtc = DateTime.UtcNow;
+        var role = session.Role;
+
+        dbContext.ContextEntries.Add(new ContextEntry
+        {
+            Id = Guid.NewGuid(),
+            ProjectId = session.Task.ProjectId,
+            TaskId = session.TaskId,
+            SourceSessionId = session.Id,
+            Kind = ContextEntryKind.Handoff,
+            Title = $"{role} session cancelled",
+            Content = SessionCancellation.Reason.Trim(),
+            State = ContextEntryState.Active,
+            CreatedUtc = cancelledUtc
+        });
+
+        session.Status = AgentSessionStatus.Cancelled;
+        session.CompletedUtc = cancelledUtc;
+        session.Task.UpdatedUtc = cancelledUtc;
+        session.Task.Project.IncrementContextRevision();
+
+        await dbContext.SaveChangesAsync(cancellationToken);
+
+        TempData["StatusMessage"] = $"Cancelled the {role.ToString().ToLowerInvariant()} session.";
         return RedirectToPage(new { id });
     }
 
@@ -222,4 +397,48 @@ public sealed class NewTaskContextEntryInput
 
     [Display(Name = "Source session")]
     public Guid? SourceSessionId { get; set; }
+}
+
+public sealed class SessionResultInput
+{
+    [Required(ErrorMessage = "Select the Started session this result belongs to.")]
+    [Display(Name = "Started session")]
+    public Guid? SessionId { get; set; }
+
+    [Required]
+    [StringLength(12_000)]
+    [Display(Name = "Exact prompt used")]
+    public string Prompt { get; set; } = string.Empty;
+
+    [Required]
+    [StringLength(12_000)]
+    [Display(Name = "Raw output (a bounded excerpt of the response, not the full transcript)")]
+    public string RawOutput { get; set; } = string.Empty;
+
+    [Required]
+    [StringLength(4_000)]
+    [Display(Name = "Summary")]
+    public string Summary { get; set; } = string.Empty;
+
+    [Required]
+    [StringLength(200)]
+    [Display(Name = "Result title")]
+    public string ArtifactTitle { get; set; } = string.Empty;
+
+    [Required]
+    [StringLength(12_000)]
+    [Display(Name = "Result content")]
+    public string ArtifactContent { get; set; } = string.Empty;
+}
+
+public sealed class SessionCancellationInput
+{
+    [Required(ErrorMessage = "Select the Started session to cancel.")]
+    [Display(Name = "Started session")]
+    public Guid? SessionId { get; set; }
+
+    [Required(ErrorMessage = "A cancellation reason is required.")]
+    [StringLength(2_000)]
+    [Display(Name = "Cancellation reason")]
+    public string Reason { get; set; } = string.Empty;
 }

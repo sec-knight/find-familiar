@@ -8,5 +8,9 @@ public enum ContextEntryKind
     Plan,
     Implementation,
     Review,
-    Handoff
+    Handoff,
+    Prompt,
+    RawOutput,
+    Summary,
+    OpenQuestion
 }

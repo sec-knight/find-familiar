@@ -74,3 +74,9 @@ Rejected because HTML, Markdown, and JSON would slowly acquire different context
 The first vertical slice uses SQLite and Razor Pages only. It deliberately excludes embeddings, vector databases, knowledge graphs, autonomous agents, authentication, cloud infrastructure, and provider integrations.
 
 The proof of the decision is a Planner, Implementer, and Reviewer using three independent sessions. Each receives generated Markdown context and records durable results as context entries for the next session.
+
+---
+
+## Clarification (2026-08-02): Bounded raw output
+
+A `RawOutput` context entry may retain one bounded provider response for a session. It is supplemental evidence of what a session actually produced, not the primary persistence model. Durable knowledge for the next session still needs explicit structured context entries — `Summary`, `Decision`, `Plan`, `Implementation`, `Review`, and so on. `RawOutput` does not authorize an accumulating conversation transcript.

@@ -49,7 +49,16 @@
             </div>
         </div>
 
-        <p>Start a role, open the Markdown context in a clean conversation, then record the durable result below.</p>
+        <p>Start a role, open its assignment packet in a clean conversation, then record the durable result below.</p>
+
+        @if (Model.SessionResult.SessionId.HasValue)
+        {
+            <p role="status">
+                Session started. <a href="/tasks/@Model.Document.Task.Id/sessions/@Model.SessionResult.SessionId/assignment.md">Open assignment packet</a>
+                — give it to a clean Planner, Implementer, or Reviewer conversation, then come back and record the result below.
+            </p>
+        }
+
         <form method="post" asp-page-handler="StartSession">
             <p>
                 <label asp-for="NewSession.Role"></label><br />
@@ -59,6 +68,7 @@
                         <option value="@role">@role</option>
                     }
                 </select>
+                <span asp-validation-for="NewSession.Role"></span>
             </p>
             <p>
                 <label asp-for="NewSession.Provider"></label><br />
@@ -86,16 +96,90 @@
                         {
                             <span> via @session.Provider</span>
                         }
+                        @if (session.CompletedUtc.HasValue)
+                        {
+                            <span> · Ended @session.CompletedUtc.Value.ToLocalTime().ToString("g")</span>
+                        }
                         @if (session.Status == FindFamiliar.Server.Domain.AgentSessionStatus.Started)
                         {
-                            <form method="post" asp-page-handler="CompleteSession" style="display:inline">
-                                <input type="hidden" name="sessionId" value="@session.Id" />
-                                <button type="submit">Complete</button>
+                            <span> · <a href="/tasks/@Model.Document.Task.Id/sessions/@session.Id/assignment.md">Open assignment packet</a></span>
+                            <form method="post" asp-page-handler="CancelSession" class="cancel-session-form">
+                                <input type="hidden" name="SessionCancellation.SessionId" value="@session.Id" />
+                                <label for="cancel-reason-@session.Id">Cancellation reason (required — this cannot be undone)</label><br />
+                                <textarea name="SessionCancellation.Reason" id="cancel-reason-@session.Id" rows="2">@(Model.SessionCancellation.SessionId == session.Id ? Model.SessionCancellation.Reason : string.Empty)</textarea>
+                                @if (Model.SessionCancellation.SessionId == session.Id)
+                                {
+                                    <span asp-validation-for="SessionCancellation.SessionId"></span>
+                                    <span asp-validation-for="SessionCancellation.Reason"></span>
+                                }
+                                <button type="submit">Cancel this session</button>
                             </form>
                         }
                     </li>
                 }
             </ul>
+        }
+    </section>
+
+    <section aria-labelledby="session-result-title">
+        <div class="section-heading">
+            <div>
+                <p class="eyebrow">Finish a session</p>
+                <h2 id="session-result-title">Record result and complete session</h2>
+            </div>
+        </div>
+
+        @if (Model.StartedSessions.Count == 0)
+        {
+            <p>Start a session above before a result can be captured.</p>
+        }
+        else
+        {
+            <p>
+                Recording a result creates the durable Prompt, bounded raw output, and Summary for the selected
+                session, plus its role-specific artifact — a Planner session records a <strong>Plan</strong>,
+                an Implementer session records an <strong>Implementation</strong>, and a Reviewer session records
+                a <strong>Review</strong>. Submitting this form completes the selected session.
+            </p>
+            <form method="post" asp-page-handler="CaptureSessionResult">
+                <p>
+                    <label asp-for="SessionResult.SessionId"></label><br />
+                    <select asp-for="SessionResult.SessionId">
+                        <option value="">Select a Started session</option>
+                        @foreach (var session in Model.StartedSessions)
+                        {
+                            <option value="@session.Id">@session.Role — started @session.StartedUtc.ToLocalTime().ToString("g")</option>
+                        }
+                    </select>
+                    <span asp-validation-for="SessionResult.SessionId"></span>
+                </p>
+                <p>
+                    <label asp-for="SessionResult.Prompt"></label><br />
+                    <textarea asp-for="SessionResult.Prompt" rows="4"></textarea>
+                    <span asp-validation-for="SessionResult.Prompt"></span>
+                </p>
+                <p>
+                    <label asp-for="SessionResult.RawOutput"></label><br />
+                    <textarea asp-for="SessionResult.RawOutput" rows="6"></textarea>
+                    <span asp-validation-for="SessionResult.RawOutput"></span>
+                </p>
+                <p>
+                    <label asp-for="SessionResult.Summary"></label><br />
+                    <textarea asp-for="SessionResult.Summary" rows="4"></textarea>
+                    <span asp-validation-for="SessionResult.Summary"></span>
+                </p>
+                <p>
+                    <label asp-for="SessionResult.ArtifactTitle"></label><br />
+                    <input asp-for="SessionResult.ArtifactTitle" />
+                    <span asp-validation-for="SessionResult.ArtifactTitle"></span>
+                </p>
+                <p>
+                    <label asp-for="SessionResult.ArtifactContent"></label><br />
+                    <textarea asp-for="SessionResult.ArtifactContent" rows="6"></textarea>
+                    <span asp-validation-for="SessionResult.ArtifactContent"></span>
+                </p>
+                <button type="submit">Record result and complete session</button>
+            </form>
         }
     </section>
 

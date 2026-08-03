@@ -31,7 +31,9 @@ public sealed class DetailsModel(FamiliarDbContext dbContext) : PageModel
 
     public async Task<IActionResult> OnPostCreateTaskAsync(Guid id, CancellationToken cancellationToken)
     {
-        if (!ModelState.IsValid)
+        ModelState.Clear();
+
+        if (!TryValidateModel(NewTask, nameof(NewTask)))
         {
             await LoadProjectAsync(id, cancellationToken);
             return Page();
@@ -65,7 +67,9 @@ public sealed class DetailsModel(FamiliarDbContext dbContext) : PageModel
 
     public async Task<IActionResult> OnPostCreateProjectContextAsync(Guid id, CancellationToken cancellationToken)
     {
-        if (!ModelState.IsValid)
+        ModelState.Clear();
+
+        if (!TryValidateModel(NewProjectContext, nameof(NewProjectContext)))
         {
             await LoadProjectAsync(id, cancellationToken);
             return Page();

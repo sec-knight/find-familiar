@@ -1,0 +1,70 @@
+@page
+@using FindFamiliar.Server.Services
+@model FindFamiliar.Server.Pages.WorkModel
+@{
+    ViewData["Title"] = "Work queue";
+}
+
+<section class="dashboard-intro" aria-labelledby="work-queue-title">
+    <p class="eyebrow">Find Familiar</p>
+    <h1 id="work-queue-title">Work queue</h1>
+    <p class="intro-copy">Every non-completed task with one recommended next action, derived only from persisted task and session state.</p>
+</section>
+
+<section aria-labelledby="work-queue-list-title">
+    <div class="section-heading">
+        <div>
+            <p class="eyebrow">Active work</p>
+            <h2 id="work-queue-list-title">Tasks needing a next step</h2>
+        </div>
+    </div>
+
+    @if (Model.Items.Count == 0)
+    {
+        <p>No active work. Every task is Completed, or no tasks exist yet.</p>
+    }
+    else
+    {
+        <table class="work-queue-table">
+            <thead>
+                <tr>
+                    <th scope="col">Project</th>
+                    <th scope="col">Task</th>
+                    <th scope="col">Status</th>
+                    <th scope="col">Next action</th>
+                    <th scope="col">Last update</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var item in Model.Items)
+                {
+                    <tr class="@(item.ActionKind == WorkQueueActionKind.NeedsAttention ? "work-queue-row work-queue-row--alert" : "work-queue-row")">
+                        <td>@item.ProjectName</td>
+                        <td>
+                            @if (item.ActiveSessionId.HasValue)
+                            {
+                                <a asp-page="/Tasks/Details" asp-route-id="@item.TaskId" asp-route-sessionId="@item.ActiveSessionId">@item.TaskTitle</a>
+                            }
+                            else
+                            {
+                                <a asp-page="/Tasks/Details" asp-route-id="@item.TaskId">@item.TaskTitle</a>
+                            }
+                        </td>
+                        <td>@item.TaskStatus</td>
+                        <td>
+                            @if (item.ActionKind == WorkQueueActionKind.NeedsAttention)
+                            {
+                                <strong>@item.ActionLabel</strong>
+                            }
+                            else
+                            {
+                                @item.ActionLabel
+                            }
+                        </td>
+                        <td>@item.TaskUpdatedUtc.ToLocalTime().ToString("g")</td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    }
+</section>

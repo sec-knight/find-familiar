@@ -5,6 +5,20 @@
 
 # dotenv files
 .env
+.env.*
+!.env.example
+
+# Certificates, private keys, and signing material
+*.cer
+*.crt
+*.der
+*.jks
+*.key
+*.keystore
+*.p12
+*.pem
+*.ppk
+*.snk
 
 # Local application data
 src/FindFamiliar.Server/App_Data/
@@ -253,7 +267,6 @@ orleans.codegen.cs
 
 # Including strong name files can present a security risk
 # (https://github.com/github/gitignore/pull/2483#issue-259490424)
-#*.snk
 
 # Since there are multiple workflows, uncomment next line to ignore bower_components
 # (https://github.com/github/gitignore/pull/1529#issuecomment-104372622)
@@ -483,3 +496,6 @@ $RECYCLE.BIN/
 
 # Vim temporary swap files
 *.swp
+
+# Claude Code local settings (may contain machine-specific permissions/config)
+.claude/settings.local.json
