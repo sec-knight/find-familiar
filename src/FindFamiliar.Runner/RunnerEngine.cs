@@ -34,33 +34,57 @@ public sealed class RunnerEngine(HttpClient httpClient, AdapterProcessExecutor a
 
         diagnostics.WriteLine($"runner: assignment validated (role={assignment.Role}). Launching adapter.");
 
+        return await ExecuteAssignmentAsync(
+            new RunnerExecutionRequest(
+                assignment.TaskId,
+                assignment.SessionId,
+                arguments.FamiliarToken,
+                arguments.AdapterPath,
+                arguments.AdapterArguments,
+                arguments.Timeout,
+                assignment.RolePrompt,
+                assignment.AssignmentMarkdown,
+                assignment.Role),
+            cancellationToken);
+    }
+
+    /// <summary>
+    /// Runs the adapter for one assignment and resolves the session exactly once — durable
+    /// cancellation on any pre-submission adapter failure, or a single result submission on
+    /// success. Shared verbatim by the explicit CLI invocation and the worker loop.
+    /// </summary>
+    public async Task<RunnerExitCode> ExecuteAssignmentAsync(
+        RunnerExecutionRequest request,
+        CancellationToken cancellationToken)
+    {
         var stdinPayload = new AdapterInvocation(
             RunnerProtocol.ContractVersion,
-            assignment.TaskId,
-            assignment.SessionId,
-            assignment.Role,
-            assignment.RolePrompt,
-            assignment.AssignmentMarkdown);
+            request.TaskId,
+            request.SessionId,
+            request.Role,
+            request.RolePrompt,
+            request.AssignmentMarkdown);
         var stdinJson = JsonSerializer.Serialize(stdinPayload, JsonOptions);
 
         var execution = await adapterExecutor.RunAsync(
-            arguments.AdapterPath,
-            arguments.AdapterArguments,
+            request.AdapterPath,
+            request.AdapterArguments,
             stdinJson,
-            arguments.Timeout,
-            cancellationToken);
+            request.Timeout,
+            cancellationToken,
+            environmentOverrides: request.AdapterEnvironment);
 
         var failureReason = ClassifyAdapterFailure(execution, out var adapterResult);
         if (failureReason is not null)
         {
             diagnostics.WriteLine($"runner: adapter failure ({failureReason}). Requesting durable cancellation.");
-            var cancelled = await CancelDurablyAsync(arguments, failureReason, cancellationToken);
+            var cancelled = await CancelDurablyAsync(request, failureReason, cancellationToken);
             return cancelled ? RunnerExitCode.CancelledAfterAdapterFailure : RunnerExitCode.CancellationFailed;
         }
 
         diagnostics.WriteLine("runner: adapter result validated. Submitting result.");
 
-        return await SubmitResultAsync(arguments, assignment.RolePrompt, adapterResult!, cancellationToken);
+        return await SubmitResultAsync(request, adapterResult!, cancellationToken);
     }
 
     private async Task<AssignmentResponse?> FetchAssignmentAsync(RunnerArguments arguments, CancellationToken cancellationToken)
@@ -184,30 +208,30 @@ public sealed class RunnerEngine(HttpClient httpClient, AdapterProcessExecutor a
     private static bool IsJsonWhitespace(byte value) => value is 0x20 or 0x09 or 0x0A or 0x0D;
 
     private async Task<RunnerExitCode> SubmitResultAsync(
-        RunnerArguments arguments,
-        string rolePrompt,
+        RunnerExecutionRequest request,
         AdapterResult adapterResult,
         CancellationToken cancellationToken)
     {
         var payload = new ResultRequest(
             RunnerProtocol.ContractVersion,
-            rolePrompt,
+            request.RolePrompt,
             adapterResult.RawOutput,
             adapterResult.Summary,
             adapterResult.ArtifactTitle,
-            adapterResult.ArtifactContent);
+            adapterResult.ArtifactContent,
+            request.ClaimId);
 
         try
         {
-            using var request = new HttpRequestMessage(
+            using var httpRequest = new HttpRequestMessage(
                 HttpMethod.Post,
-                $"api/runner/tasks/{arguments.TaskId}/sessions/{arguments.SessionId}/result")
+                $"api/runner/tasks/{request.TaskId}/sessions/{request.SessionId}/result")
             {
                 Content = JsonContent.Create(payload, options: JsonOptions)
             };
-            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", arguments.FamiliarToken);
+            httpRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", request.FamiliarToken);
 
-            using var response = await httpClient.SendAsync(request, cancellationToken);
+            using var response = await httpClient.SendAsync(httpRequest, cancellationToken);
             if (response.IsSuccessStatusCode)
             {
                 diagnostics.WriteLine("runner: result captured successfully.");
@@ -226,21 +250,27 @@ public sealed class RunnerEngine(HttpClient httpClient, AdapterProcessExecutor a
         }
     }
 
-    private async Task<bool> CancelDurablyAsync(RunnerArguments arguments, string reasonCategory, CancellationToken cancellationToken)
+    private async Task<bool> CancelDurablyAsync(
+        RunnerExecutionRequest request,
+        string reasonCategory,
+        CancellationToken cancellationToken)
     {
         try
         {
-            using var request = new HttpRequestMessage(
+            using var httpRequest = new HttpRequestMessage(
                 HttpMethod.Post,
-                $"api/runner/tasks/{arguments.TaskId}/sessions/{arguments.SessionId}/cancel")
+                $"api/runner/tasks/{request.TaskId}/sessions/{request.SessionId}/cancel")
             {
                 Content = JsonContent.Create(
-                    new CancelRequest(RunnerProtocol.ContractVersion, $"Runner cancelled: {reasonCategory}."),
+                    new CancelRequest(
+                        RunnerProtocol.ContractVersion,
+                        $"Runner cancelled: {reasonCategory}.",
+                        request.ClaimId),
                     options: JsonOptions)
             };
-            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", arguments.FamiliarToken);
+            httpRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", request.FamiliarToken);
 
-            using var response = await httpClient.SendAsync(request, cancellationToken);
+            using var response = await httpClient.SendAsync(httpRequest, cancellationToken);
             if (response.IsSuccessStatusCode)
             {
                 diagnostics.WriteLine($"runner: durable cancellation recorded ({reasonCategory}).");

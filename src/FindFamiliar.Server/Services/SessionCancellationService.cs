@@ -9,10 +9,16 @@ public enum SessionCancellationStatus
     Success,
     ValidationFailed,
     NotFound,
-    NotStarted
+    NotStarted,
+    ClaimLost
 }
 
-public sealed record SessionCancellationRequest(Guid TaskId, Guid SessionId, string? Reason);
+public sealed record SessionCancellationRequest(
+    Guid TaskId,
+    Guid SessionId,
+    string? Reason,
+    Guid? ClaimId = null,
+    bool RequireClaimOwnership = false);
 
 public sealed record SessionCancellationOutcome(
     SessionCancellationStatus Status,
@@ -21,6 +27,7 @@ public sealed record SessionCancellationOutcome(
 {
     public static readonly SessionCancellationOutcome NotFound = new(SessionCancellationStatus.NotFound);
     public static readonly SessionCancellationOutcome NotStarted = new(SessionCancellationStatus.NotStarted);
+    public static readonly SessionCancellationOutcome ClaimLost = new(SessionCancellationStatus.ClaimLost);
 
     public static SessionCancellationOutcome Success(AgentSessionRole role) =>
         new(SessionCancellationStatus.Success, role);
@@ -77,8 +84,48 @@ public sealed class SessionCancellationService(FamiliarDbContext dbContext) : IS
             return SessionCancellationOutcome.NotStarted;
         }
 
+
         var cancelledUtc = DateTime.UtcNow;
+
+        if (request.RequireClaimOwnership &&
+            (session.ClaimId != request.ClaimId
+                || (session.ClaimId is not null && session.ClaimExpiresUtc <= cancelledUtc)))
+        {
+            return SessionCancellationOutcome.ClaimLost;
+        }
+
         var role = session.Role;
+
+        await using var transaction = await dbContext.Database.BeginTransactionAsync(cancellationToken);
+        var transition = dbContext.AgentSessions.Where(candidate =>
+            candidate.Id == request.SessionId
+            && candidate.TaskId == request.TaskId
+            && candidate.Status == AgentSessionStatus.Started);
+
+        if (request.RequireClaimOwnership)
+        {
+            transition = transition.Where(candidate =>
+                candidate.ClaimId == request.ClaimId
+                && (candidate.ClaimId == null || candidate.ClaimExpiresUtc > cancelledUtc));
+        }
+
+        var transitioned = await transition.ExecuteUpdateAsync(
+            setters => setters
+                .SetProperty(candidate => candidate.Status, AgentSessionStatus.Cancelled)
+                .SetProperty(candidate => candidate.CompletedUtc, cancelledUtc),
+            cancellationToken);
+
+        if (transitioned != 1)
+        {
+            return request.RequireClaimOwnership
+                ? SessionCancellationOutcome.ClaimLost
+                : SessionCancellationOutcome.NotStarted;
+        }
+
+        session.Status = AgentSessionStatus.Cancelled;
+        session.CompletedUtc = cancelledUtc;
+        dbContext.Entry(session).Property(candidate => candidate.Status).OriginalValue = AgentSessionStatus.Cancelled;
+        dbContext.Entry(session).Property(candidate => candidate.CompletedUtc).OriginalValue = cancelledUtc;
 
         dbContext.ContextEntries.Add(new ContextEntry
         {
@@ -93,12 +140,20 @@ public sealed class SessionCancellationService(FamiliarDbContext dbContext) : IS
             CreatedUtc = cancelledUtc
         });
 
-        session.Status = AgentSessionStatus.Cancelled;
-        session.CompletedUtc = cancelledUtc;
         session.Task.UpdatedUtc = cancelledUtc;
         session.Task.Project.IncrementContextRevision();
 
-        await dbContext.SaveChangesAsync(cancellationToken);
+        try
+        {
+            await dbContext.SaveChangesAsync(cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            return request.RequireClaimOwnership
+                ? SessionCancellationOutcome.ClaimLost
+                : SessionCancellationOutcome.NotStarted;
+        }
 
         return SessionCancellationOutcome.Success(role);
     }

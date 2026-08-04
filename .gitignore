@@ -499,3 +499,8 @@ $RECYCLE.BIN/
 
 # Claude Code local settings (may contain machine-specific permissions/config)
 .claude/settings.local.json
+
+# Familiar worker machine-local configuration (contains repository paths; never commit)
+worker.json
+worker.*.json
+!docs/worker.example.json

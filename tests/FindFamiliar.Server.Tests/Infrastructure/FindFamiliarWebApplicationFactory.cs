@@ -25,8 +25,16 @@ public sealed class FindFamiliarWebApplicationFactory : WebApplicationFactory<Pr
 
     public string TempDirectory { get; }
 
+    public string RepositoryRoot { get; }
+
+    public IReadOnlyDictionary<string, ProductionDatabaseFileSnapshot> ProductionDatabaseFilesBeforeHost { get; }
+
     public FindFamiliarWebApplicationFactory()
     {
+        RepositoryRoot = FindRepositoryRoot(AppContext.BaseDirectory)
+            ?? throw new InvalidOperationException("Could not locate the repository root.");
+        ProductionDatabaseFilesBeforeHost = CaptureProductionDatabaseFiles(RepositoryRoot);
+
         TempDirectory = Path.Combine(Path.GetTempPath(), "FindFamiliar.Tests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(TempDirectory);
 
@@ -59,9 +67,47 @@ public sealed class FindFamiliarWebApplicationFactory : WebApplicationFactory<Pr
         Environment.SetEnvironmentVariable(ConnectionStringVariable, _previousConnectionString);
         Environment.SetEnvironmentVariable(RunnerBridgeTokenVariable, _previousRunnerBridgeToken);
 
-        if (Directory.Exists(TempDirectory))
+        // base.Dispose above tears down the host (and with it the DbContext pool); the shared
+        // helper then releases SQLite's pooled handles before deleting, so a Windows teardown
+        // cannot fail a run whose assertions all passed.
+        TemporaryDirectoryCleanup.Delete(TempDirectory);
+    }
+
+    public static IReadOnlyDictionary<string, ProductionDatabaseFileSnapshot> CaptureProductionDatabaseFiles(
+        string repositoryRoot)
+    {
+        var productionDataDirectory = Path.Combine(repositoryRoot, "src", "FindFamiliar.Server", "App_Data");
+        if (!Directory.Exists(productionDataDirectory))
         {
-            Directory.Delete(TempDirectory, recursive: true);
+            return new Dictionary<string, ProductionDatabaseFileSnapshot>(StringComparer.OrdinalIgnoreCase);
         }
+
+        return Directory.GetFiles(productionDataDirectory, "*.db", SearchOption.AllDirectories)
+            .ToDictionary(
+                path => Path.GetRelativePath(productionDataDirectory, path),
+                path => new ProductionDatabaseFileSnapshot(
+                    new FileInfo(path).Length,
+                    File.GetLastWriteTimeUtc(path)),
+                StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static string? FindRepositoryRoot(string start)
+    {
+        var directory = new DirectoryInfo(start);
+
+        while (directory is not null)
+        {
+            if (Directory.Exists(Path.Combine(directory.FullName, ".git"))
+                || File.Exists(Path.Combine(directory.FullName, "FindFamiliar.slnx")))
+            {
+                return directory.FullName;
+            }
+
+            directory = directory.Parent;
+        }
+
+        return null;
     }
 }
+
+public sealed record ProductionDatabaseFileSnapshot(long Length, DateTime LastWriteUtc);

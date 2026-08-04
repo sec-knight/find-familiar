@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using FindFamiliar.Adapter.Claude;
 using FindFamiliar.Runner;
+using FindFamiliar.Server.Tests.Infrastructure;
 
 namespace FindFamiliar.Server.Tests.ClaudeAdapter;
 
@@ -195,7 +196,7 @@ public sealed class ClaudeAdapterProcessTests
         }
         finally
         {
-            Directory.Delete(sibling, recursive: true);
+            TemporaryDirectoryCleanup.Delete(sibling);
         }
     }
 
@@ -475,6 +476,7 @@ public sealed class ClaudeAdapterProcessTests
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             CreateNoWindow = true,
+            StandardInputEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
             StandardOutputEncoding = Encoding.UTF8,
             StandardErrorEncoding = Encoding.UTF8
         };
@@ -601,15 +603,6 @@ public sealed class ClaudeAdapterProcessTests
             return string.Join('\n', entries);
         }
 
-        public void Dispose()
-        {
-            try
-            {
-                _root.Delete(recursive: true);
-            }
-            catch (IOException)
-            {
-            }
-        }
+        public void Dispose() => TemporaryDirectoryCleanup.Delete(_root.FullName);
     }
 }

@@ -1,0 +1,112 @@
+@page
+@using FindFamiliar.Server.Domain
+@model FindFamiliar.Server.Pages.WorkersModel
+@{
+    ViewData["Title"] = "Workers";
+}
+
+<section class="dashboard-intro" aria-labelledby="workers-title">
+    <p class="eyebrow">Find Familiar</p>
+    <h1 id="workers-title">Workers</h1>
+    <p class="intro-copy">Registered execution workers, their heartbeat status and any work they currently hold. Availability is derived from the last heartbeat and never decides session state.</p>
+</section>
+
+<section aria-labelledby="workers-list-title">
+    <div class="section-heading">
+        <div>
+            <p class="eyebrow">Registered</p>
+            <h2 id="workers-list-title">Worker registrations</h2>
+        </div>
+    </div>
+
+    @if (Model.Items.Count == 0)
+    {
+        <p>No workers have registered yet. A worker registers itself the first time it sends a heartbeat.</p>
+    }
+    else
+    {
+        <table class="work-queue-table">
+            <thead>
+                <tr>
+                    <th scope="col">Worker</th>
+                    <th scope="col">Availability</th>
+                    <th scope="col">Enabled</th>
+                    <th scope="col">Capabilities</th>
+                    <th scope="col">Last heartbeat</th>
+                    <th scope="col">Active claim</th>
+                    <th scope="col">Lease</th>
+                    <th scope="col">Action</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var item in Model.Items)
+                {
+                    var needsAttention = item.Availability == WorkerAvailability.Offline || !item.Enabled;
+                    var nextEnabled = (!item.Enabled).ToString().ToLowerInvariant();
+                    <tr class="@(needsAttention ? "work-queue-row work-queue-row--alert" : "work-queue-row")">
+                        <td>
+                            @item.DisplayName
+                            <br />
+                            <small>@item.WorkerKey</small>
+                        </td>
+                        <td>
+                            @if (item.Availability == WorkerAvailability.Online)
+                            {
+                                @item.Availability
+                            }
+                            else
+                            {
+                                <strong>@item.Availability</strong>
+                            }
+                        </td>
+                        <td>@(item.Enabled ? "Yes" : "No")</td>
+                        <td>
+                            @if (item.Capabilities.Count == 0)
+                            {
+                                <span>None</span>
+                            }
+                            else
+                            {
+                                @string.Join(", ", item.Capabilities)
+                            }
+                        </td>
+                        <td>@item.LastHeartbeatUtc.ToLocalTime().ToString("g")</td>
+                        <td>
+                            @if (item.ActiveClaim is null)
+                            {
+                                <span>Idle</span>
+                            }
+                            else
+                            {
+                                <a asp-page="/Tasks/Details" asp-route-id="@item.ActiveClaim.TaskId" asp-route-sessionId="@item.ActiveClaim.SessionId">@item.ActiveClaim.TaskTitle</a>
+                                <br />
+                                <small>@item.ActiveClaim.Role since @item.ActiveClaim.ClaimedUtc.ToLocalTime().ToString("g")</small>
+                            }
+                        </td>
+                        <td>
+                            @if (item.ActiveClaim is null)
+                            {
+                                <span>—</span>
+                            }
+                            else if (item.ActiveClaim.LeaseExpired)
+                            {
+                                <strong>Expired @item.ActiveClaim.LeaseExpiresUtc.ToLocalTime().ToString("g")</strong>
+                            }
+                            else
+                            {
+                                <span>Until @item.ActiveClaim.LeaseExpiresUtc.ToLocalTime().ToString("g")</span>
+                            }
+                        </td>
+                        <td>
+                            <form method="post" asp-page-handler="SetEnabled">
+                                <input type="hidden" name="id" value="@item.WorkerId" />
+                                <input type="hidden" name="enabled" value="@nextEnabled" />
+                                <button type="submit">@(item.Enabled ? "Disable" : "Enable")</button>
+                            </form>
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    }
+</section>

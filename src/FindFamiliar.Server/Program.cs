@@ -29,6 +29,9 @@ builder.Services.AddScoped<IContextProjectionService, ContextProjectionService>(
 builder.Services.AddScoped<IWorkQueueService, WorkQueueService>();
 builder.Services.AddScoped<ISessionResultCaptureService, SessionResultCaptureService>();
 builder.Services.AddScoped<ISessionCancellationService, SessionCancellationService>();
+builder.Services.AddScoped<IWorkerCoordinationService, WorkerCoordinationService>();
+builder.Services.AddScoped<IWorkerOverviewService, WorkerOverviewService>();
+builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.Configure<RunnerBridgeOptions>(builder.Configuration.GetSection(RunnerBridgeOptions.SectionName));
 
 var app = builder.Build();

@@ -38,10 +38,69 @@ public sealed record RunnerResultRequest(
     string? RawOutput,
     string? Summary,
     string? ArtifactTitle,
-    string? ArtifactContent);
+    string? ArtifactContent,
+    Guid? ClaimId = null);
 
 /// <summary>Posted to the cancel endpoint. Same route-authoritative-identity rule as the result contract.</summary>
-public sealed record RunnerCancelRequest(int ContractVersion, string? Reason);
+public sealed record RunnerCancelRequest(int ContractVersion, string? Reason, Guid? ClaimId = null);
+
+/// <summary>
+/// Posted by a worker to announce availability. Carries no repository path, adapter path, or other
+/// machine-specific configuration — those stay on the worker host (ADR-0008).
+/// </summary>
+public sealed record WorkerHeartbeatRequestBody(
+    int ContractVersion,
+    string? WorkerKey,
+    string? DisplayName,
+    IReadOnlyList<string>? Capabilities);
+
+public sealed record WorkerHeartbeatResponse(
+    int ContractVersion,
+    Guid WorkerId,
+    bool Enabled,
+    WorkerAvailability Availability);
+
+/// <summary>
+/// Posted by a worker to request work. <c>ProjectIds</c> is the set of projects the worker has a
+/// local repository mapping for; the server stores none of them.
+/// </summary>
+public sealed record WorkerClaimRequestBody(
+    int ContractVersion,
+    string? WorkerKey,
+    IReadOnlyList<Guid>? ProjectIds,
+    int? LeaseSeconds);
+
+public sealed record WorkerClaimRenewRequestBody(
+    int ContractVersion,
+    string? WorkerKey,
+    Guid SessionId,
+    Guid ClaimId,
+    int? LeaseSeconds);
+
+public sealed record WorkerClaimRenewResponse(
+    int ContractVersion,
+    Guid SessionId,
+    Guid ClaimId,
+    DateTime LeaseExpiresUtc);
+
+/// <summary>
+/// A granted claim, bundled with the same assignment payload the explicit assignment endpoint
+/// returns, so a worker never needs a second round trip (and cannot observe a session between
+/// claiming it and reading it).
+/// </summary>
+public sealed record WorkerClaimResponse(
+    int ContractVersion,
+    Guid WorkerId,
+    Guid ClaimId,
+    Guid ProjectId,
+    Guid TaskId,
+    Guid SessionId,
+    AgentSessionRole Role,
+    int ContextRevisionRead,
+    string RolePrompt,
+    string AssignmentMarkdown,
+    DateTime ClaimedUtc,
+    DateTime LeaseExpiresUtc);
 
 public sealed record RunnerErrorResponse(int ContractVersion, string Message, IReadOnlyDictionary<string, string>? Errors = null)
 {

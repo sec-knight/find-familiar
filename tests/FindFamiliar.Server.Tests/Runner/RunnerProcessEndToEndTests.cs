@@ -1,4 +1,5 @@
 using System.Net.Http;
+using System.Diagnostics;
 using FindFamiliar.Runner;
 using FindFamiliar.Server.Data;
 using FindFamiliar.Server.Domain;
@@ -105,6 +106,46 @@ public sealed class RunnerProcessEndToEndTests(FindFamiliarWebApplicationFactory
 
         Assert.Equal(RunnerExitCode.CancelledAfterAdapterFailure, exitCode);
         await AssertDurablyCancelledWithOneHandoffAsync(session.Id);
+    }
+
+    [Fact]
+    public async Task External_cancellation_kills_the_adapter_process_before_returning()
+    {
+        var directory = Directory.CreateTempSubdirectory("familiar-runner-cancel").FullName;
+        var pidFile = Path.Combine(directory, "adapter.pid");
+
+        try
+        {
+            using var cancellation = new CancellationTokenSource();
+            var execution = new AdapterProcessExecutor().RunAsync(
+                FakeAdapterPath,
+                [],
+                "{}",
+                TimeSpan.FromMinutes(5),
+                cancellation.Token,
+                environmentOverrides: new Dictionary<string, string>
+                {
+                    ["FAKE_ADAPTER_MODE"] = "timeout",
+                    ["FAKE_ADAPTER_PID_FILE"] = pidFile
+                });
+
+            using var startedTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            while (!File.Exists(pidFile))
+            {
+                await Task.Delay(TimeSpan.FromMilliseconds(25), startedTimeout.Token);
+            }
+
+            var processId = int.Parse(await File.ReadAllTextAsync(pidFile), System.Globalization.CultureInfo.InvariantCulture);
+            cancellation.Cancel();
+
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => execution);
+
+            Assert.False(IsProcessRunning(processId));
+        }
+        finally
+        {
+            TemporaryDirectoryCleanup.Delete(directory);
+        }
     }
 
     [Fact]
@@ -284,6 +325,19 @@ public sealed class RunnerProcessEndToEndTests(FindFamiliarWebApplicationFactory
         }
 
         return path;
+    }
+
+    private static bool IsProcessRunning(int processId)
+    {
+        try
+        {
+            using var process = Process.GetProcessById(processId);
+            return !process.HasExited;
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
     }
 
     private async Task<(FamiliarProject Project, FamiliarTask Task, AgentSession Session)> SeedStartedSessionAsync(AgentSessionRole role)

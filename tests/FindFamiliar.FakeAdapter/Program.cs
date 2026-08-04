@@ -15,10 +15,16 @@
 //                    for the runner's child-environment-scrubbing test.
 //   stall-stdin    - never reads stdin at all; proves the runner's timeout bounds the stdin
 //                    write itself, not just the post-write wait for exit.
+//   delayed-success - waits long enough for worker heartbeat and lease-renewal maintenance.
 
 using System.Text.Json;
 
 var mode = Environment.GetEnvironmentVariable("FAKE_ADAPTER_MODE") ?? "success";
+var pidFile = Environment.GetEnvironmentVariable("FAKE_ADAPTER_PID_FILE");
+if (!string.IsNullOrWhiteSpace(pidFile))
+{
+    await File.WriteAllTextAsync(pidFile, Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture));
+}
 
 if (mode == "stall-stdin")
 {
@@ -34,6 +40,11 @@ var stdin = await Console.In.ReadToEndAsync();
 
 switch (mode)
 {
+    case "delayed-success":
+        await Task.Delay(TimeSpan.FromSeconds(12));
+        await Console.Out.WriteAsync(BuildResultJson($"Delayed result. Received {stdin.Length} stdin bytes."));
+        return 0;
+
     case "timeout":
         await Task.Delay(Timeout.Infinite);
         return 0;

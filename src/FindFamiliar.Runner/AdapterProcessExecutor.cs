@@ -26,7 +26,8 @@ public sealed class AdapterProcessExecutor
         string stdinJson,
         TimeSpan timeout,
         CancellationToken cancellationToken,
-        string? workingDirectory = null)
+        string? workingDirectory = null,
+        IReadOnlyDictionary<string, string>? environmentOverrides = null)
     {
         var startInfo = new ProcessStartInfo
         {
@@ -52,6 +53,15 @@ public sealed class AdapterProcessExecutor
         foreach (var argument in adapterArguments)
         {
             startInfo.ArgumentList.Add(argument);
+        }
+
+        // Applied before the credential removal below, so no override can reintroduce the token.
+        if (environmentOverrides is not null)
+        {
+            foreach (var (key, value) in environmentOverrides)
+            {
+                startInfo.Environment[key] = value;
+            }
         }
 
         // The adapter never needs the Familiar bearer credential; remove it explicitly rather
@@ -88,7 +98,12 @@ public sealed class AdapterProcessExecutor
         catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested)
         {
             timedOut = true;
-            TryKillProcessTree(process);
+            await KillAndWaitForExitAsync(process);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            await KillAndWaitForExitAsync(process);
+            throw;
         }
         finally
         {
@@ -112,7 +127,12 @@ public sealed class AdapterProcessExecutor
             catch (OperationCanceledException) when (timeoutCts.IsCancellationRequested)
             {
                 timedOut = true;
-                TryKillProcessTree(process);
+                await KillAndWaitForExitAsync(process);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                await KillAndWaitForExitAsync(process);
+                throw;
             }
         }
 
@@ -129,7 +149,7 @@ public sealed class AdapterProcessExecutor
             stderrOversized);
     }
 
-    private static void TryKillProcessTree(Process process)
+    private static async Task KillAndWaitForExitAsync(Process process)
     {
         try
         {
@@ -138,6 +158,17 @@ public sealed class AdapterProcessExecutor
         catch (InvalidOperationException)
         {
             // Already exited between the timeout firing and the kill call — nothing to do.
+            return;
+        }
+
+        using var waitCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        try
+        {
+            await process.WaitForExitAsync(waitCts.Token);
+        }
+        catch (OperationCanceledException) when (waitCts.IsCancellationRequested)
+        {
+            throw new TimeoutException("The adapter process did not exit after its process tree was terminated.");
         }
     }
 

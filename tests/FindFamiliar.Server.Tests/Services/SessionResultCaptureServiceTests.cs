@@ -1,6 +1,7 @@
 using FindFamiliar.Server.Domain;
 using FindFamiliar.Server.Services;
 using FindFamiliar.Server.Tests.Infrastructure;
+using Microsoft.EntityFrameworkCore;
 using TaskStatus = FindFamiliar.Server.Domain.TaskStatus;
 
 namespace FindFamiliar.Server.Tests.Services;
@@ -211,6 +212,96 @@ public sealed class SessionResultCaptureServiceTests
         Assert.Equal(4, dbContext.ContextEntries.Count(entry => entry.SourceSessionId == session.Id));
         var refreshedProject = dbContext.Projects.Single(candidate => candidate.Id == project.Id);
         Assert.Equal(revisionAfterFirst, refreshedProject.ContextRevision);
+    }
+
+    [Fact]
+    public async Task Stale_or_expired_claim_generation_cannot_capture_a_result()
+    {
+        using var database = new TemporarySqliteDatabase();
+        await using var dbContext = await database.CreateContextAsync();
+        var (_, task, session) = await SeedStartedSessionAsync(dbContext, AgentSessionRole.Planner);
+        var activeClaimId = Guid.NewGuid();
+        session.ClaimId = activeClaimId;
+        session.ClaimExpiresUtc = DateTime.UtcNow.AddMinutes(5);
+        await dbContext.SaveChangesAsync();
+
+        var service = new SessionResultCaptureService(dbContext);
+        var stale = await service.CaptureAsync(new SessionResultCaptureRequest(
+            task.Id,
+            session.Id,
+            "Prompt.",
+            "Raw output.",
+            "Summary.",
+            "Title",
+            "Content.",
+            Guid.NewGuid(),
+            RequireClaimOwnership: true));
+
+        Assert.Equal(SessionResultCaptureStatus.ClaimLost, stale.Status);
+        Assert.Empty(dbContext.ContextEntries.Where(entry => entry.SourceSessionId == session.Id));
+
+        session.ClaimExpiresUtc = DateTime.UtcNow.AddSeconds(-1);
+        await dbContext.SaveChangesAsync();
+        var expired = await service.CaptureAsync(new SessionResultCaptureRequest(
+            task.Id,
+            session.Id,
+            "Prompt.",
+            "Raw output.",
+            "Summary.",
+            "Title",
+            "Content.",
+            activeClaimId,
+            RequireClaimOwnership: true));
+
+        Assert.Equal(SessionResultCaptureStatus.ClaimLost, expired.Status);
+        Assert.Equal(AgentSessionStatus.Started, session.Status);
+    }
+
+    [Fact]
+    public async Task Concurrent_result_submissions_commit_exactly_once()
+    {
+        using var database = new TemporarySqliteDatabase();
+        await using var seedContext = await database.CreateContextAsync();
+        var (_, task, session) = await SeedStartedSessionAsync(seedContext, AgentSessionRole.Planner);
+        var claimId = Guid.NewGuid();
+        session.ClaimId = claimId;
+        session.ClaimExpiresUtc = DateTime.UtcNow.AddMinutes(5);
+        await seedContext.SaveChangesAsync();
+
+        await using var firstContext = await database.CreateContextAsync();
+        await using var secondContext = await database.CreateContextAsync();
+        var barrier = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        async Task<SessionResultCaptureOutcome> CaptureAsync(Data.FamiliarDbContext context, string title)
+        {
+            await barrier.Task;
+            return await new SessionResultCaptureService(context).CaptureAsync(new SessionResultCaptureRequest(
+                task.Id,
+                session.Id,
+                "Prompt.",
+                "Raw output.",
+                "Summary.",
+                title,
+                "Content.",
+                claimId,
+                RequireClaimOwnership: true));
+        }
+
+        var first = CaptureAsync(firstContext, "First");
+        var second = CaptureAsync(secondContext, "Second");
+        barrier.SetResult();
+        var outcomes = await Task.WhenAll(first, second);
+
+        Assert.Single(outcomes, outcome => outcome.Status == SessionResultCaptureStatus.Success);
+        Assert.Single(
+            outcomes,
+            outcome => outcome.Status is SessionResultCaptureStatus.ClaimLost or SessionResultCaptureStatus.NotStarted);
+
+        await using var verifyContext = await database.CreateContextAsync();
+        Assert.Equal(4, await verifyContext.ContextEntries.CountAsync(entry => entry.SourceSessionId == session.Id));
+        Assert.Equal(
+            AgentSessionStatus.Completed,
+            (await verifyContext.AgentSessions.SingleAsync(candidate => candidate.Id == session.Id)).Status);
     }
 
     private static async Task<(FamiliarProject Project, FamiliarTask Task, AgentSession Session)> SeedStartedSessionAsync(

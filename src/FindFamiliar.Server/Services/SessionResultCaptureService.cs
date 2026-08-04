@@ -9,7 +9,8 @@ public enum SessionResultCaptureStatus
     Success,
     ValidationFailed,
     NotFound,
-    NotStarted
+    NotStarted,
+    ClaimLost
 }
 
 public sealed record SessionResultCaptureRequest(
@@ -19,7 +20,9 @@ public sealed record SessionResultCaptureRequest(
     string? RawOutput,
     string? Summary,
     string? ArtifactTitle,
-    string? ArtifactContent);
+    string? ArtifactContent,
+    Guid? ClaimId = null,
+    bool RequireClaimOwnership = false);
 
 public sealed record SessionResultCaptureOutcome(
     SessionResultCaptureStatus Status,
@@ -28,6 +31,7 @@ public sealed record SessionResultCaptureOutcome(
 {
     public static readonly SessionResultCaptureOutcome NotFound = new(SessionResultCaptureStatus.NotFound);
     public static readonly SessionResultCaptureOutcome NotStarted = new(SessionResultCaptureStatus.NotStarted);
+    public static readonly SessionResultCaptureOutcome ClaimLost = new(SessionResultCaptureStatus.ClaimLost);
 
     public static SessionResultCaptureOutcome Success(AgentSessionRole role) =>
         new(SessionResultCaptureStatus.Success, role);
@@ -80,6 +84,16 @@ public sealed class SessionResultCaptureService(FamiliarDbContext dbContext) : I
             return SessionResultCaptureOutcome.NotStarted;
         }
 
+
+        var capturedUtc = DateTime.UtcNow;
+
+        if (request.RequireClaimOwnership &&
+            (session.ClaimId != request.ClaimId
+                || (session.ClaimId is not null && session.ClaimExpiresUtc <= capturedUtc)))
+        {
+            return SessionResultCaptureOutcome.ClaimLost;
+        }
+
         var artifactKind = session.Role switch
         {
             AgentSessionRole.Planner => ContextEntryKind.Plan,
@@ -88,7 +102,38 @@ public sealed class SessionResultCaptureService(FamiliarDbContext dbContext) : I
             _ => throw new InvalidOperationException($"Unmapped agent session role '{session.Role}'.")
         };
 
-        var capturedUtc = DateTime.UtcNow;
+        await using var transaction = await dbContext.Database.BeginTransactionAsync(cancellationToken);
+        var transition = dbContext.AgentSessions.Where(candidate =>
+            candidate.Id == request.SessionId
+            && candidate.TaskId == request.TaskId
+            && candidate.Status == AgentSessionStatus.Started);
+
+        if (request.RequireClaimOwnership)
+        {
+            transition = transition.Where(candidate =>
+                candidate.ClaimId == request.ClaimId
+                && (candidate.ClaimId == null || candidate.ClaimExpiresUtc > capturedUtc));
+        }
+
+        var transitioned = await transition.ExecuteUpdateAsync(
+            setters => setters
+                .SetProperty(candidate => candidate.Status, AgentSessionStatus.Completed)
+                .SetProperty(candidate => candidate.CompletedUtc, capturedUtc),
+            cancellationToken);
+
+        if (transitioned != 1)
+        {
+            return request.RequireClaimOwnership
+                ? SessionResultCaptureOutcome.ClaimLost
+                : SessionResultCaptureOutcome.NotStarted;
+        }
+
+        // ExecuteUpdate bypasses tracking. Mirror the committed-in-this-transaction transition in
+        // memory, then mark it unchanged so SaveChanges only writes the entries/task/project.
+        session.Status = AgentSessionStatus.Completed;
+        session.CompletedUtc = capturedUtc;
+        dbContext.Entry(session).Property(candidate => candidate.Status).OriginalValue = AgentSessionStatus.Completed;
+        dbContext.Entry(session).Property(candidate => candidate.CompletedUtc).OriginalValue = capturedUtc;
 
         dbContext.ContextEntries.AddRange(
             new ContextEntry
@@ -140,12 +185,20 @@ public sealed class SessionResultCaptureService(FamiliarDbContext dbContext) : I
                 CreatedUtc = capturedUtc
             });
 
-        session.Status = AgentSessionStatus.Completed;
-        session.CompletedUtc = capturedUtc;
         session.Task.UpdatedUtc = capturedUtc;
         session.Task.Project.IncrementContextRevision();
 
-        await dbContext.SaveChangesAsync(cancellationToken);
+        try
+        {
+            await dbContext.SaveChangesAsync(cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            return request.RequireClaimOwnership
+                ? SessionResultCaptureOutcome.ClaimLost
+                : SessionResultCaptureOutcome.NotStarted;
+        }
 
         return SessionResultCaptureOutcome.Success(session.Role);
     }

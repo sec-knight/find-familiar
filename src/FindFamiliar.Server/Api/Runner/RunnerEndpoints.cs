@@ -20,6 +20,159 @@ public static class RunnerEndpoints
         group.MapGet("/tasks/{taskId:guid}/sessions/{sessionId:guid}/assignment", GetAssignmentAsync);
         group.MapPost("/tasks/{taskId:guid}/sessions/{sessionId:guid}/result", PostResultAsync);
         group.MapPost("/tasks/{taskId:guid}/sessions/{sessionId:guid}/cancel", PostCancelAsync);
+        group.MapPost("/workers/heartbeat", PostWorkerHeartbeatAsync);
+        group.MapPost("/workers/claim", PostWorkerClaimAsync);
+        group.MapPost("/workers/claims/renew", PostWorkerClaimRenewAsync);
+    }
+
+    private static async Task<IResult> PostWorkerHeartbeatAsync(
+        HttpRequest httpRequest,
+        IWorkerCoordinationService workerCoordination,
+        IOptions<JsonOptions> jsonOptions,
+        CancellationToken cancellationToken)
+    {
+        var (payload, error) = await ReadBodyAsync<WorkerHeartbeatRequestBody>(httpRequest, jsonOptions.Value, cancellationToken);
+        if (error is not null)
+        {
+            return error;
+        }
+
+        var outcome = await workerCoordination.HeartbeatAsync(
+            new WorkerHeartbeatRequest(payload!.WorkerKey, payload.DisplayName, payload.Capabilities),
+            cancellationToken);
+
+        return outcome.Status switch
+        {
+            WorkerHeartbeatStatus.Success => Results.Json(new WorkerHeartbeatResponse(
+                RunnerContracts.ContractVersion,
+                outcome.WorkerId,
+                outcome.Enabled,
+                outcome.Availability)),
+            WorkerHeartbeatStatus.ValidationFailed => Results.BadRequest(
+                RunnerErrorResponse.Create("Validation failed.", outcome.ValidationErrors)),
+            _ => Results.Problem(statusCode: StatusCodes.Status500InternalServerError)
+        };
+    }
+
+    /// <summary>
+    /// Grants at most one claim and returns its assignment in the same response. There is no
+    /// separate "list eligible work" route: listing and claiming as two calls is exactly the race
+    /// this single atomic operation exists to avoid (ADR-0008).
+    /// </summary>
+    private static async Task<IResult> PostWorkerClaimAsync(
+        HttpRequest httpRequest,
+        IWorkerCoordinationService workerCoordination,
+        IContextProjectionService contextProjection,
+        IOptions<JsonOptions> jsonOptions,
+        CancellationToken cancellationToken)
+    {
+        var (payload, error) = await ReadBodyAsync<WorkerClaimRequestBody>(httpRequest, jsonOptions.Value, cancellationToken);
+        if (error is not null)
+        {
+            return error;
+        }
+
+        var outcome = await workerCoordination.ClaimNextAsync(
+            new WorkerClaimRequest(payload!.WorkerKey, payload.ProjectIds, payload.LeaseSeconds),
+            cancellationToken);
+
+        switch (outcome.Status)
+        {
+            case WorkerClaimStatus.NoWorkAvailable:
+                return Results.NoContent();
+            case WorkerClaimStatus.UnknownWorker:
+                return Results.NotFound(RunnerErrorResponse.Create(
+                    "Unknown worker. Send a heartbeat to register before requesting work."));
+            case WorkerClaimStatus.WorkerDisabled:
+                return Results.Conflict(RunnerErrorResponse.Create("This worker is disabled."));
+            case WorkerClaimStatus.ValidationFailed:
+                return Results.BadRequest(RunnerErrorResponse.Create("Validation failed.", outcome.ValidationErrors));
+        }
+
+        var claim = outcome.Claim!;
+        var document = await contextProjection.GetTaskContextAsync(claim.TaskId, cancellationToken);
+        var session = document?.Sessions.SingleOrDefault(candidate => candidate.Id == claim.SessionId);
+
+        if (document is null
+            || session is null
+            || session.Status != AgentSessionStatus.Started
+            || session.Role != claim.Role
+            || session.ContextRevisionRead != claim.ContextRevisionRead)
+        {
+            // The task disappeared between the claim and this read. Release rather than hold a
+            // lease on work this server cannot describe.
+            await workerCoordination.ReleaseClaimAsync(claim.SessionId, claim.WorkerId, claim.ClaimId, cancellationToken);
+            return Results.NoContent();
+        }
+
+        var rolePrompt = SessionAssignmentMarkdownRenderer.RenderRolePrompt(session.Role, document);
+        var assignmentMarkdown = SessionAssignmentMarkdownRenderer.RenderAssignment(document, session);
+
+        if (assignmentMarkdown.Length > RunnerContracts.MaxAssignmentMarkdownLength)
+        {
+            // Holding a lease on work no worker can be handed would block the session until the
+            // lease expired, so the claim is given straight back.
+            await workerCoordination.ReleaseClaimAsync(claim.SessionId, claim.WorkerId, claim.ClaimId, cancellationToken);
+            return Results.Json(
+                RunnerErrorResponse.Create("The assignment exceeds the runner contract's size limit."),
+                statusCode: StatusCodes.Status413PayloadTooLarge);
+        }
+
+        return Results.Json(new WorkerClaimResponse(
+            RunnerContracts.ContractVersion,
+            claim.WorkerId,
+            claim.ClaimId,
+            claim.ProjectId,
+            claim.TaskId,
+            claim.SessionId,
+            session.Role,
+            session.ContextRevisionRead,
+            rolePrompt,
+            assignmentMarkdown,
+            claim.ClaimedUtc,
+            claim.LeaseExpiresUtc));
+    }
+
+    private static async Task<IResult> PostWorkerClaimRenewAsync(
+        HttpRequest httpRequest,
+        IWorkerCoordinationService workerCoordination,
+        IOptions<JsonOptions> jsonOptions,
+        CancellationToken cancellationToken)
+    {
+        var (payload, error) = await ReadBodyAsync<WorkerClaimRenewRequestBody>(
+            httpRequest,
+            jsonOptions.Value,
+            cancellationToken);
+        if (error is not null)
+        {
+            return error;
+        }
+
+        var outcome = await workerCoordination.RenewClaimAsync(
+            new WorkerClaimRenewalRequest(
+                payload!.WorkerKey,
+                payload.SessionId,
+                payload.ClaimId,
+                payload.LeaseSeconds),
+            cancellationToken);
+
+        return outcome.Status switch
+        {
+            WorkerClaimRenewalStatus.Renewed => Results.Json(new WorkerClaimRenewResponse(
+                RunnerContracts.ContractVersion,
+                payload.SessionId,
+                payload.ClaimId,
+                outcome.LeaseExpiresUtc!.Value)),
+            WorkerClaimRenewalStatus.UnknownWorker => Results.NotFound(
+                RunnerErrorResponse.Create("Unknown worker.")),
+            WorkerClaimRenewalStatus.WorkerDisabled => Results.Conflict(
+                RunnerErrorResponse.Create("This worker is disabled.")),
+            WorkerClaimRenewalStatus.ClaimLost => Results.Conflict(
+                RunnerErrorResponse.Create("This claim is no longer active.")),
+            WorkerClaimRenewalStatus.ValidationFailed => Results.BadRequest(
+                RunnerErrorResponse.Create("Validation failed.", outcome.ValidationErrors)),
+            _ => Results.Problem(statusCode: StatusCodes.Status500InternalServerError)
+        };
     }
 
     private static async Task<IResult> GetAssignmentAsync(
@@ -84,7 +237,9 @@ public static class RunnerEndpoints
                 payload.RawOutput,
                 payload.Summary,
                 payload.ArtifactTitle,
-                payload.ArtifactContent),
+                payload.ArtifactContent,
+                payload.ClaimId,
+                RequireClaimOwnership: true),
             cancellationToken);
 
         return outcome.Status switch
@@ -93,6 +248,8 @@ public static class RunnerEndpoints
             SessionResultCaptureStatus.NotFound => Results.NotFound(RunnerErrorResponse.Create("Unknown task or session.")),
             SessionResultCaptureStatus.NotStarted => Results.Conflict(RunnerErrorResponse.Create(
                 "This session is no longer Started. A result can only be captured once for a Started session.")),
+            SessionResultCaptureStatus.ClaimLost => Results.Conflict(RunnerErrorResponse.Create(
+                "This runner no longer owns the active claim.")),
             SessionResultCaptureStatus.ValidationFailed => Results.BadRequest(
                 RunnerErrorResponse.Create("Validation failed.", outcome.ValidationErrors)),
             _ => Results.Problem(statusCode: StatusCodes.Status500InternalServerError)
@@ -114,7 +271,12 @@ public static class RunnerEndpoints
         }
 
         var outcome = await cancellation.CancelAsync(
-            new SessionCancellationRequest(taskId, sessionId, payload!.Reason),
+            new SessionCancellationRequest(
+                taskId,
+                sessionId,
+                payload!.Reason,
+                payload.ClaimId,
+                RequireClaimOwnership: true),
             cancellationToken);
 
         return outcome.Status switch
@@ -123,6 +285,8 @@ public static class RunnerEndpoints
             SessionCancellationStatus.NotFound => Results.NotFound(RunnerErrorResponse.Create("Unknown task or session.")),
             SessionCancellationStatus.NotStarted => Results.Conflict(RunnerErrorResponse.Create(
                 "This session is no longer Started. Only a Started session can be cancelled.")),
+            SessionCancellationStatus.ClaimLost => Results.Conflict(RunnerErrorResponse.Create(
+                "This runner no longer owns the active claim.")),
             SessionCancellationStatus.ValidationFailed => Results.BadRequest(
                 RunnerErrorResponse.Create("Validation failed.", outcome.ValidationErrors)),
             _ => Results.Problem(statusCode: StatusCodes.Status500InternalServerError)
@@ -166,6 +330,9 @@ public static class RunnerEndpoints
         {
             RunnerResultRequest result => result.ContractVersion,
             RunnerCancelRequest cancel => cancel.ContractVersion,
+            WorkerHeartbeatRequestBody heartbeat => heartbeat.ContractVersion,
+            WorkerClaimRequestBody claim => claim.ContractVersion,
+            WorkerClaimRenewRequestBody renew => renew.ContractVersion,
             _ => 0
         };
 

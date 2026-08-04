@@ -19,6 +19,7 @@
                 <a class="nav-link @(ViewContext.RouteData.Values["page"]?.ToString() == "/Index" ? "is-active" : "")" asp-area="" asp-page="/Index">Dashboard</a>
                 <a class="nav-link @(ViewContext.RouteData.Values["page"]?.ToString() == "/Projects/Index" ? "is-active" : "")" asp-area="" asp-page="/Projects/Index">Projects</a>
                 <a class="nav-link @(ViewContext.RouteData.Values["page"]?.ToString() == "/Work" ? "is-active" : "")" asp-area="" asp-page="/Work">Work queue</a>
+                <a class="nav-link @(ViewContext.RouteData.Values["page"]?.ToString() == "/Workers" ? "is-active" : "")" asp-area="" asp-page="/Workers">Workers</a>
                 <a class="nav-link @(ViewContext.RouteData.Values["page"]?.ToString() == "/About" ? "is-active" : "")" asp-area="" asp-page="/About">About</a>
             </nav>
         </div>

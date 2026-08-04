@@ -33,9 +33,59 @@ public sealed record ResultRequest(
     string RawOutput,
     string Summary,
     string ArtifactTitle,
-    string ArtifactContent);
+    string ArtifactContent,
+    Guid? ClaimId = null);
 
-public sealed record CancelRequest(int ContractVersion, string Reason);
+public sealed record CancelRequest(int ContractVersion, string Reason, Guid? ClaimId = null);
+
+public sealed record WorkerHeartbeatRequestBody(
+    int ContractVersion,
+    string WorkerKey,
+    string DisplayName,
+    IReadOnlyList<string> Capabilities);
+
+public sealed record WorkerHeartbeatResponse(
+    int ContractVersion,
+    Guid WorkerId,
+    bool Enabled,
+    string Availability);
+
+public sealed record WorkerClaimRequestBody(
+    int ContractVersion,
+    string WorkerKey,
+    IReadOnlyList<Guid> ProjectIds,
+    int LeaseSeconds);
+
+public sealed record WorkerClaimRenewRequestBody(
+    int ContractVersion,
+    string WorkerKey,
+    Guid SessionId,
+    Guid ClaimId,
+    int LeaseSeconds);
+
+public sealed record WorkerClaimRenewResponse(
+    int ContractVersion,
+    Guid SessionId,
+    Guid ClaimId,
+    DateTime LeaseExpiresUtc);
+
+/// <summary>
+/// A granted claim plus its assignment. The worker never chooses which session this is — the
+/// server selected it atomically (ADR-0008).
+/// </summary>
+public sealed record WorkerClaimResponse(
+    int ContractVersion,
+    Guid WorkerId,
+    Guid ClaimId,
+    Guid ProjectId,
+    Guid TaskId,
+    Guid SessionId,
+    string Role,
+    int ContextRevisionRead,
+    string RolePrompt,
+    string AssignmentMarkdown,
+    DateTime ClaimedUtc,
+    DateTime LeaseExpiresUtc);
 
 /// <summary>Sent to the adapter on stdin. The adapter cannot choose any of these fields.</summary>
 public sealed record AdapterInvocation(

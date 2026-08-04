@@ -3,6 +3,10 @@
 How to point a worker machine at a Familiar server and run one explicit session through the
 locally installed Claude Code CLI. See ADR-0007 for why each boundary exists.
 
+For a worker that discovers and claims sessions automatically instead of being invoked per session,
+see the worker runtime guide (`docs/worker-runtime-guide.md`) and ADR-0008. This guide remains
+accurate for explicit invocation, and the adapter configuration below applies to both modes.
+
 Every value below is a placeholder. Never commit real tokens, credentials, machine paths, or
 tailnet identifiers.
 

@@ -156,6 +156,29 @@ public sealed class SessionCancellationServiceTests
         Assert.Equal(revisionAfterFirst, refreshedProject.ContextRevision);
     }
 
+    [Fact]
+    public async Task Stale_claim_generation_cannot_cancel_the_current_owner()
+    {
+        using var database = new TemporarySqliteDatabase();
+        await using var dbContext = await database.CreateContextAsync();
+        var (_, task, session) = await SeedStartedSessionAsync(dbContext, AgentSessionRole.Planner);
+        session.ClaimId = Guid.NewGuid();
+        session.ClaimExpiresUtc = DateTime.UtcNow.AddMinutes(5);
+        await dbContext.SaveChangesAsync();
+
+        var service = new SessionCancellationService(dbContext);
+        var stale = await service.CancelAsync(new SessionCancellationRequest(
+            task.Id,
+            session.Id,
+            "Stale cancellation.",
+            Guid.NewGuid(),
+            RequireClaimOwnership: true));
+
+        Assert.Equal(SessionCancellationStatus.ClaimLost, stale.Status);
+        Assert.Equal(AgentSessionStatus.Started, session.Status);
+        Assert.Empty(dbContext.ContextEntries.Where(entry => entry.SourceSessionId == session.Id));
+    }
+
     private static async Task<(FamiliarProject Project, FamiliarTask Task, AgentSession Session)> SeedStartedSessionAsync(
         Data.FamiliarDbContext dbContext, AgentSessionRole role)
     {

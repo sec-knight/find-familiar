@@ -43,9 +43,6 @@ public sealed class UnconfiguredRunnerBridgeWebApplicationFactory : WebApplicati
     {
         base.Dispose(disposing);
 
-        if (Directory.Exists(_tempDirectory))
-        {
-            Directory.Delete(_tempDirectory, recursive: true);
-        }
+        TemporaryDirectoryCleanup.Delete(_tempDirectory);
     }
 }

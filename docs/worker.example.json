@@ -1,0 +1,30 @@
+{
+  "//": "Copy to a machine-local worker.json (never commit it) and point FAMILIAR_WORKER_CONFIG at it.",
+  "//token": "The Familiar credential is NOT configured here. Set FAMILIAR_RUNNER_TOKEN in the environment.",
+
+  "baseUrl": "https://familiar.example-tailnet.ts.net",
+  "workerKey": "example-worker-key",
+  "displayName": "Example worker",
+  "capabilities": ["Planner"],
+
+  "adapterPath": "/absolute/path/to/FindFamiliar.Adapter.Claude",
+  "adapterArguments": [],
+  "adapterTimeoutSeconds": 600,
+
+  "pollSeconds": 15,
+  "maxPollSeconds": 120,
+  "heartbeatSeconds": 60,
+
+  "//lease": "Optional. The worker renews this bounded lease while the adapter runs; expiry recovers crashed work.",
+  "leaseSeconds": 1500,
+
+  "//projects": "Machine-local repository mapping. Only these projects are ever offered to this worker.",
+  "projects": [
+    {
+      "projectId": "00000000-0000-0000-0000-000000000000",
+      "worktree": "/absolute/path/to/repository",
+      "allowedRoot": "/absolute/path/to/parent-of-repository",
+      "mode": "read-only"
+    }
+  ]
+}

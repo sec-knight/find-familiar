@@ -17,7 +17,10 @@
 //   echo-env          - reports whether FAMILIAR_RUNNER_TOKEN reached this child process.
 //   echo-stdin        - returns the prompt it received, to prove stdin delivery and inertness.
 
+using System.Text;
 using System.Text.Json;
+
+Console.InputEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
 
 var mode = Environment.GetEnvironmentVariable("FAKE_CLAUDE_MODE") ?? "success";
 

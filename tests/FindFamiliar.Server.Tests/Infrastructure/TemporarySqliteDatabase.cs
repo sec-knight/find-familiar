@@ -10,6 +10,7 @@ namespace FindFamiliar.Server.Tests.Infrastructure;
 public sealed class TemporarySqliteDatabase : IDisposable
 {
     private readonly string _directory;
+    private readonly List<FamiliarDbContext> _contexts = [];
 
     public string ConnectionString { get; }
 
@@ -28,14 +29,22 @@ public sealed class TemporarySqliteDatabase : IDisposable
 
         var dbContext = new FamiliarDbContext(options);
         await dbContext.Database.MigrateAsync();
+        _contexts.Add(dbContext);
         return dbContext;
     }
 
     public void Dispose()
     {
-        if (Directory.Exists(_directory))
+        // Dispose every context this instance handed out, whether or not the test also disposed
+        // it. Disposal is idempotent, and doing it here means the directory delete below never
+        // races an undisposed connection.
+        foreach (var context in _contexts)
         {
-            Directory.Delete(_directory, recursive: true);
+            context.Dispose();
         }
+
+        _contexts.Clear();
+
+        TemporaryDirectoryCleanup.Delete(_directory);
     }
 }

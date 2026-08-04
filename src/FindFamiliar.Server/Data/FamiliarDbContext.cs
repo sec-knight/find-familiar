@@ -13,6 +13,8 @@ public sealed class FamiliarDbContext(DbContextOptions<FamiliarDbContext> option
 
     public DbSet<ContextEntry> ContextEntries => Set<ContextEntry>();
 
+    public DbSet<Worker> Workers => Set<Worker>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.Entity<FamiliarProject>(entity =>
@@ -59,12 +61,30 @@ public sealed class FamiliarDbContext(DbContextOptions<FamiliarDbContext> option
             entity.Property(session => session.Role).HasConversion<string>().HasMaxLength(32);
             entity.Property(session => session.Provider).HasMaxLength(120);
             entity.Property(session => session.ExternalSessionReference).HasMaxLength(500);
-            entity.Property(session => session.Status).HasConversion<string>().HasMaxLength(32);
+            entity.Property(session => session.Status).HasConversion<string>().HasMaxLength(32).IsConcurrencyToken();
+            entity.Property(session => session.ClaimId).IsConcurrencyToken();
             entity.HasIndex(session => new { session.TaskId, session.StartedUtc });
+            // Supports the claim scan, which filters Started sessions by remaining lease.
+            entity.HasIndex(session => new { session.Status, session.ClaimExpiresUtc });
             entity.HasMany(session => session.ContextEntries)
                 .WithOne(entry => entry.SourceSession)
                 .HasForeignKey(entry => entry.SourceSessionId)
                 .OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne(session => session.ClaimedByWorker)
+                .WithMany(worker => worker.ClaimedSessions)
+                .HasForeignKey(session => session.ClaimedByWorkerId)
+                .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<Worker>(entity =>
+        {
+            entity.ToTable("Workers");
+            entity.HasKey(worker => worker.Id);
+            entity.Property(worker => worker.WorkerKey).HasMaxLength(100).IsRequired();
+            entity.HasIndex(worker => worker.WorkerKey).IsUnique();
+            entity.Property(worker => worker.DisplayName).HasMaxLength(160).IsRequired();
+            entity.Property(worker => worker.Capabilities).HasMaxLength(WorkerCapabilities.MaxLength).IsRequired();
+            entity.Property(worker => worker.Enabled).HasDefaultValue(true);
         });
 
         modelBuilder.Entity<ContextEntry>(entity =>
