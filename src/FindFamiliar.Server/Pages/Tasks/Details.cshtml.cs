@@ -13,7 +13,8 @@ public sealed class DetailsModel(
     FamiliarDbContext dbContext,
     IContextProjectionService contextProjection,
     ISessionResultCaptureService resultCapture,
-    ISessionCancellationService cancellation) : PageModel
+    ISessionCancellationService cancellation,
+    IWorkflowDispatchService workflowDispatch) : PageModel
 {
     public TaskContextDocument? Document { get; private set; }
 
@@ -85,11 +86,7 @@ public sealed class DetailsModel(
             return NotFound();
         }
 
-        var hasStartedSession = await dbContext.AgentSessions.AnyAsync(
-            candidate => candidate.TaskId == id && candidate.Status == AgentSessionStatus.Started,
-            cancellationToken);
-
-        if (hasStartedSession)
+        if (await workflowDispatch.HasStartedSessionAsync(id, cancellationToken))
         {
             ModelState.AddModelError(
                 "NewSession.Role",
@@ -98,23 +95,14 @@ public sealed class DetailsModel(
             return Page();
         }
 
-        var startedUtc = DateTime.UtcNow;
+        var session = workflowDispatch.StartSession(
+            task,
+            task.Project,
+            NewSession.Role,
+            NewSession.Provider,
+            NewSession.ExternalSessionReference,
+            DateTime.UtcNow);
 
-        task.Project.IncrementContextRevision();
-
-        var session = new AgentSession
-        {
-            Id = Guid.NewGuid(),
-            TaskId = task.Id,
-            Role = NewSession.Role,
-            Provider = NullIfWhiteSpace(NewSession.Provider),
-            ExternalSessionReference = NullIfWhiteSpace(NewSession.ExternalSessionReference),
-            Status = AgentSessionStatus.Started,
-            ContextRevisionRead = task.Project.ContextRevision,
-            StartedUtc = startedUtc
-        };
-
-        dbContext.AgentSessions.Add(session);
         await dbContext.SaveChangesAsync(cancellationToken);
 
         TempData["StatusMessage"] = $"Started a {session.Role.ToString().ToLowerInvariant()} session. Copy the generated Markdown into a new AI conversation.";
@@ -291,11 +279,6 @@ public sealed class DetailsModel(
     {
         Document = await contextProjection.GetTaskContextAsync(id, cancellationToken);
         return Document is not null;
-    }
-
-    private static string? NullIfWhiteSpace(string? value)
-    {
-        return string.IsNullOrWhiteSpace(value) ? null : value.Trim();
     }
 }
 

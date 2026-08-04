@@ -130,12 +130,16 @@ public sealed class RunnerProcessEndToEndTests(FindFamiliarWebApplicationFactory
                 });
 
             using var startedTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-            while (!File.Exists(pidFile))
+            var processId = 0;
+            while (!File.Exists(pidFile)
+                || !int.TryParse(
+                    await File.ReadAllTextAsync(pidFile, startedTimeout.Token),
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    out processId))
             {
                 await Task.Delay(TimeSpan.FromMilliseconds(25), startedTimeout.Token);
             }
 
-            var processId = int.Parse(await File.ReadAllTextAsync(pidFile), System.Globalization.CultureInfo.InvariantCulture);
             cancellation.Cancel();
 
             await Assert.ThrowsAnyAsync<OperationCanceledException>(() => execution);

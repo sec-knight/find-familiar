@@ -1,14 +1,16 @@
 using System.ComponentModel.DataAnnotations;
 using FindFamiliar.Server.Data;
 using FindFamiliar.Server.Domain;
+using FindFamiliar.Server.Services;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
 using Microsoft.EntityFrameworkCore;
-using TaskStatus = FindFamiliar.Server.Domain.TaskStatus;
 
 namespace FindFamiliar.Server.Pages.Projects;
 
-public sealed class DetailsModel(FamiliarDbContext dbContext) : PageModel
+public sealed class DetailsModel(
+    FamiliarDbContext dbContext,
+    IWorkflowDispatchService workflowDispatch) : PageModel
 {
     public FamiliarProject? Project { get; private set; }
 
@@ -45,20 +47,12 @@ public sealed class DetailsModel(FamiliarDbContext dbContext) : PageModel
             return NotFound();
         }
 
-        var now = DateTime.UtcNow;
-        var task = new FamiliarTask
-        {
-            Id = Guid.NewGuid(),
-            ProjectId = project.Id,
-            Title = NewTask.Title.Trim(),
-            RequestedOutcome = NewTask.RequestedOutcome.Trim(),
-            Status = TaskStatus.Ready,
-            CreatedUtc = now,
-            UpdatedUtc = now
-        };
+        var task = workflowDispatch.CreateReadyTask(
+            project,
+            NewTask.Title,
+            NewTask.RequestedOutcome,
+            DateTime.UtcNow);
 
-        project.IncrementContextRevision();
-        dbContext.Tasks.Add(task);
         await dbContext.SaveChangesAsync(cancellationToken);
 
         TempData["StatusMessage"] = $"Created task '{task.Title}'.";

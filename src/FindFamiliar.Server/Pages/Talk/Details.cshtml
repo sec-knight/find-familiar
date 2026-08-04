@@ -1,0 +1,228 @@
+@page "{id:guid}"
+@using FindFamiliar.Server.Domain
+@model FindFamiliar.Server.Pages.Talk.DetailsModel
+@{
+    ViewData["Title"] = "Conversation";
+    var document = Model.Document!;
+    var proposal = document.Proposal;
+}
+
+<section class="dashboard-intro" aria-labelledby="conversation-title">
+    <p class="eyebrow">Conversational intake</p>
+    <h1 id="conversation-title">@proposal.Title</h1>
+    <p class="intro-copy">
+        State:
+        <strong>
+            @(document.Status == ConversationStatus.AwaitingApproval
+                ? "Awaiting your approval"
+                : document.Status.ToString())
+        </strong>
+    </p>
+</section>
+
+@if (Model.IsPending)
+{
+    <p role="note">
+        <strong>Nothing has been created or started yet.</strong>
+        No task, session, or AI call exists for this conversation. Approving is the only action that
+        creates work.
+    </p>
+}
+
+@if (TempData["StatusMessage"] is string statusMessage)
+{
+    <p role="status">@statusMessage</p>
+}
+
+<div asp-validation-summary="ModelOnly" role="alert"></div>
+
+<section aria-labelledby="proposal-title">
+    <div class="section-heading">
+        <div>
+            <p class="eyebrow">Structured proposal</p>
+            <h2 id="proposal-title">What Familiar will create</h2>
+        </div>
+    </div>
+
+    <dl>
+        <dt>Project</dt>
+        <dd>
+            @if (proposal.IsProjectResolved)
+            {
+                <a asp-page="/Projects/Details" asp-route-id="@proposal.ProjectId">@proposal.ProjectName</a>
+                @if (!proposal.ProjectIsActive)
+                {
+                    <strong> — no longer active. Choose an active project.</strong>
+                }
+            }
+            else
+            {
+                <strong>Not selected yet.</strong>
+                <span>Choose the project below before approving.</span>
+            }
+        </dd>
+
+        <dt>Task title</dt>
+        <dd>@proposal.Title</dd>
+
+        <dt>Requested outcome</dt>
+        <dd><pre class="conversation-block">@proposal.RequestedOutcome</pre></dd>
+
+        <dt>Session role</dt>
+        <dd>@proposal.Role (fixed in this version — no later role starts automatically)</dd>
+
+        <dt>Proposal revision</dt>
+        <dd>@proposal.Revision</dd>
+
+        <dt>Observed project context revision</dt>
+        <dd>
+            @(proposal.ObservedContextRevision?.ToString() ?? "none")
+            @if (proposal.CurrentContextRevision is { } current)
+            {
+                <span> (project is now at revision @current)</span>
+            }
+        </dd>
+
+        <dt>Proposal state</dt>
+        <dd>@proposal.Status</dd>
+    </dl>
+
+    @if (Model.IsPending && proposal.IsContextStale)
+    {
+        <p role="alert">
+            <strong>The project's context changed since you reviewed this proposal.</strong>
+            Approval is blocked until you refresh the observed context and review the proposal again.
+        </p>
+
+        <form method="post" asp-page-handler="RefreshContext">
+            <input type="hidden" asp-for="ActionConcurrencyToken" value="@proposal.ConcurrencyToken" />
+            <button type="submit">Refresh project context</button>
+        </form>
+    }
+</section>
+
+@if (Model.IsPending)
+{
+    <section aria-labelledby="revise-title">
+        <div class="section-heading">
+            <div>
+                <p class="eyebrow">Editable</p>
+                <h2 id="revise-title">Revise the proposal</h2>
+            </div>
+        </div>
+
+        <form method="post" asp-page-handler="Revise">
+            <input type="hidden" asp-for="Revision.ConcurrencyToken" value="@proposal.ConcurrencyToken" />
+            <p>
+                <label asp-for="Revision.ProjectId"></label><br />
+                <select asp-for="Revision.ProjectId">
+                    <option value="">— select a project —</option>
+                    @foreach (var candidate in document.SelectableProjects)
+                    {
+                        <option value="@candidate.Id">@candidate.Name</option>
+                    }
+                </select>
+                <span asp-validation-for="Revision.ProjectId"></span>
+            </p>
+            <p>
+                <label asp-for="Revision.Title"></label><br />
+                <input asp-for="Revision.Title" />
+                <span asp-validation-for="Revision.Title"></span>
+            </p>
+            <p>
+                <label asp-for="Revision.RequestedOutcome"></label><br />
+                <textarea asp-for="Revision.RequestedOutcome" rows="6"></textarea>
+                <span asp-validation-for="Revision.RequestedOutcome"></span>
+            </p>
+            <p>
+                Session role: <strong>@AgentSessionRole.Planner</strong> (not editable)
+            </p>
+            <button type="submit">Save revision</button>
+        </form>
+    </section>
+
+    <section aria-labelledby="decision-title">
+        <div class="section-heading">
+            <div>
+                <p class="eyebrow">Your decision</p>
+                <h2 id="decision-title">Approve or reject</h2>
+            </div>
+        </div>
+
+        <p>
+            Approving creates exactly one Ready task and one Started Planner session, and an
+            eligible worker runs it. Rejecting closes this conversation and creates nothing.
+        </p>
+
+        <form method="post" asp-page-handler="Approve">
+            <input type="hidden" asp-for="ActionConcurrencyToken" value="@proposal.ConcurrencyToken" />
+            <button type="submit">Approve and create the Planner session</button>
+        </form>
+
+        <form method="post" asp-page-handler="Reject">
+            <input type="hidden" asp-for="ActionConcurrencyToken" value="@proposal.ConcurrencyToken" />
+            <button type="submit">Reject this proposal</button>
+        </form>
+    </section>
+}
+
+@if (document.DispatchedWork is { } work)
+{
+    <section aria-labelledby="dispatched-title">
+        <div class="section-heading">
+            <div>
+                <p class="eyebrow">Approved work</p>
+                <h2 id="dispatched-title">What this conversation created</h2>
+            </div>
+        </div>
+
+        <dl>
+            <dt>Task</dt>
+            <dd>
+                <a asp-page="/Tasks/Details" asp-route-id="@work.TaskId">@work.TaskTitle</a>
+                <span> — @work.TaskStatus</span>
+            </dd>
+            <dt>Session</dt>
+            <dd>
+                <a asp-page="/Tasks/Details" asp-route-id="@work.TaskId" asp-route-sessionId="@work.SessionId">
+                    @work.SessionRole session
+                </a>
+                <span> — @work.SessionStatus, read project context revision @work.SessionContextRevisionRead</span>
+            </dd>
+            <dt>Claimed by a worker</dt>
+            <dd>@(work.SessionIsClaimed ? "Yes" : "Not yet")</dd>
+        </dl>
+
+        <p>
+            Session and task status above are read from the normal workflow. This conversation
+            records what you approved; it never decides what may run.
+        </p>
+    </section>
+}
+
+@if (document.Status == ConversationStatus.Rejected)
+{
+    <p role="status">
+        <strong>This proposal was rejected.</strong> No task and no session were created, and it
+        cannot be reopened.
+    </p>
+}
+
+<section aria-labelledby="messages-title">
+    <div class="section-heading">
+        <div>
+            <p class="eyebrow">History</p>
+            <h2 id="messages-title">Conversation</h2>
+        </div>
+    </div>
+
+    <ol>
+        @foreach (var message in document.Messages)
+        {
+            <li>
+                <p><strong>@message.Author</strong> · @message.CreatedUtc.ToString("u")</p>
+                <pre class="conversation-block">@message.Content</pre>
+            </li>
+        }
+    </ol>
+</section>

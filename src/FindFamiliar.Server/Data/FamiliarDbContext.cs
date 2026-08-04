@@ -15,6 +15,12 @@ public sealed class FamiliarDbContext(DbContextOptions<FamiliarDbContext> option
 
     public DbSet<Worker> Workers => Set<Worker>();
 
+    public DbSet<Conversation> Conversations => Set<Conversation>();
+
+    public DbSet<ConversationMessage> ConversationMessages => Set<ConversationMessage>();
+
+    public DbSet<WorkProposal> WorkProposals => Set<WorkProposal>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.Entity<FamiliarProject>(entity =>
@@ -85,6 +91,73 @@ public sealed class FamiliarDbContext(DbContextOptions<FamiliarDbContext> option
             entity.Property(worker => worker.DisplayName).HasMaxLength(160).IsRequired();
             entity.Property(worker => worker.Capabilities).HasMaxLength(WorkerCapabilities.MaxLength).IsRequired();
             entity.Property(worker => worker.Enabled).HasDefaultValue(true);
+        });
+
+        modelBuilder.Entity<Conversation>(entity =>
+        {
+            entity.ToTable("Conversations");
+            entity.HasKey(conversation => conversation.Id);
+            entity.Property(conversation => conversation.Status).HasConversion<string>().HasMaxLength(32);
+            entity.HasIndex(conversation => new { conversation.Status, conversation.UpdatedUtc });
+            entity.HasMany(conversation => conversation.Messages)
+                .WithOne(message => message.Conversation)
+                .HasForeignKey(message => message.ConversationId)
+                .OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(conversation => conversation.Proposal)
+                .WithOne(proposal => proposal.Conversation)
+                .HasForeignKey<WorkProposal>(proposal => proposal.ConversationId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            // Restrict, not Cascade: deleting a conversation must never take approved work with
+            // it, and an approved task/session may not be deleted while a conversation records it.
+            entity.HasOne(conversation => conversation.ApprovedTask)
+                .WithMany()
+                .HasForeignKey(conversation => conversation.ApprovedTaskId)
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne(conversation => conversation.ApprovedSession)
+                .WithMany()
+                .HasForeignKey(conversation => conversation.ApprovedSessionId)
+                .OnDelete(DeleteBehavior.Restrict);
+
+            // One workflow object can satisfy at most one approval. Filtered so the many
+            // still-pending conversations, which all hold NULL, do not collide.
+            entity.HasIndex(conversation => conversation.ApprovedTaskId)
+                .IsUnique()
+                .HasFilter("\"ApprovedTaskId\" IS NOT NULL");
+            entity.HasIndex(conversation => conversation.ApprovedSessionId)
+                .IsUnique()
+                .HasFilter("\"ApprovedSessionId\" IS NOT NULL");
+        });
+
+        modelBuilder.Entity<ConversationMessage>(entity =>
+        {
+            entity.ToTable("ConversationMessages");
+            entity.HasKey(message => message.Id);
+            entity.Property(message => message.Author).HasConversion<string>().HasMaxLength(32);
+            entity.Property(message => message.Content)
+                .HasMaxLength(ConversationMessage.MaxContentLength)
+                .IsRequired();
+            // Unique, so two racing appends can never produce an ambiguous display order.
+            entity.HasIndex(message => new { message.ConversationId, message.Sequence }).IsUnique();
+        });
+
+        modelBuilder.Entity<WorkProposal>(entity =>
+        {
+            entity.ToTable("WorkProposals");
+            entity.HasKey(proposal => proposal.Id);
+            // One current proposal per conversation.
+            entity.HasIndex(proposal => proposal.ConversationId).IsUnique();
+            entity.Property(proposal => proposal.Title).HasMaxLength(WorkProposal.MaxTitleLength).IsRequired();
+            entity.Property(proposal => proposal.RequestedOutcome)
+                .HasMaxLength(WorkProposal.MaxRequestedOutcomeLength)
+                .IsRequired();
+            entity.Property(proposal => proposal.Role).HasConversion<string>().HasMaxLength(32);
+            entity.Property(proposal => proposal.Status).HasConversion<string>().HasMaxLength(32);
+            entity.HasIndex(proposal => new { proposal.Status, proposal.ConcurrencyToken });
+            entity.HasOne(proposal => proposal.Project)
+                .WithMany()
+                .HasForeignKey(proposal => proposal.ProjectId)
+                .OnDelete(DeleteBehavior.Restrict);
         });
 
         modelBuilder.Entity<ContextEntry>(entity =>

@@ -31,6 +31,11 @@ builder.Services.AddScoped<ISessionResultCaptureService, SessionResultCaptureSer
 builder.Services.AddScoped<ISessionCancellationService, SessionCancellationService>();
 builder.Services.AddScoped<IWorkerCoordinationService, WorkerCoordinationService>();
 builder.Services.AddScoped<IWorkerOverviewService, WorkerOverviewService>();
+builder.Services.AddScoped<IWorkflowDispatchService, WorkflowDispatchService>();
+builder.Services.AddScoped<IConversationIntakeService, ConversationIntakeService>();
+builder.Services.AddScoped<IConversationDetailsService, ConversationDetailsService>();
+builder.Services.AddScoped<IWorkProposalService, WorkProposalService>();
+builder.Services.AddScoped<IWorkApprovalService, WorkApprovalService>();
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.Configure<RunnerBridgeOptions>(builder.Configuration.GetSection(RunnerBridgeOptions.SectionName));
 

@@ -1,0 +1,91 @@
+@page
+@using FindFamiliar.Server.Domain
+@model FindFamiliar.Server.Pages.Talk.IndexModel
+@{
+    ViewData["Title"] = "Talk to Familiar";
+}
+
+<section class="dashboard-intro" aria-labelledby="talk-title">
+    <p class="eyebrow">Conversational intake</p>
+    <h1 id="talk-title">Talk to Familiar</h1>
+    <p class="intro-copy">
+        Describe a bounded piece of project work in ordinary language. Familiar turns it into a
+        structured proposal you can edit. Nothing is created and nothing runs until you approve it.
+    </p>
+</section>
+
+@if (TempData["StatusMessage"] is string statusMessage)
+{
+    <p role="status">@statusMessage</p>
+}
+
+<section aria-labelledby="new-request-title">
+    <div class="section-heading">
+        <div>
+            <p class="eyebrow">Start here</p>
+            <h2 id="new-request-title">Describe the work</h2>
+        </div>
+    </div>
+
+    <form method="post" asp-page-handler="Start">
+        <p>
+            <label asp-for="NewRequest.Request"></label><br />
+            <textarea asp-for="NewRequest.Request" rows="6" aria-describedby="request-help"></textarea>
+            <span asp-validation-for="NewRequest.Request"></span>
+        </p>
+        <p id="request-help">
+            Name the project if you can. Familiar proposes a Planner session only, and asks you to
+            choose the project when the request is ambiguous.
+        </p>
+        <button type="submit">Propose this work</button>
+    </form>
+</section>
+
+<section aria-labelledby="conversation-list-title">
+    <div class="section-heading">
+        <div>
+            <p class="eyebrow">Intake history</p>
+            <h2 id="conversation-list-title">Your conversations</h2>
+        </div>
+    </div>
+
+    @if (Model.Conversations.Count == 0)
+    {
+        <p>No conversations yet. Describe a piece of work above to see a proposal.</p>
+    }
+    else
+    {
+        <table class="work-queue-table">
+            <caption>Work intake conversations, newest first</caption>
+            <thead>
+                <tr>
+                    <th scope="col">Proposed title</th>
+                    <th scope="col">State</th>
+                    <th scope="col">Created (UTC)</th>
+                    <th scope="col">Updated (UTC)</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var conversation in Model.Conversations)
+                {
+                    <tr>
+                        <td>
+                            <a asp-page="./Details" asp-route-id="@conversation.Id">
+                                @(string.IsNullOrWhiteSpace(conversation.ProposedTitle)
+                                    ? "(untitled proposal)"
+                                    : conversation.ProposedTitle)
+                            </a>
+                        </td>
+                        <td>
+                            @(conversation.Status == ConversationStatus.AwaitingApproval
+                                ? "Awaiting approval"
+                                : conversation.Status.ToString())
+                        </td>
+                        <td>@conversation.CreatedUtc.ToString("u")</td>
+                        <td>@conversation.UpdatedUtc.ToString("u")</td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    }
+</section>
