@@ -162,9 +162,6 @@ public static class FamiliarSummaryComposer
             (_, TaskDisplayReasonCode.NeverStarted) =>
                 "Start a Planner session when you are ready.",
 
-            (_, TaskDisplayReasonCode.WaitingForProviderCapacity) =>
-                "Wait for the provider allowance to reset, or route the continuation to another provider.",
-
             (TaskDisplayState.Failed, _) when latestTerminal is not null =>
                 $"Retry the {latestTerminal.Role} session, or cancel the task.",
 

@@ -94,8 +94,11 @@ public sealed class DemiplaneModel(
         return true;
     }
 
-    /// <summary>Wording for each Sprint 09 outcome. The page never claims more than the service reported.</summary>
-    private static string Describe(SessionHandoffDecisionOutcome outcome)
+    /// <summary>
+    /// Wording for each Sprint 09 outcome. The page never claims more than the service reported.
+    /// Public so the wording itself can be asserted directly, alongside the other display helpers.
+    /// </summary>
+    public static string Describe(SessionHandoffDecisionOutcome outcome)
     {
         var role = outcome.Role?.ToString().ToLowerInvariant() ?? "next";
 
@@ -120,7 +123,7 @@ public sealed class DemiplaneModel(
                 "This view was out of date, so nothing was changed. Review the current proposal and try again.",
 
             SessionHandoffDecisionStatus.SessionAlreadyStarted =>
-                "This task already has a running session, so another cannot begin.",
+                "This task already has a running session, so another cannot begin. Nothing was started.",
 
             SessionHandoffDecisionStatus.TaskClosed =>
                 "This task is complete, so no further work was started.",
@@ -131,7 +134,11 @@ public sealed class DemiplaneModel(
             SessionHandoffDecisionStatus.DatabaseBusy =>
                 "The database was busy and the request was not applied. Nothing was changed — try again.",
 
-            _ => "Another change reached this step first, so nothing was started."
+            // The generic fall-through covers foreign-key violations, disk and I/O errors, and other
+            // EF or SQLite faults where no competing decision exists. Claiming another change won
+            // would send the user looking for an actor who was never there. Race wording above is
+            // reserved for the statuses that establish a real competitor.
+            _ => "This step could not be completed, and nothing was changed."
         };
     }
 

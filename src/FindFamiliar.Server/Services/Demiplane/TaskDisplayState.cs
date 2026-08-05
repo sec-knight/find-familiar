@@ -116,16 +116,17 @@ public enum TaskDisplayReasonCode
     /// <summary>The provider returned output the adapter could not use.</summary>
     ProviderResponseUnusable,
 
-    /// <summary>
-    /// The session stopped because the provider had no capacity left. This is a scheduling
-    /// condition, not an implementation failure, and never maps to <see cref="TaskDisplayState.Failed"/>.
-    /// Not yet reachable from live data — see ADR-0011.
-    /// </summary>
-    WaitingForProviderCapacity,
+    // WaitingForProviderCapacity was removed in the Sprint 10 review. No classifier path could set
+    // it, because the runner records no capacity condition and the adapter cannot distinguish a
+    // usage-limit rejection from any other provider error (see ProviderRequestFailed above). It
+    // existed only as user-facing text asserting exhausted capacity that nothing could substantiate.
+    // Reintroduce it when a provider actually reports capacity, not before.
 
     /// <summary>
     /// More than one Started session exists. Unreachable through the application since ADR-0010's
-    /// index; it indicates a database restored from before that migration.
+    /// index. The cause is deliberately not characterised: the projection reads sessions alone and
+    /// has no evidence distinguishing a pre-index database from a dropped index, an out-of-band
+    /// write, or a defect.
     /// </summary>
     MultipleStartedSessions,
 

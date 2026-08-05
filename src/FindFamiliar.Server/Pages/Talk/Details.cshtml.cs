@@ -148,10 +148,14 @@ public sealed class DetailsModel(
                     "The project's context changed after you reviewed this proposal. Refresh the context and review it again before approving. No work was created.");
                 return await ReturnPageAsync(id, cancellationToken);
 
+            // The generic fall-through. WorkApprovalService reaches it when a database fault rolled
+            // the approval back and the conversation is still Pending — so no competing approval was
+            // established. Foreign-key violations, disk and I/O errors all land here. A genuine lost
+            // race reports AlreadyApproved or AlreadyRejected instead, and keeps its race wording.
             case WorkApprovalStatus.Conflict:
                 ModelState.AddModelError(
                     string.Empty,
-                    "Another request changed this conversation at the same time. Nothing was created. Review the current state and try again.");
+                    "This step could not be completed, and nothing was changed. Review the current state and try again.");
                 return await ReturnPageAsync(id, cancellationToken);
 
             case WorkApprovalStatus.DatabaseBusy:

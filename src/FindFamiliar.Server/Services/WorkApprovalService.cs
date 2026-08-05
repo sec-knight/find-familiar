@@ -174,7 +174,35 @@ public sealed class WorkApprovalService(
         return await DispatchAsync(request, proposal, projectId, cancellationToken);
     }
 
+    /// <summary>
+    /// Classifies anything that escapes <see cref="DispatchCoreAsync"/> rather than letting it reach
+    /// the user as an unhandled exception.
+    ///
+    /// Acquiring the transaction is itself a write lock, and so the most likely place to meet
+    /// SQLITE_BUSY on a contended database; it sits outside the core's own try block, as does the
+    /// rollback inside that block's catch. Both mean nothing was committed.
+    /// </summary>
     private async Task<WorkApprovalOutcome> DispatchAsync(
+        WorkApprovalRequest request,
+        WorkProposal proposal,
+        Guid projectId,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await DispatchCoreAsync(request, proposal, projectId, cancellationToken);
+        }
+        catch (Exception exception) when (exception is DbUpdateException or SqliteException)
+        {
+            dbContext.ChangeTracker.Clear();
+
+            return SessionHandoffApprovalService.IsDatabaseBusy(exception)
+                ? new WorkApprovalOutcome(WorkApprovalStatus.DatabaseBusy)
+                : WorkApprovalOutcome.Conflict;
+        }
+    }
+
+    private async Task<WorkApprovalOutcome> DispatchCoreAsync(
         WorkApprovalRequest request,
         WorkProposal proposal,
         Guid projectId,

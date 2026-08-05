@@ -126,7 +126,7 @@ public sealed class DetailsModel(
             return NotFound();
         }
 
-        TempData["StatusMessage"] = DescribeDecision(outcome, approving: true);
+        TempData["StatusMessage"] = DescribeDecision(outcome);
 
         return outcome.Status == SessionHandoffDecisionStatus.Approved
             ? RedirectToPage(new { id, sessionId = outcome.SessionId })
@@ -144,11 +144,14 @@ public sealed class DetailsModel(
             return NotFound();
         }
 
-        TempData["StatusMessage"] = DescribeDecision(outcome, approving: false);
+        TempData["StatusMessage"] = DescribeDecision(outcome);
         return RedirectToPage(new { id });
     }
 
-    private static string DescribeDecision(SessionHandoffDecisionOutcome outcome, bool approving)
+    /// <summary>
+    /// Wording for each handoff decision outcome. Public so the wording itself can be asserted.
+    /// </summary>
+    public static string DescribeDecision(SessionHandoffDecisionOutcome outcome)
     {
         var role = outcome.Role?.ToString().ToLowerInvariant() ?? "next";
 
@@ -173,7 +176,7 @@ public sealed class DetailsModel(
                 "This page was out of date, so nothing was changed. Review the current proposal and try again.",
 
             SessionHandoffDecisionStatus.SessionAlreadyStarted =>
-                "This task already has a Started session, so another cannot begin. Capture or cancel it first.",
+                "This task already has a Started session, so another cannot begin. Nothing was started — capture or cancel the running session first.",
 
             SessionHandoffDecisionStatus.TaskClosed =>
                 "This task is Completed, so no further work was started.",
@@ -184,9 +187,12 @@ public sealed class DetailsModel(
             SessionHandoffDecisionStatus.DatabaseBusy =>
                 "The database was busy and this decision was not applied. Nothing changed — try again.",
 
-            _ => approving
-                ? "Another change reached this step first, so nothing was started."
-                : "Another change reached this step first, so nothing was declined."
+            // The generic fall-through covers foreign-key violations, disk and I/O errors, and other
+            // EF or SQLite faults where no competing decision exists. Race wording is reserved for
+            // the statuses above, which establish a real competitor. Approve and decline share this
+            // wording: neither changed anything, and naming which one was attempted would suggest we
+            // know more about the failure than we do.
+            _ => "This step could not be completed, and nothing was changed."
         };
     }
 

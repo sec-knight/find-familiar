@@ -220,14 +220,20 @@ public sealed class DemiplaneProjectionService(
             IReadOnlySet<AgentSessionRole> capableRoles,
             DateTimeOffset nowUtc)
     {
-        // Corruption first: unreachable through the application since ADR-0010's unique index, but a
-        // database restored from before it can still hold this, and it must not be shown as ordinary.
+        // Corruption first: unreachable through the application since ADR-0010's unique index, and it
+        // must not be shown as ordinary.
+        //
+        // The message states only what was observed. We have no persisted evidence of *why* this
+        // happened: the projection reads AgentSessions alone, never the migration history or the
+        // schema, so it cannot tell a pre-index database from a dropped index, an out-of-band write,
+        // a restore over a live file, or a defect. Naming any one of those would be a guess presented
+        // as a fact, on the one message that admits the page is confused.
         if (started.Count > 1)
         {
             return (
                 TaskDisplayState.NeedsAttention,
                 TaskDisplayReasonCode.MultipleStartedSessions,
-                $"{started.Count} sessions are Started at once, which should be impossible. This database predates the uniqueness index.",
+                "Multiple sessions are recorded as started for this task. This state should not be reachable. Inspect the task and database directly.",
                 true,
                 null);
         }
@@ -355,19 +361,14 @@ public sealed class DemiplaneProjectionService(
                 reason);
         }
 
-        // The latest session completed and proposed nothing.
-        if (latestTerminal.Role == AgentSessionRole.Reviewer)
-        {
-            return (
-                TaskDisplayState.NeedsAttention,
-                TaskDisplayReasonCode.AwaitingHumanDecisionAfterReview,
-                "A Reviewer finished. Completing this task is your decision.",
-                true,
-                null);
-        }
-
         // The latest session completed and nothing is pending. What that means depends entirely on
         // whether a decision was actually recorded — absence of a proposal is not evidence of one.
+        //
+        // A recorded decision is checked before the Reviewer's generic wording. A Reviewer that
+        // proposed a step which a human then declined is not the same situation as a Reviewer that
+        // proposed nothing, and collapsing the two would discard a real human decision this page
+        // exists to surface. The decision is still scoped to latestTerminal's SourceSessionId, so
+        // nothing is inferred from absence and no earlier session's decision can reach here.
         return latestDecision?.Status switch
         {
             SessionHandoffStatus.Declined => (
@@ -384,6 +385,16 @@ public sealed class DemiplaneProjectionService(
                 TaskDisplayState.NeedsAttention,
                 TaskDisplayReasonCode.ProposedStepAlreadyDecided,
                 $"The {latestTerminal.Role} session finished and its proposed next step was already decided. Nothing is currently proposed.",
+                true,
+                null),
+
+            // No applicable recorded decision. A finished Reviewer is the one role whose completion
+            // is itself the thing a human acts on, so it keeps its own wording; every other role
+            // gets the observable statement and nothing more.
+            _ when latestTerminal.Role == AgentSessionRole.Reviewer => (
+                TaskDisplayState.NeedsAttention,
+                TaskDisplayReasonCode.AwaitingHumanDecisionAfterReview,
+                "A Reviewer finished. Completing this task is your decision.",
                 true,
                 null),
 
@@ -412,9 +423,6 @@ public sealed class DemiplaneProjectionService(
 
         TaskDisplayReasonCode.ProviderResponseUnusable =>
             $"The provider returned a response the {role} session could not use.",
-
-        TaskDisplayReasonCode.WaitingForProviderCapacity =>
-            "The provider had no capacity left. This is a scheduling condition, not a failed implementation.",
 
         _ => $"The {role} session ended with a failure this version does not recognise."
     };

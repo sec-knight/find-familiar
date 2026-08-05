@@ -155,15 +155,22 @@ real data.
 
 So every quantitative field is nullable, and the strip says "Unknown" with the reason attached.
 
-### Provider exhaustion is never an implementation failure
+### Provider exhaustion is never claimed
 
-`WaitingForProviderCapacity` exists as a reason code and can never map to Failed. A capacity limit is a
-scheduling condition: the implementation was fine, the allowance ran out.
+A capacity limit would be a scheduling condition rather than an implementation failure — the
+implementation was fine, the allowance ran out — and the original design modelled it as a
+`WaitingForProviderCapacity` reason code that could never map to Failed.
 
-**It is not currently reachable from live data, and that is stated rather than hidden.** A quota
-rejection today arrives as a non-zero adapter exit, indistinguishable from any other provider error,
-and surfaces as `ProviderRequestFailed` — whose own text says the adapter cannot yet tell exhaustion
-apart. Modelling the state without pretending to detect it keeps the shape ready and the claim honest.
+**That code was removed during the independent review.** Nothing could ever set it: a quota rejection
+arrives as a non-zero adapter exit, indistinguishable from any other provider error, and surfaces as
+`ProviderRequestFailed` — whose own text says the adapter cannot yet tell exhaustion apart. What the
+code actually shipped was user-facing text ("The provider had no capacity left") that no persisted
+evidence could support, waiting for someone to wire a path to it.
+
+Modelling a state we cannot detect is not the same as keeping a shape ready; it is a claim with a
+delayed fuse. The honest position is that this application cannot currently observe provider capacity
+at all — which is exactly what the readiness strip says. Reintroduce the state when a provider
+actually reports capacity, not before.
 
 ### Refresh is bounded and conditional
 
@@ -271,6 +278,40 @@ Rejected for this sprint. A conditional 30-second meta refresh is the smallest t
 running project current, and it needs no client-side state, no reconnection logic and no new
 dependency. Real-time updates would need a latency requirement to justify them, which ADR-0008 also
 noted when it declined push.
+
+## Independent review follow-ups
+
+### Legacy tasks were measured rather than assumed
+
+`NoNextStepProposed` flags a task as needing attention, and every task completed before Sprint 09
+existed has no `SessionHandoff` row — so the review asked whether "Waiting for you" would be swamped
+on the real database. The behaviour was not changed on speculation; it was rehearsed on a **copy** of
+the production database (production itself was neither migrated nor written to).
+
+Before the migration: 2 completed non-Reviewer tasks with no handoff and no Started session. After
+applying the migration to the copy and rendering it through the real projection: **2 of 10 tasks**
+under "Waiting for you" across two projects, both `NoNextStepProposed`; the remaining 8 read as
+settled. No duplicate Started sessions existed, so the normalization step cancelled nothing.
+
+The predicted and rendered counts matched exactly, and both entries name a real decision a human owes
+the task. The aggregate is understandable rather than noisy, so `NoNextStepProposed` and its
+attention flag stay as they are. Worth re-checking if a project ever accumulates a large backlog of
+pre-Sprint-09 completed tasks.
+
+### Open: an imprecise loser outcome under approval contention
+
+Found while adding real-lock coverage, **not fixed here**, because it is Sprint 08 contention
+semantics and this sprint deliberately did not broaden into a race rewrite.
+
+`WorkApprovalService.ApproveAsync`'s preflight reads the proposal and the project in two separate
+statements. A contender that reads the proposal while it is still Pending, then reads the project
+after the winner's commit has advanced `ContextRevision`, receives `StaleContext` — when what
+actually happened is that someone else approved. Nothing is created either way and the loser carries
+no task or session links, so no guarantee is broken, but the message points at a refresh instead of
+at the approval that won.
+
+The fix belongs in a later sprint: on a stale-context preflight, re-read the proposal and return
+`AlreadyApproved` when it has become terminal, before reporting `StaleContext`.
 
 ## Non-Goals
 

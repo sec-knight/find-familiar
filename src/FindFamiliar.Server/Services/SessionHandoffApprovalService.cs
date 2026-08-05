@@ -204,7 +204,41 @@ public sealed class SessionHandoffApprovalService(
             Role: handoff.ProposedRole);
     }
 
+    /// <summary>
+    /// Classifies anything that escapes <see cref="DispatchCoreAsync"/> rather than letting it reach
+    /// the user as an unhandled exception.
+    ///
+    /// Two failures live outside the core's own try block and were previously unhandled: acquiring
+    /// the transaction — which is itself a write lock, and so the single most likely place to meet
+    /// SQLITE_BUSY on a contended database — and the rollback inside the core's catch. Both mean
+    /// nothing was committed, which is exactly what the busy and conflict outcomes already say.
+    /// </summary>
     private async Task<SessionHandoffDecisionOutcome> DispatchAsync(
+        SessionHandoffDecisionRequest request,
+        SessionHandoff handoff,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await DispatchCoreAsync(request, handoff, cancellationToken);
+        }
+        catch (Exception exception) when (exception is DbUpdateException or SqliteException)
+        {
+            dbContext.ChangeTracker.Clear();
+
+            return IsDatabaseBusy(exception)
+                ? new SessionHandoffDecisionOutcome(
+                    SessionHandoffDecisionStatus.DatabaseBusy,
+                    TaskId: handoff.TaskId,
+                    Role: handoff.ProposedRole)
+                : new SessionHandoffDecisionOutcome(
+                    SessionHandoffDecisionStatus.Conflict,
+                    TaskId: handoff.TaskId,
+                    Role: handoff.ProposedRole);
+        }
+    }
+
+    private async Task<SessionHandoffDecisionOutcome> DispatchCoreAsync(
         SessionHandoffDecisionRequest request,
         SessionHandoff handoff,
         CancellationToken cancellationToken)

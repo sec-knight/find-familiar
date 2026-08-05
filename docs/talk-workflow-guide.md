@@ -179,12 +179,15 @@ nothing was overwritten.
 
 **What to do:** reload the page and review the current proposal.
 
-### "Another request changed this conversation at the same time."
+### "This step could not be completed, and nothing was changed."
 
-Two actions raced. Nothing was created by the losing one.
+The approval did not go through and nothing was created. This is the generic outcome: it covers a
+database fault as well as a race, and the application deliberately does not guess which, because it
+cannot tell them apart. Earlier versions said "another request changed this conversation at the same
+time", which invented a second actor whenever the real cause was a disk or constraint error.
 
-**What to do:** reload and check the current state — the other action may have already done what
-you wanted.
+**What to do:** reload and check the current state — if another action did reach it first, the page
+will now say so specifically ("already approved", "already rejected"). Otherwise, try again.
 
 ### "This conversation was already approved."
 

@@ -356,6 +356,111 @@ public sealed class SessionHandoffApprovalServiceTests
     }
 
     /// <summary>
+    /// Approval must classify a locked database exactly as decline does.
+    ///
+    /// Decline had the only real-lock test; approval's busy handling was covered solely by the
+    /// predicate unit tests, so the wiring between the predicate and the catch block was unverified.
+    /// This holds a genuine exclusive lock on a second connection while ApproveAsync runs.
+    /// </summary>
+    [Fact]
+    public async Task Approving_against_a_locked_database_reports_busy_rather_than_a_race()
+    {
+        using var database = new TemporarySqliteDatabase();
+        await using var seedContext = await database.CreateContextAsync();
+
+        var (_, task, handoff) = await SeedPendingHandoffAsync(seedContext);
+
+        await using var impatient = await database.CreateImpatientContextAsync();
+
+        await using var blocker = new SqliteConnection($"{database.ConnectionString};Pooling=False");
+        await blocker.OpenAsync();
+        await using (var exclusive = blocker.CreateCommand())
+        {
+            exclusive.CommandText = "BEGIN EXCLUSIVE;";
+            await exclusive.ExecuteNonQueryAsync();
+        }
+
+        var outcome = await new SessionHandoffApprovalService(
+                impatient,
+                new WorkflowDispatchService(impatient),
+                TimeProvider.System)
+            .ApproveAsync(new SessionHandoffDecisionRequest(handoff.Id, handoff.ConcurrencyToken));
+
+        Assert.Equal(SessionHandoffDecisionStatus.DatabaseBusy, outcome.Status);
+
+        // Explicitly not any race outcome: nobody won, so nothing may claim a winner.
+        Assert.NotEqual(SessionHandoffDecisionStatus.Conflict, outcome.Status);
+        Assert.NotEqual(SessionHandoffDecisionStatus.SessionAlreadyStarted, outcome.Status);
+        Assert.NotEqual(SessionHandoffDecisionStatus.AlreadyApproved, outcome.Status);
+        Assert.Null(outcome.SessionId);
+
+        await using (var release = blocker.CreateCommand())
+        {
+            release.CommandText = "ROLLBACK;";
+            await release.ExecuteNonQueryAsync();
+        }
+
+        // Nothing was persisted: the handoff is untouched and no session exists, so the button the
+        // user already has in front of them still works.
+        var stored = await ReadHandoffAsync(seedContext, handoff.Id);
+        Assert.Equal(SessionHandoffStatus.Pending, stored.Status);
+        Assert.Equal(handoff.ConcurrencyToken, stored.ConcurrencyToken);
+        Assert.Null(stored.DecidedUtc);
+        Assert.Null(stored.CreatedSessionId);
+        Assert.Equal(0, await seedContext.AgentSessions.CountAsync(s => s.TaskId == task.Id && s.Role == AgentSessionRole.Implementer));
+    }
+
+    /// <summary>
+    /// A non-busy database failure during approval must fall through to the generic conflict rather
+    /// than being dressed up as a lock or a uniqueness race.
+    ///
+    /// The failure is real, not mocked: a BEFORE INSERT trigger aborts the session insert, which
+    /// surfaces as SQLITE_CONSTRAINT_TRIGGER — a constraint violation that is emphatically not the
+    /// Started-session uniqueness index.
+    /// </summary>
+    [Fact]
+    public async Task A_non_busy_failure_during_approval_stays_a_generic_conflict()
+    {
+        using var database = new TemporarySqliteDatabase();
+        await using var seedContext = await database.CreateContextAsync();
+
+        var (_, task, handoff) = await SeedPendingHandoffAsync(seedContext);
+
+        await seedContext.Database.ExecuteSqlRawAsync(
+            """
+            CREATE TRIGGER "ReviewProbeAbortsSessionInsert"
+            BEFORE INSERT ON "AgentSessions"
+            BEGIN
+                SELECT RAISE(ABORT, 'review probe: not a uniqueness race');
+            END;
+            """);
+
+        try
+        {
+            var outcome = await NewService(seedContext)
+                .ApproveAsync(new SessionHandoffDecisionRequest(handoff.Id, handoff.ConcurrencyToken));
+
+            Assert.Equal(SessionHandoffDecisionStatus.Conflict, outcome.Status);
+
+            // Not busy — retrying will fail the same way — and not a uniqueness race either.
+            Assert.NotEqual(SessionHandoffDecisionStatus.DatabaseBusy, outcome.Status);
+            Assert.NotEqual(SessionHandoffDecisionStatus.SessionAlreadyStarted, outcome.Status);
+        }
+        finally
+        {
+            await seedContext.Database.ExecuteSqlRawAsync(
+                "DROP TRIGGER IF EXISTS \"ReviewProbeAbortsSessionInsert\";");
+        }
+
+        // The transaction rolled back, so the fence did not stick and the proposed session — the one
+        // approval would have created — does not exist. The seeded source session is untouched.
+        var stored = await ReadHandoffAsync(seedContext, handoff.Id);
+        Assert.Equal(SessionHandoffStatus.Pending, stored.Status);
+        Assert.Null(stored.CreatedSessionId);
+        Assert.Equal(0, await seedContext.AgentSessions.CountAsync(s => s.TaskId == task.Id && s.Role == AgentSessionRole.Implementer));
+    }
+
+    /// <summary>
     /// A zero-row decline is a genuine race and must keep saying so — the busy handling must not
     /// swallow the case it was never meant to cover.
     /// </summary>

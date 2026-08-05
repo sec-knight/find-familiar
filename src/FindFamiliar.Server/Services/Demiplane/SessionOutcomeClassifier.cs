@@ -54,14 +54,9 @@ public static class SessionOutcomeClassifier
         };
     }
 
-    /// <summary>
-    /// True when the cancellation was recorded by the runner rather than chosen by a human, which is
-    /// the difference between <see cref="TaskDisplayState.Failed"/> and
-    /// <see cref="TaskDisplayState.Cancelled"/>.
-    /// </summary>
-    public static bool WasMachineRecorded(string? reason) =>
-        !string.IsNullOrWhiteSpace(reason)
-        && reason.TrimStart().StartsWith(RunnerPrefix, StringComparison.Ordinal);
+    // WasMachineRecorded was removed in the Sprint 10 review: nothing called it. The machine-recorded
+    // versus human-cancelled distinction it described is already carried by ClassifyCancellation
+    // returning null, which is the single place that decision is made.
 
     /// <summary>
     /// The durable cancellation reason for a session, or null when none was recorded.

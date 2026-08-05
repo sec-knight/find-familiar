@@ -210,6 +210,136 @@ public sealed class DemiplaneProjectionServiceTests
         Assert.Equal(TaskDisplayState.NeedsAttention, projected.DisplayState);
         Assert.Equal(TaskDisplayReasonCode.AwaitingHumanDecisionAfterReview, projected.ReasonCode);
         Assert.NotEqual(TaskStatus.Completed, projected.TaskStatus);
+
+        // Nothing was declined, so nothing may say so.
+        Assert.DoesNotContain("declin", projected.ReasonText, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// A Reviewer that proposed a step which a human declined is not the same as a Reviewer that
+    /// proposed nothing, and the generic "Completing this task is your decision" wording must not
+    /// swallow the decline.
+    ///
+    /// Sprint 10's review found the Reviewer branch returning before the recorded-decision switch was
+    /// consulted, so a real persisted decline on a Reviewer session was invisible on the page.
+    /// </summary>
+    [Fact]
+    public async Task A_declined_proposal_from_a_reviewer_is_reported_as_declined()
+    {
+        using var database = new TemporarySqliteDatabase();
+        await using var dbContext = await database.CreateContextAsync();
+
+        var project = await SeedProjectAsync(dbContext);
+        var task = await SeedTaskAsync(dbContext, project, "Reviewed then declined");
+
+        var reviewer = NewSession(task.Id, AgentSessionRole.Reviewer, AgentSessionStatus.Completed);
+        dbContext.Add(reviewer);
+
+        var handoff = NewHandoff(task.Id, reviewer.Id, AgentSessionRole.Implementer, SessionHandoffKind.NextRole);
+        handoff.Status = SessionHandoffStatus.Declined;
+        handoff.DecidedUtc = DateTime.UtcNow.AddMinutes(-1);
+        dbContext.Add(handoff);
+        await dbContext.SaveChangesAsync();
+
+        var projected = Assert.Single((await ProjectAsync(dbContext, project.Id))!.Tasks);
+
+        Assert.Equal(TaskDisplayState.NeedsAttention, projected.DisplayState);
+        Assert.Equal(TaskDisplayReasonCode.ProposedStepDeclined, projected.ReasonCode);
+        Assert.True(projected.NeedsHumanAttention);
+        Assert.Contains("declined", projected.ReasonText, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Implementer", projected.ReasonText, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The decline above is reported because a Declined row exists, not because a Reviewer finished.
+    /// An Approved decision on the same Reviewer session must not be described as a decline.
+    /// </summary>
+    [Fact]
+    public async Task An_approved_proposal_from_a_reviewer_is_not_described_as_declined()
+    {
+        using var database = new TemporarySqliteDatabase();
+        await using var dbContext = await database.CreateContextAsync();
+
+        var project = await SeedProjectAsync(dbContext);
+        var task = await SeedTaskAsync(dbContext, project, "Reviewed then approved");
+
+        var reviewer = NewSession(task.Id, AgentSessionRole.Reviewer, AgentSessionStatus.Completed);
+        dbContext.Add(reviewer);
+
+        var handoff = NewHandoff(task.Id, reviewer.Id, AgentSessionRole.Implementer, SessionHandoffKind.NextRole);
+        handoff.Status = SessionHandoffStatus.Approved;
+        handoff.DecidedUtc = DateTime.UtcNow.AddMinutes(-1);
+        dbContext.Add(handoff);
+        await dbContext.SaveChangesAsync();
+
+        var projected = Assert.Single((await ProjectAsync(dbContext, project.Id))!.Tasks);
+
+        Assert.Equal(TaskDisplayReasonCode.ProposedStepAlreadyDecided, projected.ReasonCode);
+        Assert.NotEqual(TaskDisplayReasonCode.ProposedStepDeclined, projected.ReasonCode);
+        Assert.DoesNotContain("declin", projected.ReasonText, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// A decision recorded against an earlier session must never be attributed to a later Reviewer.
+    /// Decisions stay scoped to SourceSessionId, so the Reviewer here has no applicable decision and
+    /// falls back to its own generic wording.
+    /// </summary>
+    [Fact]
+    public async Task A_decline_on_an_earlier_session_is_not_attributed_to_a_later_reviewer()
+    {
+        using var database = new TemporarySqliteDatabase();
+        await using var dbContext = await database.CreateContextAsync();
+
+        var project = await SeedProjectAsync(dbContext);
+        var task = await SeedTaskAsync(dbContext, project, "Declined early, reviewed later");
+
+        var planner = NewSession(task.Id, AgentSessionRole.Planner, AgentSessionStatus.Completed);
+        planner.StartedUtc = DateTime.UtcNow.AddHours(-3);
+        planner.CompletedUtc = DateTime.UtcNow.AddHours(-2);
+        dbContext.Add(planner);
+
+        var reviewer = NewSession(task.Id, AgentSessionRole.Reviewer, AgentSessionStatus.Completed);
+        reviewer.StartedUtc = DateTime.UtcNow.AddHours(-1);
+        reviewer.CompletedUtc = DateTime.UtcNow.AddMinutes(-10);
+        dbContext.Add(reviewer);
+
+        // The decline belongs to the Planner, not the Reviewer that finished afterwards.
+        var handoff = NewHandoff(task.Id, planner.Id, AgentSessionRole.Implementer, SessionHandoffKind.NextRole);
+        handoff.Status = SessionHandoffStatus.Declined;
+        handoff.DecidedUtc = DateTime.UtcNow.AddHours(-2);
+        dbContext.Add(handoff);
+        await dbContext.SaveChangesAsync();
+
+        var projected = Assert.Single((await ProjectAsync(dbContext, project.Id))!.Tasks);
+
+        Assert.Equal(TaskDisplayReasonCode.AwaitingHumanDecisionAfterReview, projected.ReasonCode);
+        Assert.DoesNotContain("declin", projected.ReasonText, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// A Reviewer with a still-pending proposal is a decision waiting on a human, and outranks the
+    /// Reviewer's own completion wording.
+    /// </summary>
+    [Fact]
+    public async Task A_pending_proposal_from_a_reviewer_still_asks_for_approval()
+    {
+        using var database = new TemporarySqliteDatabase();
+        await using var dbContext = await database.CreateContextAsync();
+
+        var project = await SeedProjectAsync(dbContext);
+        var task = await SeedTaskAsync(dbContext, project, "Reviewed, awaiting approval");
+
+        var reviewer = NewSession(task.Id, AgentSessionRole.Reviewer, AgentSessionStatus.Completed);
+        dbContext.Add(reviewer);
+        dbContext.Add(NewHandoff(task.Id, reviewer.Id, AgentSessionRole.Implementer, SessionHandoffKind.NextRole));
+        await dbContext.SaveChangesAsync();
+
+        var projected = Assert.Single((await ProjectAsync(dbContext, project.Id))!.Tasks);
+
+        Assert.Equal(TaskDisplayState.NeedsAttention, projected.DisplayState);
+        Assert.Equal(TaskDisplayReasonCode.AwaitingHumanApproval, projected.ReasonCode);
+        Assert.True(projected.NeedsHumanAttention);
+        Assert.NotNull(projected.PendingHandoffId);
     }
 
     [Theory]
@@ -319,23 +449,61 @@ public sealed class DemiplaneProjectionServiceTests
     }
 
     /// <summary>
-    /// Provider exhaustion is a scheduling condition. It must never be reachable as Failed, because
-    /// that would send a human to debug an implementation that was fine.
+    /// No failure the projection can render may claim the provider ran out of capacity.
+    ///
+    /// The runner records no capacity condition, and the adapter cannot tell a usage-limit rejection
+    /// apart from any other non-zero exit, so exhaustion is not a fact this application possesses.
+    /// Sprint 10's review removed the WaitingForProviderCapacity code that carried that claim; this
+    /// test guards the property the code was standing in for, and does so on the text a human
+    /// actually reads rather than on an enum member that can simply be deleted again.
     /// </summary>
-    [Fact]
-    public void Provider_capacity_exhaustion_is_never_an_implementation_failure()
+    [Theory]
+    [InlineData("Runner cancelled: adapter-launch-failed.")]
+    [InlineData("Runner cancelled: adapter-timeout.")]
+    [InlineData("Runner cancelled: adapter-non-zero-exit.")]
+    [InlineData("Runner cancelled: adapter-output-malformed.")]
+    [InlineData("Runner cancelled: adapter-output-oversized.")]
+    [InlineData("Runner cancelled: adapter-output-invalid.")]
+    [InlineData("Runner cancelled: something-new.")]
+    public async Task No_rendered_failure_claims_the_provider_ran_out_of_capacity(string reason)
     {
-        // The classifier is the only route from a cancellation to a failure category, and it can
-        // never produce the capacity code — capacity is not something the runner records today.
-        var categories = new[]
-        {
-            "Runner cancelled: adapter-launch-failed.",
-            "Runner cancelled: adapter-timeout.",
-            "Runner cancelled: adapter-non-zero-exit.",
-            "Runner cancelled: adapter-output-malformed."
-        }.Select(SessionOutcomeClassifier.ClassifyCancellation).ToList();
+        using var database = new TemporarySqliteDatabase();
+        await using var dbContext = await database.CreateContextAsync();
 
-        Assert.DoesNotContain(TaskDisplayReasonCode.WaitingForProviderCapacity, categories);
+        var project = await SeedProjectAsync(dbContext);
+        var task = await SeedTaskAsync(dbContext, project, $"Capacity claim {Guid.NewGuid():N}");
+
+        var session = NewSession(task.Id, AgentSessionRole.Implementer, AgentSessionStatus.Cancelled);
+        dbContext.Add(session);
+        dbContext.Add(NewCancellationEntry(project.Id, task.Id, session.Id, reason));
+        await dbContext.SaveChangesAsync();
+
+        var projected = Assert.Single((await ProjectAsync(dbContext, project.Id))!.Tasks);
+
+        var rendered = string.Join(
+            " ",
+            projected.ReasonText,
+            projected.Summary.WhatHappened,
+            projected.Summary.CurrentState,
+            projected.Summary.WhyWaiting,
+            projected.Summary.NeedsAttention,
+            projected.Summary.RecommendedNextAction);
+
+        // Affirmative claims only. ProviderRequestFailed deliberately says a usage limit "would also
+        // appear here" and that the adapter "cannot yet tell exhaustion apart from other provider
+        // errors" — that is the honest disclaimer, not a capacity claim, and it must keep saying it.
+        foreach (var claim in new[]
+        {
+            "no capacity",
+            "capacity left",
+            "out of capacity",
+            "ran out",
+            "allowance",
+            "quota"
+        })
+        {
+            Assert.DoesNotContain(claim, rendered, StringComparison.OrdinalIgnoreCase);
+        }
     }
 
     /// <summary>
@@ -516,7 +684,7 @@ public sealed class DemiplaneProjectionServiceTests
 
     /// <summary>
     /// More than one Started session is unreachable through the application since ADR-0010's index,
-    /// but a restored older database can still hold it and it must be surfaced as wrong.
+    /// and it must be surfaced as wrong.
     /// </summary>
     [Fact]
     public async Task Multiple_started_sessions_are_surfaced_as_needing_attention()
@@ -524,7 +692,9 @@ public sealed class DemiplaneProjectionServiceTests
         using var database = new TemporarySqliteDatabase();
         await using var dbContext = await database.CreateContextAsync();
 
-        // Reproduces a database restored from before the uniqueness index.
+        // Dropping the index is how the test produces the state; it is not a claim about how a real
+        // database would reach it. The projection cannot tell the difference, which is the point of
+        // No_cause_is_asserted_for_multiple_started_sessions below.
         await dbContext.Database.ExecuteSqlRawAsync(
             "DROP INDEX IF EXISTS \"IX_AgentSessions_TaskId_Started\";");
 
@@ -541,6 +711,72 @@ public sealed class DemiplaneProjectionServiceTests
         Assert.Equal(TaskDisplayState.NeedsAttention, projected.DisplayState);
         Assert.Equal(TaskDisplayReasonCode.MultipleStartedSessions, projected.ReasonCode);
         Assert.True(projected.NeedsHumanAttention);
+    }
+
+    /// <summary>
+    /// The multiple-Started explanation must report what was observed and stop there.
+    ///
+    /// It previously read "This database predates the uniqueness index." The projection has no
+    /// evidence for that: it reads AgentSessions alone, never the migration history or the schema.
+    /// The Sprint 09 migration also normalises duplicates before creating the index, so a database
+    /// that genuinely predated it would have been repaired at startup — making the asserted cause
+    /// the least likely one. Any replacement guess (a dropped index, a restore, direct writes,
+    /// corruption) would be the same mistake wearing different words.
+    /// </summary>
+    [Fact]
+    public async Task No_cause_is_asserted_for_multiple_started_sessions()
+    {
+        using var database = new TemporarySqliteDatabase();
+        await using var dbContext = await database.CreateContextAsync();
+
+        await dbContext.Database.ExecuteSqlRawAsync(
+            "DROP INDEX IF EXISTS \"IX_AgentSessions_TaskId_Started\";");
+
+        var project = await SeedProjectAsync(dbContext);
+        var task = await SeedTaskAsync(dbContext, project, "Unexplained work");
+
+        dbContext.AddRange(
+            NewSession(task.Id, AgentSessionRole.Planner, AgentSessionStatus.Started),
+            NewSession(task.Id, AgentSessionRole.Implementer, AgentSessionStatus.Started));
+        await dbContext.SaveChangesAsync();
+
+        var projected = Assert.Single((await ProjectAsync(dbContext, project.Id))!.Tasks);
+
+        var rendered = string.Join(
+            " ",
+            projected.ReasonText,
+            projected.Summary.WhatHappened,
+            projected.Summary.CurrentState,
+            projected.Summary.WhyWaiting,
+            projected.Summary.NeedsAttention,
+            projected.Summary.RecommendedNextAction);
+
+        // It reports the observation.
+        Assert.Contains("Multiple sessions are recorded as started", projected.ReasonText, StringComparison.Ordinal);
+
+        // It says the state should not be reachable.
+        Assert.Contains("should not be reachable", projected.ReasonText, StringComparison.Ordinal);
+
+        // And it names no cause — neither the old claim nor any substitute for it.
+        foreach (var inferredCause in new[]
+        {
+            "predates",
+            "migration",
+            "migrated",
+            "index",
+            "restore",
+            "restored",
+            "backup",
+            "corrupt",
+            "direct database",
+            "manually",
+            "out-of-band",
+            "older version",
+            "downgrade"
+        })
+        {
+            Assert.DoesNotContain(inferredCause, rendered, StringComparison.OrdinalIgnoreCase);
+        }
     }
 
     /// <summary>Every state must give a human something to read. A bare enum is not an explanation.</summary>
