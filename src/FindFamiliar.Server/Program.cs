@@ -4,6 +4,7 @@ using FindFamiliar.Server.Data;
 using FindFamiliar.Server.Domain;
 using FindFamiliar.Server.Services;
 using FindFamiliar.Server.Services.Demiplane;
+using FindFamiliar.Server.Services.Familiar;
 using FindFamiliar.Server.Services.Providers;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.EntityFrameworkCore;
@@ -41,6 +42,10 @@ builder.Services.AddScoped<IWorkApprovalService, WorkApprovalService>();
 builder.Services.AddScoped<ISessionHandoffService, SessionHandoffService>();
 builder.Services.AddScoped<ISessionHandoffApprovalService, SessionHandoffApprovalService>();
 builder.Services.AddScoped<IDemiplaneProjectionService, DemiplaneProjectionService>();
+
+// Deterministic project state for the Familiar. No reasoning provider is registered: the snapshot
+// and its summary are the part of the Familiar that must work with no credentials at all.
+builder.Services.AddScoped<IProjectSnapshotService, ProjectSnapshotService>();
 builder.Services.AddScoped<IProviderCapacityService, ProviderCapacityService>();
 
 // The only provider this application invokes is Claude, through the compiled adapter, and it exposes
