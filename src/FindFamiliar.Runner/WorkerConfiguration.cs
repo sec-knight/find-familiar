@@ -140,13 +140,19 @@ public sealed record WorkerConfiguration(
                 return null;
             }
 
-            // Sprint 07 automates read-only execution only. An automatically claimed session must
-            // never be able to select a writing mode, so this is rejected at configuration load
-            // rather than filtered later.
-            var mode = string.IsNullOrWhiteSpace(project.Mode) ? "read-only" : project.Mode.Trim();
-            if (!string.Equals(mode, "read-only", StringComparison.Ordinal))
+            // Sprint 07 automated read-only execution only. ADR-0010 allows a project to opt in to
+            // writing, and even then only an Implementer session writes — see
+            // WorkerProjectMapping.ResolveMode. Anything other than these two values is rejected at
+            // configuration load rather than filtered later.
+            var mode = string.IsNullOrWhiteSpace(project.Mode)
+                ? WorkerProjectMapping.ReadOnlyMode
+                : project.Mode.Trim();
+
+            if (!string.Equals(mode, WorkerProjectMapping.ReadOnlyMode, StringComparison.Ordinal)
+                && !string.Equals(mode, WorkerProjectMapping.EditWorktreeMode, StringComparison.Ordinal))
             {
-                diagnostics.WriteLine("worker: automatic pickup supports mode 'read-only' only.");
+                diagnostics.WriteLine(
+                    $"worker: mode must be '{WorkerProjectMapping.ReadOnlyMode}' or '{WorkerProjectMapping.EditWorktreeMode}'.");
                 return null;
             }
 
@@ -227,15 +233,39 @@ public sealed record WorkerConfiguration(
 /// <summary>Machine-local mapping from a Familiar project to a repository on this host.</summary>
 public sealed record WorkerProjectMapping(Guid ProjectId, string Worktree, string AllowedRoot, string Mode)
 {
+    public const string ReadOnlyMode = "read-only";
+    public const string EditWorktreeMode = "edit-worktree";
+
+    /// <summary>The role whose sessions are allowed to write, when the mapping opts in.</summary>
+    public const string WritingRole = "Implementer";
+
     /// <summary>
-    /// The adapter environment for this project. These variable names are the adapter's existing
-    /// administrator-controlled configuration surface (ADR-0007) — the worker supplies them per
-    /// invocation instead of the operator exporting one fixed repository globally.
+    /// The mode this session actually runs in.
+    ///
+    /// Opting a project in to <see cref="EditWorktreeMode"/> does not make every session a writing
+    /// one: a Planner is asked to plan and a Reviewer to review, so granting either of them file
+    /// writes would widen the boundary for no benefit. Only an Implementer writes, and only where the
+    /// operator asked for it.
+    ///
+    /// What edit mode permits is unchanged from ADR-0007 and enforced by the adapter, not here: a
+    /// clean linked git worktree, whole-segment path containment with symlink resolution, and a tool
+    /// list that deliberately excludes Bash so there is no path to git commit or push.
     /// </summary>
-    public IReadOnlyDictionary<string, string> ToAdapterEnvironment() => new Dictionary<string, string>(StringComparer.Ordinal)
+    public string ResolveMode(string role) =>
+        string.Equals(Mode, EditWorktreeMode, StringComparison.Ordinal)
+            && string.Equals(role, WritingRole, StringComparison.Ordinal)
+                ? EditWorktreeMode
+                : ReadOnlyMode;
+
+    /// <summary>
+    /// The adapter environment for this project and role. These variable names are the adapter's
+    /// existing administrator-controlled configuration surface (ADR-0007) — the worker supplies them
+    /// per invocation instead of the operator exporting one fixed repository globally.
+    /// </summary>
+    public IReadOnlyDictionary<string, string> ToAdapterEnvironment(string role) => new Dictionary<string, string>(StringComparer.Ordinal)
     {
         ["FAMILIAR_CLAUDE_WORKTREE"] = Worktree,
         ["FAMILIAR_CLAUDE_ALLOWED_ROOT"] = AllowedRoot,
-        ["FAMILIAR_CLAUDE_MODE"] = Mode
+        ["FAMILIAR_CLAUDE_MODE"] = ResolveMode(role)
     };
 }

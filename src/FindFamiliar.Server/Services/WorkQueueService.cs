@@ -26,6 +26,15 @@ public sealed class WorkQueueService(FamiliarDbContext dbContext) : IWorkQueueSe
             .GroupBy(session => session.TaskId)
             .ToDictionary(group => group.Key, group => (IReadOnlyList<AgentSession>)group.ToList());
 
+        // Proposed next steps awaiting a human decision. Display only: the queue reports that a
+        // decision is waiting and links to the task page, and never acts on one.
+        var pendingHandoffs = await dbContext.SessionHandoffs
+            .AsNoTracking()
+            .Where(handoff =>
+                taskIds.Contains(handoff.TaskId)
+                && handoff.Status == SessionHandoffStatus.Pending)
+            .ToDictionaryAsync(handoff => handoff.TaskId, handoff => handoff.ProposedRole, cancellationToken);
+
         var items = new List<WorkQueueItem>(tasks.Count);
 
         foreach (var task in tasks)
@@ -34,7 +43,12 @@ public sealed class WorkQueueService(FamiliarDbContext dbContext) : IWorkQueueSe
                 ? found
                 : Array.Empty<AgentSession>();
 
-            var (actionKind, label, activeSession, startedCount) = DetermineAction(taskSessions);
+            var pendingHandoffRole = pendingHandoffs.TryGetValue(task.Id, out var proposedRole)
+                ? proposedRole
+                : (AgentSessionRole?)null;
+
+            var (actionKind, label, activeSession, startedCount) =
+                DetermineAction(taskSessions, pendingHandoffRole);
 
             items.Add(new WorkQueueItem(
                 task.ProjectId,
@@ -47,7 +61,8 @@ public sealed class WorkQueueService(FamiliarDbContext dbContext) : IWorkQueueSe
                 label,
                 activeSession?.Id,
                 activeSession?.Role,
-                startedCount));
+                startedCount,
+                pendingHandoffRole));
         }
 
         return items
@@ -57,7 +72,8 @@ public sealed class WorkQueueService(FamiliarDbContext dbContext) : IWorkQueueSe
     }
 
     private static (WorkQueueActionKind Kind, string Label, AgentSession? ActiveSession, int StartedCount) DetermineAction(
-        IReadOnlyList<AgentSession> sessions)
+        IReadOnlyList<AgentSession> sessions,
+        AgentSessionRole? pendingHandoffRole)
     {
         var startedSessions = sessions.Where(session => session.Status == AgentSessionStatus.Started).ToList();
 
@@ -78,6 +94,17 @@ public sealed class WorkQueueService(FamiliarDbContext dbContext) : IWorkQueueSe
                 $"Continue: open the {active.Role} assignment packet, capture its result, or cancel it.",
                 active,
                 1);
+        }
+
+        // A waiting decision outranks the derived suggestions below, but never an active session:
+        // ContinueSession above already returned, so reaching here means nothing is running.
+        if (pendingHandoffRole is { } proposedRole)
+        {
+            return (
+                WorkQueueActionKind.ApproveHandoff,
+                $"Waiting for you: approve or decline the proposed {proposedRole} session.",
+                null,
+                0);
         }
 
         if (sessions.Count == 0)

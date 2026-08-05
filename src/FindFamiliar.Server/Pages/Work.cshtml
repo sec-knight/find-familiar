@@ -56,6 +56,14 @@
                             {
                                 <strong>@item.ActionLabel</strong>
                             }
+                            else if (item.ActionKind == WorkQueueActionKind.ApproveHandoff)
+                            {
+                                @* A link, not a button. Approving belongs on the task page, which is
+                                   the only place showing the result the decision is based on — and it
+                                   keeps this page free of writes, as ADR-0005 requires. *@
+                                <strong>@item.ActionLabel</strong>
+                                <a asp-page="/Tasks/Details" asp-route-id="@item.TaskId">Review and decide</a>
+                            }
                             else
                             {
                                 @item.ActionLabel

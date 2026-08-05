@@ -134,7 +134,7 @@ public sealed class WorkerLoop(
                 claim.RolePrompt,
                 claim.AssignmentMarkdown,
                 claim.Role,
-                mapping.ToAdapterEnvironment(),
+                mapping.ToAdapterEnvironment(claim.Role),
                 claim.ClaimId),
             cancellationToken);
 

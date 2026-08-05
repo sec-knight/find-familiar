@@ -7,8 +7,8 @@ namespace FindFamiliar.Server.Tests.Runner;
 
 /// <summary>
 /// The worker's machine-local configuration loader. The rules that matter here are boundary rules:
-/// the repository mapping never leaves this file, the credential never enters it, and an
-/// automatically claimed session can never be executed in a writing mode.
+/// the repository mapping never leaves this file, the credential never enters it, and a writing mode
+/// is reachable only where the operator asked for it and only for the one role that writes.
 /// </summary>
 public sealed class WorkerConfigurationTests
 {
@@ -55,7 +55,7 @@ public sealed class WorkerConfigurationTests
         Assert.NotNull(mapping);
         Assert.Equal("read-only", mapping.Mode);
 
-        var adapterEnvironment = mapping.ToAdapterEnvironment();
+        var adapterEnvironment = mapping.ToAdapterEnvironment("Planner");
         Assert.Equal(AbsolutePath("repo"), adapterEnvironment["FAMILIAR_CLAUDE_WORKTREE"]);
         Assert.Equal("read-only", adapterEnvironment["FAMILIAR_CLAUDE_MODE"]);
         // The adapter environment carries repository configuration only — never the credential.
@@ -81,12 +81,49 @@ public sealed class WorkerConfigurationTests
     }
 
     [Fact]
-    public void Edit_worktree_mode_is_rejected_for_automatic_pickup()
+    public void An_unknown_mode_is_rejected()
+    {
+        using var directory = new TemporaryConfigDirectory();
+        var path = directory.WriteConfig(ValidConfigObject(mode: "write-anywhere"));
+
+        Assert.Null(WorkerConfiguration.TryLoad(Environment(path, Token), TextWriter.Null));
+    }
+
+    /// <summary>
+    /// Opting a project in to edit-worktree does not make every session a writing one. A Planner is
+    /// asked to plan and a Reviewer to review, so neither is granted file writes even here — only the
+    /// Implementer, the one role whose job is to change files.
+    /// </summary>
+    [Theory]
+    [InlineData("Planner", "read-only")]
+    [InlineData("Reviewer", "read-only")]
+    [InlineData("Implementer", "edit-worktree")]
+    public void Edit_worktree_mode_applies_to_the_implementer_only(string role, string expectedMode)
     {
         using var directory = new TemporaryConfigDirectory();
         var path = directory.WriteConfig(ValidConfigObject(mode: "edit-worktree"));
 
-        Assert.Null(WorkerConfiguration.TryLoad(Environment(path, Token), TextWriter.Null));
+        var configuration = WorkerConfiguration.TryLoad(Environment(path, Token), TextWriter.Null);
+
+        var mapping = Assert.Single(configuration!.Projects);
+        Assert.Equal(expectedMode, mapping.ResolveMode(role));
+        Assert.Equal(expectedMode, mapping.ToAdapterEnvironment(role)["FAMILIAR_CLAUDE_MODE"]);
+    }
+
+    /// <summary>A read-only mapping stays read-only for every role, including the Implementer.</summary>
+    [Theory]
+    [InlineData("Planner")]
+    [InlineData("Implementer")]
+    [InlineData("Reviewer")]
+    public void A_read_only_mapping_never_writes(string role)
+    {
+        using var directory = new TemporaryConfigDirectory();
+        var path = directory.WriteConfig(ValidConfigObject(mode: "read-only"));
+
+        var configuration = WorkerConfiguration.TryLoad(Environment(path, Token), TextWriter.Null);
+
+        var mapping = Assert.Single(configuration!.Projects);
+        Assert.Equal("read-only", mapping.ResolveMode(role));
     }
 
     [Fact]

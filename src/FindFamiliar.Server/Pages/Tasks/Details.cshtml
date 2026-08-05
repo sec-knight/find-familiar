@@ -115,6 +115,42 @@
                                 <button type="submit">Cancel this session</button>
                             </form>
                         }
+                        @if (Model.PendingHandoff is { } handoff && handoff.SourceSessionId == session.Id)
+                        {
+                            <div class="pending-handoff" role="group" aria-labelledby="handoff-title-@handoff.Id">
+                                <h3 id="handoff-title-@handoff.Id">
+                                    @(handoff.Kind == FindFamiliar.Server.Domain.SessionHandoffKind.RetrySameRole
+                                        ? $"Next step: retry the {handoff.ProposedRole} session"
+                                        : $"Next step: {handoff.ProposedRole} session")
+                                </h3>
+                                <p>
+                                    The @session.Role session @(handoff.SourceOutcome == FindFamiliar.Server.Domain.AgentSessionStatus.Cancelled ? "was cancelled" : "completed").
+                                    Familiar proposes a <strong>@handoff.ProposedRole</strong> session on this task.
+                                </p>
+                                <p>
+                                    <strong>Nothing has started.</strong> Approving starts the session immediately, and a
+                                    worker whose capabilities include @handoff.ProposedRole may claim and run it automatically.
+                                </p>
+                                @if (handoff.ObservedContextRevision != Model.Document.Project.ContextRevision)
+                                {
+                                    <p role="note">
+                                        Project context has advanced from revision @handoff.ObservedContextRevision to
+                                        @Model.Document.Project.ContextRevision since this step was proposed. The new session
+                                        will read the current revision. This does not block approval.
+                                    </p>
+                                }
+                                <form method="post" asp-page-handler="ApproveHandoff" class="handoff-approve-form">
+                                    <input type="hidden" name="HandoffDecision.HandoffId" value="@handoff.Id" />
+                                    <input type="hidden" name="HandoffDecision.ExpectedConcurrencyToken" value="@handoff.ConcurrencyToken" />
+                                    <button type="submit">Approve — start the @handoff.ProposedRole session</button>
+                                </form>
+                                <form method="post" asp-page-handler="DeclineHandoff" class="handoff-decline-form">
+                                    <input type="hidden" name="HandoffDecision.HandoffId" value="@handoff.Id" />
+                                    <input type="hidden" name="HandoffDecision.ExpectedConcurrencyToken" value="@handoff.ConcurrencyToken" />
+                                    <button type="submit">Decline — do not run this step</button>
+                                </form>
+                            </div>
+                        }
                     </li>
                 }
             </ul>
