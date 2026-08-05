@@ -146,6 +146,11 @@ public sealed class DemiplanePageTests(FindFamiliarWebApplicationFactory factory
 
         Assert.Contains($"content=\"{DemiplaneModel.ActiveRefreshSeconds}\"", html, StringComparison.Ordinal);
         Assert.True(DemiplaneModel.ActiveRefreshSeconds >= 15, "Refresh must not be aggressive.");
+
+        // Metadata belongs in <head>; in <body> it is non-conformant even though browsers tolerate it.
+        var headEnd = html.IndexOf("</head>", StringComparison.Ordinal);
+        var refreshAt = html.IndexOf("http-equiv=\"refresh\"", StringComparison.Ordinal);
+        Assert.True(headEnd > 0 && refreshAt > 0 && refreshAt < headEnd, "The refresh must render inside <head>.");
     }
 
     [Fact]

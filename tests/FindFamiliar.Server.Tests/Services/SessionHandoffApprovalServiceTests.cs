@@ -2,6 +2,7 @@ using FindFamiliar.Server.Data;
 using FindFamiliar.Server.Domain;
 using FindFamiliar.Server.Services;
 using FindFamiliar.Server.Tests.Infrastructure;
+using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using TaskStatus = FindFamiliar.Server.Domain.TaskStatus;
 
@@ -302,6 +303,79 @@ public sealed class SessionHandoffApprovalServiceTests
             SessionHandoffDecisionStatus.AlreadyDeclined,
             (await NewService(dbContext).ApproveAsync(
                 new SessionHandoffDecisionRequest(handoff.Id, stored.ConcurrencyToken))).Status);
+    }
+
+    /// <summary>
+    /// Decline must classify a locked database the way approval does.
+    ///
+    /// Before Sprint 10's review, decline had no failure handling at all: a busy database escaped as
+    /// an unhandled exception while approval reported it politely. Both write nothing when the lock
+    /// is unavailable, so both must say so — and neither may call it a lost race, because nobody won.
+    ///
+    /// The lock here is real: a second connection holds an exclusive transaction while decline runs.
+    /// </summary>
+    [Fact]
+    public async Task Declining_against_a_locked_database_reports_busy_rather_than_a_race()
+    {
+        using var database = new TemporarySqliteDatabase();
+        await using var seedContext = await database.CreateContextAsync();
+
+        var (_, task, handoff) = await SeedPendingHandoffAsync(seedContext);
+
+        await using var impatient = await database.CreateImpatientContextAsync();
+
+        await using var blocker = new SqliteConnection($"{database.ConnectionString};Pooling=False");
+        await blocker.OpenAsync();
+        await using (var exclusive = blocker.CreateCommand())
+        {
+            exclusive.CommandText = "BEGIN EXCLUSIVE;";
+            await exclusive.ExecuteNonQueryAsync();
+        }
+
+        var outcome = await new SessionHandoffApprovalService(
+                impatient,
+                new WorkflowDispatchService(impatient),
+                TimeProvider.System)
+            .DeclineAsync(new SessionHandoffDecisionRequest(handoff.Id, handoff.ConcurrencyToken));
+
+        Assert.Equal(SessionHandoffDecisionStatus.DatabaseBusy, outcome.Status);
+
+        await using (var release = blocker.CreateCommand())
+        {
+            release.CommandText = "ROLLBACK;";
+            await release.ExecuteNonQueryAsync();
+        }
+
+        // Nothing was written: the handoff is still Pending with its original token, so the button
+        // the user already has in front of them still works.
+        var stored = await ReadHandoffAsync(seedContext, handoff.Id);
+        Assert.Equal(SessionHandoffStatus.Pending, stored.Status);
+        Assert.Equal(handoff.ConcurrencyToken, stored.ConcurrencyToken);
+        Assert.Null(stored.DecidedUtc);
+        Assert.Equal(0, await seedContext.AgentSessions.CountAsync(s => s.TaskId == task.Id && s.Role == AgentSessionRole.Implementer));
+    }
+
+    /// <summary>
+    /// A zero-row decline is a genuine race and must keep saying so — the busy handling must not
+    /// swallow the case it was never meant to cover.
+    /// </summary>
+    [Fact]
+    public async Task Declining_an_already_decided_handoff_is_still_reported_as_a_race_not_busy()
+    {
+        using var database = new TemporarySqliteDatabase();
+        await using var dbContext = await database.CreateContextAsync();
+
+        var (_, _, handoff) = await SeedPendingHandoffAsync(dbContext);
+
+        var first = await NewService(dbContext).DeclineAsync(
+            new SessionHandoffDecisionRequest(handoff.Id, handoff.ConcurrencyToken));
+        Assert.Equal(SessionHandoffDecisionStatus.Declined, first.Status);
+
+        var second = await NewService(dbContext).DeclineAsync(
+            new SessionHandoffDecisionRequest(handoff.Id, handoff.ConcurrencyToken));
+
+        Assert.Equal(SessionHandoffDecisionStatus.AlreadyDeclined, second.Status);
+        Assert.NotEqual(SessionHandoffDecisionStatus.DatabaseBusy, second.Status);
     }
 
     [Fact]

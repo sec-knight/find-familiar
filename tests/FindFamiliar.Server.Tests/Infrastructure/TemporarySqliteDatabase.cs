@@ -31,6 +31,28 @@ public sealed class TemporarySqliteDatabase : IDisposable
     }
 
     /// <summary>
+    /// A context that gives up immediately when the database is locked instead of retrying for the
+    /// default thirty seconds.
+    ///
+    /// Needed to observe SQLITE_BUSY deliberately: with the normal thirty-second timeout a contended
+    /// write waits rather than failing, which is correct in production and useless in a test that
+    /// must prove how a busy database is classified.
+    ///
+    /// One second rather than zero — zero means wait forever, not give up immediately.
+    /// </summary>
+    public async Task<FamiliarDbContext> CreateImpatientContextAsync()
+    {
+        var options = new DbContextOptionsBuilder<FamiliarDbContext>()
+            .UseSqlite($"{ConnectionString};Default Timeout=1;Pooling=False")
+            .Options;
+
+        var dbContext = new FamiliarDbContext(options);
+        _contexts.Add(dbContext);
+        await dbContext.Database.MigrateAsync();
+        return dbContext;
+    }
+
+    /// <summary>
     /// A context migrated only as far as <paramref name="targetMigration"/>, for tests that need to
     /// seed a database as it existed before a later migration and then apply it.
     /// </summary>

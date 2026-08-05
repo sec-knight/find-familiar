@@ -153,20 +153,46 @@ public sealed class SessionHandoffApprovalService(
 
         // Same fence as approval. Declining creates nothing, so it needs no transaction around it:
         // the conditional update is the whole effect.
-        var declined = await dbContext.SessionHandoffs
-            .Where(candidate =>
-                candidate.Id == handoff.Id
-                && candidate.Status == SessionHandoffStatus.Pending
-                && candidate.ConcurrencyToken == request.ExpectedConcurrencyToken
-                && candidate.CreatedSessionId == null)
-            .ExecuteUpdateAsync(
-                setters => setters
-                    .SetProperty(candidate => candidate.Status, SessionHandoffStatus.Declined)
-                    .SetProperty(candidate => candidate.ConcurrencyToken, Guid.NewGuid())
-                    .SetProperty(candidate => candidate.DecidedUtc, nowUtc)
-                    .SetProperty(candidate => candidate.UpdatedUtc, nowUtc),
-                cancellationToken);
+        //
+        // It still needs approval's failure classification. A locked database here wrote nothing and
+        // nobody won, so it must not surface as an unhandled exception on one path while approval
+        // reports it politely on the other.
+        int declined;
 
+        try
+        {
+            declined = await dbContext.SessionHandoffs
+                .Where(candidate =>
+                    candidate.Id == handoff.Id
+                    && candidate.Status == SessionHandoffStatus.Pending
+                    && candidate.ConcurrencyToken == request.ExpectedConcurrencyToken
+                    && candidate.CreatedSessionId == null)
+                .ExecuteUpdateAsync(
+                    setters => setters
+                        .SetProperty(candidate => candidate.Status, SessionHandoffStatus.Declined)
+                        .SetProperty(candidate => candidate.ConcurrencyToken, Guid.NewGuid())
+                        .SetProperty(candidate => candidate.DecidedUtc, nowUtc)
+                        .SetProperty(candidate => candidate.UpdatedUtc, nowUtc),
+                    cancellationToken);
+        }
+        catch (Exception exception) when (exception is DbUpdateException or SqliteException)
+        {
+            dbContext.ChangeTracker.Clear();
+
+            // Busy and locked are retryable and nothing changed. Anything else is a real fault and
+            // must not be dressed up as either a lock or a lost race.
+            return IsDatabaseBusy(exception)
+                ? new SessionHandoffDecisionOutcome(
+                    SessionHandoffDecisionStatus.DatabaseBusy,
+                    TaskId: handoff.TaskId,
+                    Role: handoff.ProposedRole)
+                : new SessionHandoffDecisionOutcome(
+                    SessionHandoffDecisionStatus.Conflict,
+                    TaskId: handoff.TaskId,
+                    Role: handoff.ProposedRole);
+        }
+
+        // Zero rows is a genuine race: another decision consumed this handoff first.
         if (declined != 1)
         {
             return await DescribeLostRaceAsync(handoff.Id, handoff.TaskId, cancellationToken);

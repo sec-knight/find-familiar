@@ -83,6 +83,39 @@ claims one.** The task panel states that plainly rather than leaving a suggestiv
 An unrecognised machine category is still a failure — it was machine-recorded — but reports Unknown
 rather than inventing a cause.
 
+### A decision is only ever read from a persisted decision
+
+The first implementation of this ADR got the corollary wrong, and review caught it. When the latest
+session had completed and no *pending* handoff existed, the page reported that the proposed next step
+"was declined" — inferring a human decision from the absence of a row.
+
+That is false for every task completed before Sprint 09, because ADR-0010's migration deliberately
+backfills no handoffs. Two tasks in the real database would have displayed a decline nobody made.
+
+The projection now reads **all** handoffs for a task and scopes the decision to the one recorded
+against the latest terminal session:
+
+| Recorded state | Reported as |
+|---|---|
+| Declined | the decline, naming the role |
+| Approved or Superseded | a decision exists, without characterising its effect |
+| no row at all | "finished and no next step is currently proposed" |
+
+The general rule this makes explicit: **absence of a record is not evidence of an event.** It applies
+to more than handoffs, and it is the same discipline that keeps failure categories tied to strings we
+wrote ourselves.
+
+### Capability is not a promise of pickup
+
+The same review found the inverse error. The server knows only that some enabled worker *declares* a
+role; repository mappings are machine-local and never reported to it (ADR-0008). A worker declaring
+Implementer with no mapping for this project will never claim the session.
+
+The page therefore no longer says "a worker should claim this shortly". It states what is known and
+what is not: a worker declaring the role is available, and it can claim the work only if that machine
+has a local mapping for this project. The Blocked wording is unchanged, because "no enabled worker
+declares that role" is directly verifiable.
+
 ### The Familiar's summary is assembled, not generated
 
 Each task leads with plain language: what happened, what is happening now, why it is waiting, what
@@ -134,7 +167,8 @@ apart. Modelling the state without pretending to detect it keeps the shape ready
 
 ### Refresh is bounded and conditional
 
-A `meta refresh` at 30 seconds, emitted **only** when a task is running or waiting. A settled project
+A `meta refresh` at 30 seconds, contributed to `<head>` through a layout section and emitted **only**
+when a task is running or waiting. A settled project
 never refreshes, so someone reading a summary is not interrupted and no request is made that nobody
 needs. It is a plain page reload: it triggers no work, preserves no partial form state, and cannot
 approve anything.

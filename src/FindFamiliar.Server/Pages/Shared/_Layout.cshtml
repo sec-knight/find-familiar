@@ -7,6 +7,9 @@
     <title>@ViewData["Title"] - Find Familiar</title>
     <script type="importmap"></script>
     <link rel="stylesheet" href="~/css/site.css" asp-append-version="true" />
+    @* Head contributions from a page, e.g. the Demiplane's conditional refresh. Metadata belongs
+       here rather than in the body, where it is non-conformant. *@
+    @await RenderSectionAsync("Head", required: false)
 </head>
 <body class="app-shell">
     <header class="site-header">

@@ -49,8 +49,29 @@ public enum TaskDisplayReasonCode
     /// <summary>A Reviewer finished. Completing a task is always a human decision.</summary>
     AwaitingHumanDecisionAfterReview,
 
-    /// <summary>The proposed step was declined, so nothing will happen without a new decision.</summary>
+    /// <summary>
+    /// A persisted Declined handoff exists for the latest session. Only ever set from a real
+    /// Declined row — never inferred from the absence of a proposal.
+    /// </summary>
     ProposedStepDeclined,
+
+    /// <summary>
+    /// The latest session finished and nothing is proposed next, with no record of anyone deciding
+    /// that.
+    ///
+    /// This is the ordinary state of every task that completed before Sprint 09 existed: ADR-0010's
+    /// migration deliberately backfills no handoffs, so absence of a proposal is the norm for
+    /// historical work and says nothing about what a human chose. Reporting it as a decline would
+    /// invent a decision that was never made.
+    /// </summary>
+    NoNextStepProposed,
+
+    /// <summary>
+    /// A persisted handoff exists for the latest session in a decided state that leaves nothing to
+    /// act on. Distinguished from <see cref="NoNextStepProposed"/> because here a decision genuinely
+    /// was recorded.
+    /// </summary>
+    ProposedStepAlreadyDecided,
 
     /// <summary>Started and unclaimed, and at least one enabled worker could claim it.</summary>
     AwaitingWorkerPickup,

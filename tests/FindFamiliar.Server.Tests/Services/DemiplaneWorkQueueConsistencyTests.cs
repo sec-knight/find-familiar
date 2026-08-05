@@ -113,6 +113,94 @@ public sealed class DemiplaneWorkQueueConsistencyTests
         Assert.Equal(TaskDisplayState.Succeeded, demiplaneTask.DisplayState);
     }
 
+    /// <summary>
+    /// The case the two derivations previously disagreed on, and the gap this suite previously had.
+    ///
+    /// For a completed Planner with no handoff, WorkQueueService reports the neutral, accurate
+    /// "Start an Implementer session." The Demiplane used to report that the proposed next step "was
+    /// declined" — a decision nobody made, and one the queue never claimed.
+    ///
+    /// This asserts semantic agreement rather than matching enum values: the two pages describe one
+    /// task, and neither may assert an event the other does not.
+    /// </summary>
+    [Fact]
+    public async Task A_completed_planner_with_no_handoff_is_neutral_on_both_surfaces()
+    {
+        using var database = new TemporarySqliteDatabase();
+        await using var dbContext = await database.CreateContextAsync();
+
+        var project = await DemiplaneProjectionServiceTests.SeedProjectAsync(dbContext);
+        var task = await DemiplaneProjectionServiceTests.SeedTaskAsync(dbContext, project, "Historical");
+
+        dbContext.Add(DemiplaneProjectionServiceTests.NewSession(
+            task.Id, AgentSessionRole.Planner, AgentSessionStatus.Completed));
+        await dbContext.SaveChangesAsync();
+        dbContext.ChangeTracker.Clear();
+
+        var queueItem = Assert.Single(await new WorkQueueService(dbContext).GetActiveQueueAsync());
+        var demiplaneTask = Assert.Single((await ProjectAsync(dbContext, project.Id))!.Tasks);
+
+        // The queue proposes a next role without claiming anything happened.
+        Assert.Equal(WorkQueueActionKind.StartImplementer, queueItem.ActionKind);
+        Assert.DoesNotContain("declin", queueItem.ActionLabel, StringComparison.OrdinalIgnoreCase);
+
+        // The Demiplane must be equally neutral. If it invents a decline while the queue reports a
+        // plain next action, the two are describing different histories of the same task.
+        Assert.Equal(TaskDisplayReasonCode.NoNextStepProposed, demiplaneTask.ReasonCode);
+
+        var demiplaneText = string.Join(
+            " ",
+            demiplaneTask.ReasonText,
+            demiplaneTask.Summary.WhatHappened,
+            demiplaneTask.Summary.CurrentState,
+            demiplaneTask.Summary.WhyWaiting,
+            demiplaneTask.Summary.NeedsAttention,
+            demiplaneTask.Summary.RecommendedNextAction);
+
+        foreach (var word in new[] { "declined", "rejected", "approved", "decided" })
+        {
+            Assert.DoesNotContain(word, demiplaneText, StringComparison.OrdinalIgnoreCase);
+        }
+
+        // Neither surface claims a proposal is outstanding, because none is.
+        Assert.Null(queueItem.PendingHandoffRole);
+        Assert.Null(demiplaneTask.PendingHandoffId);
+        Assert.Null(demiplaneTask.ProposedRole);
+    }
+
+    /// <summary>
+    /// The mirror: when a decline is persisted, both surfaces may reflect it and the Demiplane says so.
+    /// </summary>
+    [Fact]
+    public async Task A_persisted_decline_is_reported_by_the_plane_and_invented_by_neither()
+    {
+        using var database = new TemporarySqliteDatabase();
+        await using var dbContext = await database.CreateContextAsync();
+
+        var project = await DemiplaneProjectionServiceTests.SeedProjectAsync(dbContext);
+        var task = await DemiplaneProjectionServiceTests.SeedTaskAsync(dbContext, project, "Declined");
+
+        var planner = DemiplaneProjectionServiceTests.NewSession(
+            task.Id, AgentSessionRole.Planner, AgentSessionStatus.Completed);
+        var handoff = DemiplaneProjectionServiceTests.NewHandoff(
+            task.Id, planner.Id, AgentSessionRole.Implementer, SessionHandoffKind.NextRole);
+        handoff.Status = SessionHandoffStatus.Declined;
+        dbContext.AddRange(planner, handoff);
+        await dbContext.SaveChangesAsync();
+        dbContext.ChangeTracker.Clear();
+
+        var queueItem = Assert.Single(await new WorkQueueService(dbContext).GetActiveQueueAsync());
+        var demiplaneTask = Assert.Single((await ProjectAsync(dbContext, project.Id))!.Tasks);
+
+        // The queue does not surface a declined handoff as pending work.
+        Assert.Null(queueItem.PendingHandoffRole);
+        Assert.NotEqual(WorkQueueActionKind.ApproveHandoff, queueItem.ActionKind);
+
+        // The Demiplane reports the decision that genuinely exists.
+        Assert.Equal(TaskDisplayReasonCode.ProposedStepDeclined, demiplaneTask.ReasonCode);
+        Assert.Null(demiplaneTask.PendingHandoffId);
+    }
+
     private static Task<DemiplaneProjection?> ProjectAsync(
         FindFamiliar.Server.Data.FamiliarDbContext dbContext,
         Guid projectId)

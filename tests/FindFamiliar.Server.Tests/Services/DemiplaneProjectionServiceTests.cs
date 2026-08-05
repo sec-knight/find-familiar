@@ -84,6 +84,14 @@ public sealed class DemiplaneProjectionServiceTests
         Assert.Equal(TaskDisplayReasonCode.AwaitingWorkerPickup, projected.ReasonCode);
         Assert.Contains("Waiting for an available Implementer", projected.ReasonText, StringComparison.Ordinal);
         Assert.False(projected.NeedsHumanAttention);
+
+        // The server knows the role is declared; it cannot know the worker has a local mapping for
+        // this project, so it must not promise pickup. Someone told "nothing to do" would wait
+        // indefinitely alongside a session that will never be claimed.
+        var recommendation = projected.Summary.RecommendedNextAction!;
+        Assert.DoesNotContain("Nothing to do", recommendation, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("shortly", recommendation, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("local mapping for this project", recommendation, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -328,6 +336,114 @@ public sealed class DemiplaneProjectionServiceTests
         }.Select(SessionOutcomeClassifier.ClassifyCancellation).ToList();
 
         Assert.DoesNotContain(TaskDisplayReasonCode.WaitingForProviderCapacity, categories);
+    }
+
+    /// <summary>
+    /// The production-shaped case, and the regression this suite previously lacked entirely.
+    ///
+    /// Every task that completed a Planner before Sprint 09 existed looks exactly like this: a
+    /// completed session, no handoff row, nothing running — because ADR-0010's migration deliberately
+    /// backfills no handoffs. Two such tasks exist in the real database.
+    ///
+    /// The projection must report only what is observable. Absence of a proposal is not evidence that
+    /// anyone decided anything, and saying otherwise invents a decision the user never made.
+    /// </summary>
+    [Fact]
+    public async Task A_completed_planner_with_no_handoff_reports_no_proposal_and_claims_no_decision()
+    {
+        using var database = new TemporarySqliteDatabase();
+        await using var dbContext = await database.CreateContextAsync();
+
+        var project = await SeedProjectAsync(dbContext);
+        var task = await SeedTaskAsync(dbContext, project, "Historical work");
+
+        dbContext.Add(NewSession(task.Id, AgentSessionRole.Planner, AgentSessionStatus.Completed));
+        await dbContext.SaveChangesAsync();
+
+        var projected = Assert.Single((await ProjectAsync(dbContext, project.Id))!.Tasks);
+
+        Assert.Equal(TaskDisplayReasonCode.NoNextStepProposed, projected.ReasonCode);
+        Assert.Equal(
+            "The Planner session finished and no next step is currently proposed.",
+            projected.ReasonText);
+
+        // No decision vocabulary anywhere the user can read it.
+        var everythingShown = string.Join(
+            " ",
+            projected.ReasonText,
+            projected.Summary.WhatHappened,
+            projected.Summary.CurrentState,
+            projected.Summary.WhyWaiting,
+            projected.Summary.NeedsAttention,
+            projected.Summary.RecommendedNextAction,
+            projected.Summary.OutcomeDetail);
+
+        foreach (var word in new[] { "declined", "rejected", "approved", "decided", "denied" })
+        {
+            Assert.DoesNotContain(word, everythingShown, StringComparison.OrdinalIgnoreCase);
+        }
+    }
+
+    /// <summary>
+    /// The other half: when a decline really was recorded, say so. The fix must not make the page
+    /// silent about decisions that genuinely happened.
+    /// </summary>
+    [Fact]
+    public async Task A_persisted_declined_handoff_is_reported_as_declined()
+    {
+        using var database = new TemporarySqliteDatabase();
+        await using var dbContext = await database.CreateContextAsync();
+
+        var project = await SeedProjectAsync(dbContext);
+        var task = await SeedTaskAsync(dbContext, project, "Declined work");
+
+        var planner = NewSession(task.Id, AgentSessionRole.Planner, AgentSessionStatus.Completed);
+        var handoff = NewHandoff(task.Id, planner.Id, AgentSessionRole.Implementer, SessionHandoffKind.NextRole);
+        handoff.Status = SessionHandoffStatus.Declined;
+        handoff.DecidedUtc = DateTime.UtcNow;
+        dbContext.AddRange(planner, handoff);
+        await dbContext.SaveChangesAsync();
+
+        var projected = Assert.Single((await ProjectAsync(dbContext, project.Id))!.Tasks);
+
+        Assert.Equal(TaskDisplayReasonCode.ProposedStepDeclined, projected.ReasonCode);
+        Assert.Contains("you declined", projected.ReasonText, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Implementer", projected.ReasonText, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A decline recorded against an earlier session says nothing about the one that just finished.
+    /// Scoping the lookup to the latest terminal session is what keeps that straight.
+    /// </summary>
+    [Fact]
+    public async Task A_decline_on_an_earlier_session_is_not_attributed_to_a_later_one()
+    {
+        using var database = new TemporarySqliteDatabase();
+        await using var dbContext = await database.CreateContextAsync();
+
+        var project = await SeedProjectAsync(dbContext);
+        var task = await SeedTaskAsync(dbContext, project, "Two-session work");
+
+        var planner = NewSession(task.Id, AgentSessionRole.Planner, AgentSessionStatus.Completed);
+        planner.StartedUtc = DateTime.UtcNow.AddHours(-3);
+        planner.CompletedUtc = DateTime.UtcNow.AddHours(-2);
+
+        var plannerDecision = NewHandoff(task.Id, planner.Id, AgentSessionRole.Implementer, SessionHandoffKind.NextRole);
+        plannerDecision.Status = SessionHandoffStatus.Approved;
+
+        // The approved Implementer ran and finished. Nothing has been decided about it yet.
+        var implementer = NewSession(task.Id, AgentSessionRole.Implementer, AgentSessionStatus.Completed);
+        implementer.StartedUtc = DateTime.UtcNow.AddHours(-1);
+        implementer.CompletedUtc = DateTime.UtcNow.AddMinutes(-10);
+
+        dbContext.AddRange(planner, plannerDecision, implementer);
+        await dbContext.SaveChangesAsync();
+
+        var projected = Assert.Single((await ProjectAsync(dbContext, project.Id))!.Tasks);
+
+        Assert.Equal(TaskDisplayReasonCode.NoNextStepProposed, projected.ReasonCode);
+        Assert.Contains("Implementer session finished", projected.ReasonText, StringComparison.Ordinal);
+        Assert.DoesNotContain("declined", projected.ReasonText, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

@@ -57,9 +57,13 @@ public sealed class DemiplaneProjectionService(
             .Where(session => taskIds.Contains(session.TaskId))
             .ToListAsync(cancellationToken);
 
+        // Every handoff, not only the pending one. Reading only Pending rows would make "no proposal
+        // exists" and "a human declined the proposal" indistinguishable, and the projection would
+        // have to guess which — inventing a decision for every task that predates Sprint 09, because
+        // ADR-0010's migration deliberately backfills none.
         var handoffs = await dbContext.SessionHandoffs
             .AsNoTracking()
-            .Where(handoff => taskIds.Contains(handoff.TaskId) && handoff.Status == SessionHandoffStatus.Pending)
+            .Where(handoff => taskIds.Contains(handoff.TaskId))
             .ToListAsync(cancellationToken);
 
         // Only cancellation entries are needed, and only to read the durable reason a session ended.
@@ -82,7 +86,7 @@ public sealed class DemiplaneProjectionService(
             .Select(task => Project(
                 task,
                 sessions.Where(session => session.TaskId == task.Id).ToList(),
-                handoffs.SingleOrDefault(handoff => handoff.TaskId == task.Id),
+                handoffs.Where(handoff => handoff.TaskId == task.Id).ToList(),
                 cancellationEntries,
                 capableRoles,
                 nowUtc))
@@ -127,11 +131,14 @@ public sealed class DemiplaneProjectionService(
     private static DemiplaneTask Project(
         FamiliarTask task,
         IReadOnlyList<AgentSession> sessions,
-        SessionHandoff? pendingHandoff,
+        IReadOnlyList<SessionHandoff> handoffs,
         IReadOnlyList<ContextEntry> cancellationEntries,
         IReadOnlySet<AgentSessionRole> capableRoles,
         DateTimeOffset nowUtc)
     {
+        var pendingHandoff = handoffs.SingleOrDefault(
+            handoff => handoff.Status == SessionHandoffStatus.Pending);
+
         var ordered = sessions
             .OrderBy(session => session.StartedUtc)
             .ThenBy(session => session.Id)
@@ -145,12 +152,20 @@ public sealed class DemiplaneProjectionService(
             .ThenByDescending(session => session.Id)
             .FirstOrDefault();
 
+        // The decision that applies is the one recorded against the latest terminal session, not any
+        // decision ever made on this task. An older Approved handoff says nothing about what a human
+        // chose after the session that just finished.
+        var latestDecision = latestTerminal is null
+            ? null
+            : handoffs.SingleOrDefault(handoff => handoff.SourceSessionId == latestTerminal.Id);
+
         var (state, reasonCode, reasonText, needsAttention, detail) = DeriveState(
             task,
             ordered,
             started,
             latestTerminal,
             pendingHandoff,
+            latestDecision,
             cancellationEntries,
             capableRoles,
             nowUtc);
@@ -200,6 +215,7 @@ public sealed class DemiplaneProjectionService(
             IReadOnlyList<AgentSession> started,
             AgentSession? latestTerminal,
             SessionHandoff? pendingHandoff,
+            SessionHandoff? latestDecision,
             IReadOnlyList<ContextEntry> cancellationEntries,
             IReadOnlySet<AgentSessionRole> capableRoles,
             DateTimeOffset nowUtc)
@@ -350,12 +366,37 @@ public sealed class DemiplaneProjectionService(
                 null);
         }
 
-        return (
-            TaskDisplayState.NeedsAttention,
-            TaskDisplayReasonCode.ProposedStepDeclined,
-            $"The {latestTerminal.Role} session finished and the proposed next step was declined. Nothing will happen without a new decision.",
-            true,
-            null);
+        // The latest session completed and nothing is pending. What that means depends entirely on
+        // whether a decision was actually recorded — absence of a proposal is not evidence of one.
+        return latestDecision?.Status switch
+        {
+            SessionHandoffStatus.Declined => (
+                TaskDisplayState.NeedsAttention,
+                TaskDisplayReasonCode.ProposedStepDeclined,
+                $"The {latestTerminal.Role} session finished and you declined the proposed {latestDecision.ProposedRole} session. Nothing will happen without a new decision.",
+                true,
+                null),
+
+            // Defensive: an Approved or Superseded handoff on the newest terminal session implies a
+            // session that should have appeared above. Report that a decision exists without
+            // characterising one we cannot see the effect of.
+            SessionHandoffStatus.Approved or SessionHandoffStatus.Superseded => (
+                TaskDisplayState.NeedsAttention,
+                TaskDisplayReasonCode.ProposedStepAlreadyDecided,
+                $"The {latestTerminal.Role} session finished and its proposed next step was already decided. Nothing is currently proposed.",
+                true,
+                null),
+
+            // No handoff row at all. Ordinary for work that predates Sprint 09, and the only honest
+            // statement is what is observable: it finished, and nothing is proposed.
+            _ => (
+                TaskDisplayState.NeedsAttention,
+                TaskDisplayReasonCode.NoNextStepProposed,
+                $"The {latestTerminal.Role} session finished and no next step is currently proposed.",
+                true,
+                null)
+        };
+
     }
 
     private static string DescribeFailure(TaskDisplayReasonCode code, AgentSessionRole role) => code switch

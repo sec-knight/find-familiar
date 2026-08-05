@@ -6,15 +6,21 @@
     ViewData["Title"] = Model.Projection is null ? "Demiplane" : $"Demiplane — {Model.Projection.ProjectName}";
 }
 
-@if (Model.Projection is { } plane)
+@* Only refresh while something is genuinely in flight. A settled project never reloads, so a human
+   reading a summary is not interrupted, and no request is made that nobody needs.
+
+   It renders into <head>, where metadata belongs. A meta refresh re-requests the current URL with
+   GET, which preserves ?taskId= so the open task stays open, and cannot submit a form or reach a
+   handler — so it can never approve, decline or start anything. *@
+@if (Model.Projection?.HasActiveWork == true)
 {
-    @* Only refresh while something is genuinely in flight. A settled project never reloads, so a
-       human reading a summary is not interrupted, and no request is made that nobody needs. *@
-    @if (plane.HasActiveWork)
-    {
+    @section Head {
         <meta http-equiv="refresh" content="@DemiplaneModel.ActiveRefreshSeconds" />
     }
+}
 
+@if (Model.Projection is { } plane)
+{
     <section class="dashboard-intro" aria-labelledby="demiplane-title">
         <p class="eyebrow">Demiplane · context revision @plane.ContextRevision</p>
         <h1 id="demiplane-title">@plane.ProjectName</h1>

@@ -114,6 +114,12 @@ public static class FamiliarSummaryComposer
             (_, TaskDisplayReasonCode.ProposedStepDeclined) =>
                 "Decide what should happen next: start a session yourself, or complete the task.",
 
+            (_, TaskDisplayReasonCode.NoNextStepProposed) =>
+                "Decide what should happen next: start a session yourself, or complete the task.",
+
+            (_, TaskDisplayReasonCode.ProposedStepAlreadyDecided) =>
+                "Decide what should happen next: start a session yourself, or complete the task.",
+
             (_, TaskDisplayReasonCode.MultipleStartedSessions) =>
                 "Inspect this task directly. This state should not be reachable.",
 
@@ -139,8 +145,13 @@ public static class FamiliarSummaryComposer
             (_, TaskDisplayReasonCode.NoWorkerForRole) =>
                 "Add the missing role to a worker's capabilities.",
 
+            // Deliberately not "a worker should claim this shortly". The server knows only that some
+            // enabled worker declares this role; repository mappings are machine-local and never
+            // reported to it (ADR-0008), so a declared capability is not a promise of pickup. If that
+            // worker has no mapping for this project the session will wait indefinitely, and telling
+            // someone there is nothing to do would leave them waiting with it.
             (_, TaskDisplayReasonCode.AwaitingWorkerPickup) =>
-                "Nothing to do — a worker should claim this shortly.",
+                "A worker declaring this role is available. It can claim the work only if that machine has a local mapping for this project.",
 
             (_, TaskDisplayReasonCode.LeaseExpired) =>
                 "Nothing to do — the session becomes claimable again on its own.",
