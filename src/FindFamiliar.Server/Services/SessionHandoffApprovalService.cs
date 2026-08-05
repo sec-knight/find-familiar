@@ -358,7 +358,7 @@ public sealed class SessionHandoffApprovalService(
                 Role: current.ProposedRole);
     }
 
-    internal static bool IsUniqueConstraintViolation(Exception exception)
+    public static bool IsUniqueConstraintViolation(Exception exception)
     {
         for (var current = exception; current is not null; current = current.InnerException)
         {
@@ -380,7 +380,7 @@ public sealed class SessionHandoffApprovalService(
     /// this caller lost a race. Nothing was written in either case, but only one of them means
     /// another decision beat this one.
     /// </summary>
-    internal static bool IsDatabaseBusy(Exception exception)
+    public static bool IsDatabaseBusy(Exception exception)
     {
         for (var current = exception; current is not null; current = current.InnerException)
         {
