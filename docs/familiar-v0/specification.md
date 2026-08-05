@@ -193,7 +193,9 @@ mean something specific.
 
 ### 4.2 Size
 
-`ProjectSnapshot.EstimatedCharacters` is the serialized length. Two thresholds:
+`ProjectSnapshot.EstimatedCharacters` is the **deterministic serialized-size estimate used for
+snapshot reduction**, measured with the one canonical serializer in
+`ProjectSnapshotSerialization`. Two thresholds:
 
 - `MaxSnapshotCharacters = 24_000` — the budget.
 - If over budget, drop sections in a fixed order and record the drop in `Limitations`:
@@ -204,6 +206,19 @@ mean something specific.
 
 Characters, not tokens, because computing tokens means calling a provider and the snapshot builder
 must be callable — and testable — with no provider configured at all.
+
+**It is an estimate, not a byte-for-byte length.** `EstimatedCharacters`, `IsWithinBudget` and
+`ObservedAt` are held at deterministic placeholders while measuring: the first two would otherwise
+depend on their own result, and a serialized instant varies in width with the clock, so a
+clock-dependent budget would drop a section on one page load and keep it on the next. A fully
+populated snapshot may therefore serialize a small, bounded number of characters longer than
+`EstimatedCharacters`, and `IsWithinBudget` may differ by one character at the boundary. The
+determinism is the property worth keeping; the last character is not.
+
+The supported invariant:
+
+> `EstimatedCharacters` is the deterministic serialized-size estimate used for snapshot reduction.
+> The final provider envelope must be serialized and checked again immediately before transmission.
 
 ## 5. Reasoning provider
 

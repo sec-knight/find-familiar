@@ -1,4 +1,3 @@
-using System.Text.Json;
 using FindFamiliar.Server.Data;
 using FindFamiliar.Server.Domain;
 using FindFamiliar.Server.Services.Demiplane;
@@ -408,10 +407,196 @@ public sealed class ProjectSnapshotServiceTests
         Assert.Single(snapshot.Sessions);
         Assert.Single(snapshot.Tasks);
         Assert.True(snapshot.EstimatedCharacters <= ProjectSnapshot.MaxSnapshotCharacters);
-        AssertLimitation(snapshot, "Context entries were omitted");
+        AssertLimitation(
+            snapshot,
+            $"All {ProjectSnapshot.MaxContextEntries} context entries included before reduction were omitted");
         Assert.DoesNotContain(
             snapshot.Limitations,
-            limitation => limitation.Contains("Sessions were omitted", StringComparison.Ordinal));
+            limitation => limitation.Contains("sessions included before reduction were omitted", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// The second reduction step, on its own. Sized so that dropping the context entries is not
+    /// enough and dropping the sessions is: the tasks must survive, because cutting a project's work
+    /// down to five when ten would have fitted is a smaller answer for no reason.
+    ///
+    /// The weight is carried by long task titles, which is where a real project's characters
+    /// actually sit — a session's only variable-width field is the title of the task it ran against,
+    /// so the tasks and the sessions are roughly the same size and dropping one recovers the budget.
+    /// </summary>
+    [Fact]
+    public async Task An_over_budget_snapshot_drops_sessions_before_reducing_tasks()
+    {
+        using var database = new TemporarySqliteDatabase();
+        await using var dbContext = await database.CreateContextAsync();
+
+        var project = await SeedProjectAsync(dbContext, "Wordy project", "Short purpose.");
+
+        const int taskCount = ProjectSnapshot.MaxSessions;
+        const int titleLength = 1_500;
+
+        for (var index = 0; index < taskCount; index++)
+        {
+            var task = await SeedTaskAsync(dbContext, project, $"Task {index:D2} {new string('t', titleLength)}");
+            await SeedSessionAsync(
+                dbContext,
+                task,
+                AgentSessionRole.Planner,
+                AgentSessionStatus.Completed,
+                startedUtc: BaseTime.AddMinutes(index));
+        }
+
+        for (var index = 0; index < ProjectSnapshot.MaxContextEntries; index++)
+        {
+            await SeedContextEntryAsync(
+                dbContext,
+                project,
+                task: null,
+                $"Entry {index:D2}",
+                new string('c', ProjectSnapshot.MaxContextExcerptCharacters),
+                createdUtc: BaseTime.AddMinutes(index));
+        }
+
+        var result = await CreateService(dbContext).GetSnapshotAsync(project.Id);
+
+        Assert.Equal(ProjectSnapshotOutcome.Available, result.Outcome);
+        var snapshot = result.Snapshot!;
+
+        Assert.True(snapshot.IsWithinBudget);
+        Assert.True(snapshot.EstimatedCharacters <= ProjectSnapshot.MaxSnapshotCharacters);
+
+        // Both steps ahead of the task floor ran, and the floor did not.
+        Assert.Empty(snapshot.ContextEntries);
+        Assert.Empty(snapshot.Sessions);
+        Assert.Equal(taskCount, snapshot.Tasks.Count);
+
+        AssertLimitation(
+            snapshot,
+            $"All {ProjectSnapshot.MaxContextEntries} context entries included before reduction were omitted");
+        AssertLimitation(
+            snapshot,
+            $"All {ProjectSnapshot.MaxSessions} recent sessions included before reduction were omitted");
+
+        // Reduction stopped the moment the snapshot fitted: the task floor is not mentioned, and
+        // nothing claims the project could not be summarised.
+        Assert.DoesNotContain(
+            snapshot.Limitations,
+            limitation => limitation.Contains(
+                $"Only the first {ProjectSnapshot.MinimumTasksWhenOverBudget} tasks",
+                StringComparison.Ordinal));
+        Assert.DoesNotContain(
+            snapshot.Limitations,
+            limitation => limitation.Contains("is not sent to a reasoning provider", StringComparison.Ordinal));
+
+        // And nothing still claims the dropped categories are visible.
+        Assert.DoesNotContain(
+            snapshot.Limitations,
+            limitation => limitation.Contains("most recent sessions of", StringComparison.Ordinal));
+        Assert.DoesNotContain(
+            snapshot.Limitations,
+            limitation => limitation.Contains("most recent active context entries", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// The third reduction step, reached and survived. Sized so that five tasks fit and six do not,
+    /// because the interesting branch is the one where the floor produces a snapshot that can be
+    /// sent — testing only the refusal past the floor leaves it unproven that the floor ever helps.
+    /// </summary>
+    [Fact]
+    public async Task Reducing_to_the_task_floor_can_bring_a_snapshot_back_within_budget()
+    {
+        using var database = new TemporarySqliteDatabase();
+        await using var dbContext = await database.CreateContextAsync();
+
+        var project = await SeedProjectAsync(dbContext, "Verbose project", "Short purpose.");
+
+        // Eight tasks at this weight are over budget; the first five are not.
+        const int taskCount = ProjectSnapshot.MinimumTasksWhenOverBudget + 3;
+        const int reasonLength = 4_000;
+
+        var seeded = new List<DemiplaneTask>();
+        for (var index = 0; index < taskCount; index++)
+        {
+            var task = await SeedTaskAsync(dbContext, project, $"Task {index:D2}");
+            await SeedSessionAsync(dbContext, task, AgentSessionRole.Planner, AgentSessionStatus.Completed);
+            await SeedContextEntryAsync(dbContext, project, task: null, $"Entry {index:D2}", "Content.");
+
+            seeded.Add(TaskIn(
+                task.Id,
+                $"Task {index:D2}",
+                TaskDisplayState.Waiting,
+                TaskDisplayReasonCode.AwaitingWorkerPickup,
+                new string('r', reasonLength),
+                needsAttention: false));
+        }
+
+        var result = await CreateService(dbContext, new StubProjectionService(ProjectionFor(project, [.. seeded])))
+            .GetSnapshotAsync(project.Id);
+
+        // The floor produced a snapshot that fits, so it is available rather than refused.
+        Assert.Equal(ProjectSnapshotOutcome.Available, result.Outcome);
+        var snapshot = result.Snapshot!;
+
+        Assert.True(snapshot.IsWithinBudget);
+        Assert.True(snapshot.EstimatedCharacters <= ProjectSnapshot.MaxSnapshotCharacters);
+        Assert.Equal(ProjectSnapshot.MinimumTasksWhenOverBudget, snapshot.Tasks.Count);
+
+        // The first five in the Demiplane's order, not an arbitrary five.
+        Assert.Equal(
+            seeded.Take(ProjectSnapshot.MinimumTasksWhenOverBudget).Select(task => task.TaskId).ToList(),
+            snapshot.Tasks.Select(task => task.TaskId).ToList());
+
+        AssertLimitation(
+            snapshot,
+            $"Only the first {ProjectSnapshot.MinimumTasksWhenOverBudget} tasks were kept");
+
+        // Reduction stopped here: nothing claims the project was unsummarisable.
+        Assert.DoesNotContain(
+            snapshot.Limitations,
+            limitation => limitation.Contains("is not sent to a reasoning provider", StringComparison.Ordinal));
+
+        // And the count the snapshot reports is still the project's, not the five that survived.
+        Assert.Equal(taskCount, snapshot.Health.TotalTasks);
+    }
+
+    /// <summary>
+    /// Reduction decides whether a project is shown to a provider at all, and it decides on the
+    /// length of a string. The serializer that produced that length must therefore be the one the
+    /// provider boundary will use — two configurations that differ by a comma are two budgets.
+    /// </summary>
+    [Fact]
+    public async Task The_canonical_serializer_produces_the_representation_snapshot_size_is_measured_from()
+    {
+        using var database = new TemporarySqliteDatabase();
+        await using var dbContext = await database.CreateContextAsync();
+
+        var project = await SeedProjectAsync(dbContext, "Measured project");
+        var task = await SeedTaskAsync(dbContext, project, "Measured task");
+        await SeedSessionAsync(dbContext, task, AgentSessionRole.Planner, AgentSessionStatus.Completed);
+        await SeedContextEntryAsync(dbContext, project, task, "Entry", "Content.");
+
+        var snapshot = await RequireSnapshotAsync(dbContext, project.Id);
+
+        // The reported size is exactly the length of the canonical form of the measured snapshot.
+        var measured = ProjectSnapshotSerialization.Serialize(
+            ProjectSnapshotSerialization.ForMeasurement(snapshot));
+
+        Assert.Equal(measured.Length, snapshot.EstimatedCharacters);
+        Assert.Equal(snapshot.EstimatedCharacters, ProjectSnapshotSerialization.Measure(snapshot));
+
+        // The placeholders are what makes it deterministic, and they are the documented reason the
+        // estimate is not the byte-for-byte length of the snapshot as finally written.
+        Assert.Contains("\"EstimatedCharacters\":0", measured, StringComparison.Ordinal);
+        Assert.Contains("\"IsWithinBudget\":true", measured, StringComparison.Ordinal);
+        Assert.DoesNotContain(snapshot.ObservedAt.ToString("O"), measured, StringComparison.Ordinal);
+        Assert.True(ProjectSnapshotSerialization.Serialize(snapshot).Length >= snapshot.EstimatedCharacters);
+
+        // Compact, with enums as names: the contract a provider envelope will inherit.
+        Assert.False(ProjectSnapshotSerialization.Options.WriteIndented);
+        Assert.True(ProjectSnapshotSerialization.Options.IsReadOnly);
+        Assert.DoesNotContain('\n', measured);
+        Assert.Contains($"\"{ProjectStatus.Active}\"", measured, StringComparison.Ordinal);
+        Assert.Contains($"\"{AgentSessionRole.Planner}\"", measured, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -577,10 +762,10 @@ public sealed class ProjectSnapshotServiceTests
 
     private static readonly DateTime BaseTime = new(2026, 8, 5, 9, 0, 0, DateTimeKind.Utc);
 
-    private static readonly JsonSerializerOptions SerializerOptions = new() { WriteIndented = false };
-
+    // The production contract, not a second one: a leak these tests cannot see because the test
+    // serializer wrote the snapshot differently is a leak that ships.
     private static string Serialize(ProjectSnapshot snapshot) =>
-        JsonSerializer.Serialize(snapshot, SerializerOptions);
+        ProjectSnapshotSerialization.Serialize(snapshot);
 
     private static void AssertLimitation(ProjectSnapshot snapshot, string fragment) =>
         Assert.Contains(

@@ -80,6 +80,36 @@ public sealed class FamiliarSummaryWriterTests
         Assert.DoesNotContain("likely", summary.Render(), StringComparison.OrdinalIgnoreCase);
     }
 
+    /// <summary>
+    /// The health counts cover the whole project and the task list is capped, so a real snapshot
+    /// cannot name a blocked task while counting none. A hand-built one can, and the summary must
+    /// still not print "0 tasks are blocked." above the name of a blocked task — a sentence that
+    /// contradicts the line under it teaches a reader to stop believing the rest of the page.
+    /// </summary>
+    [Fact]
+    public void An_inconsistent_snapshot_never_states_a_blocked_count_that_contradicts_its_tasks()
+    {
+        var blocked = Task("Cloudflare tunnel", TaskDisplayState.Blocked, TaskDisplayReasonCode.NoWorkerForRole,
+            "Waiting for a worker that can run Implementer.",
+            needsAttention: false);
+
+        // Counts say nothing is blocked; the task list disagrees.
+        var snapshot = SnapshotWith(blocked) with
+        {
+            Health = new SnapshotHealth(1, [], NeedsAttentionCount: 0, HasActiveWork: false)
+        };
+
+        var summary = FamiliarSummaryWriter.Compose(snapshot);
+
+        Assert.Null(summary.BlockedStatement);
+        Assert.Empty(summary.BlockedDetails);
+
+        var rendered = summary.Render();
+        Assert.DoesNotContain("0 tasks are blocked", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("blocked", rendered, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Cloudflare tunnel", rendered, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void It_recommends_at_most_three_next_steps()
     {

@@ -80,13 +80,20 @@ public static class FamiliarSummaryWriter
             .Where(task => task.DisplayState == TaskDisplayState.Blocked)
             .ToList();
 
+        // The count is the whole project's; the named tasks are only those that fitted in the
+        // snapshot, so a count of zero can never coexist with a name that is worth printing. If it
+        // somehow does, the count is what this summary states and the names go with the sentence
+        // they belonged to — "0 tasks are blocked" above a blocked task is a sentence that teaches a
+        // reader to stop believing the rest.
+        var blockedStatement = DescribeBlocked(snapshot.Health.CountOf(TaskDisplayState.Blocked));
+
         return new FamiliarProjectSummary(
             DescribeProject(snapshot),
             DescribeActivity(snapshot),
             DescribeAttention(snapshot),
             Name(needingAttention),
-            DescribeBlocked(snapshot, blocked),
-            Name(blocked),
+            blockedStatement,
+            blockedStatement is null ? [] : Name(blocked),
             snapshot.Limitations,
             NextSteps(needingAttention));
     }
@@ -127,17 +134,10 @@ public static class FamiliarSummaryWriter
             : $"{Count(snapshot.Health.NeedsAttentionCount, "task")} "
               + $"{(snapshot.Health.NeedsAttentionCount == 1 ? "needs" : "need")} your attention.";
 
-    private static string? DescribeBlocked(ProjectSnapshot snapshot, IReadOnlyList<SnapshotTask> blocked)
-    {
-        var blockedCount = snapshot.Health.CountOf(TaskDisplayState.Blocked);
-
-        if (blockedCount == 0 && blocked.Count == 0)
-        {
-            return null;
-        }
-
-        return $"{Count(blockedCount, "task")} {(blockedCount == 1 ? "is" : "are")} blocked.";
-    }
+    private static string? DescribeBlocked(int blockedCount) =>
+        blockedCount == 0
+            ? null
+            : $"{Count(blockedCount, "task")} {(blockedCount == 1 ? "is" : "are")} blocked.";
 
     /// <summary>
     /// Names tasks with the reason the Demiplane recorded, quoted rather than paraphrased. A

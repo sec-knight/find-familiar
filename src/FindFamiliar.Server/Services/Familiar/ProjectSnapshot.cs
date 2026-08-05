@@ -116,6 +116,26 @@ public sealed record SnapshotWorkforce(
 ///    knows it does not contain. Every bound that actually bit produces a line, so "say what you do
 ///    not know" has something specific to say.
 /// </summary>
+/// <param name="EstimatedCharacters">
+/// The deterministic serialized-size estimate used for snapshot reduction, in characters of
+/// <see cref="ProjectSnapshotSerialization.Options"/>'s output.
+///
+/// It is not the byte-for-byte length of the snapshot as finally written. It is measured with
+/// <see cref="EstimatedCharacters"/>, <see cref="IsWithinBudget"/> and <see cref="ObservedAt"/> held
+/// at deterministic placeholders — the first two because they would otherwise depend on their own
+/// result, the third because a serialized instant varies in width with the clock and a budget that
+/// moves with the clock drops a section on one page load and keeps it on the next. A fully populated
+/// snapshot may therefore serialize a small, bounded number of characters longer than this, and
+/// <see cref="IsWithinBudget"/> may differ by one character at the boundary.
+///
+/// The supported invariant: <see cref="EstimatedCharacters"/> is the deterministic serialized-size
+/// estimate used for snapshot reduction. The final provider envelope must be serialized and checked
+/// again immediately before transmission.
+/// </param>
+/// <param name="IsWithinBudget">
+/// Whether <see cref="EstimatedCharacters"/> is within <see cref="MaxSnapshotCharacters"/>. Derived
+/// from the estimate above and carrying the same bounded imprecision.
+/// </param>
 public sealed record ProjectSnapshot(
     Guid ProjectId,
     string ProjectName,
@@ -151,7 +171,8 @@ public sealed record ProjectSnapshot(
     public const int MaxProjectPurposeCharacters = 1_000;
 
     /// <summary>
-    /// The whole-snapshot budget, in characters of its serialized form.
+    /// The whole-snapshot budget, in characters of its serialized form as produced by
+    /// <see cref="ProjectSnapshotSerialization"/>.
     ///
     /// Characters rather than tokens, because counting tokens means asking a provider, and this
     /// service must be buildable and testable with no provider configured at all.

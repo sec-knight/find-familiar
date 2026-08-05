@@ -1,5 +1,3 @@
-using System.Text.Json;
-using System.Text.Json.Serialization;
 using FindFamiliar.Server.Data;
 using FindFamiliar.Server.Domain;
 using FindFamiliar.Server.Services.Demiplane;
@@ -165,9 +163,13 @@ public sealed class ProjectSnapshotService(
 
         if (entries.Count > 0)
         {
+            // The count is of the entries this snapshot had, not of the project's active entries. Any
+            // beyond MaxContextEntries were never here to be omitted, and their absence is already
+            // stated by the cap's own limitation.
+            var omittedEntries = entries.Count;
             entries = [];
             omissions.Add(
-                $"Context entries were omitted: the snapshot exceeded its {ProjectSnapshot.MaxSnapshotCharacters:N0}-character budget.");
+                $"All {omittedEntries} context entries included before reduction were omitted: the snapshot exceeded its {ProjectSnapshot.MaxSnapshotCharacters:N0}-character budget.");
             snapshot = Compose(facts, tasks, sessions, entries, omissions, isWithinBudget: true);
 
             if (snapshot.EstimatedCharacters <= ProjectSnapshot.MaxSnapshotCharacters)
@@ -178,9 +180,11 @@ public sealed class ProjectSnapshotService(
 
         if (sessions.Count > 0)
         {
+            // As above: the sessions this snapshot held, not every session the project has ever run.
+            var omittedSessions = sessions.Count;
             sessions = [];
             omissions.Add(
-                $"Sessions were omitted: the snapshot exceeded its {ProjectSnapshot.MaxSnapshotCharacters:N0}-character budget.");
+                $"All {omittedSessions} recent sessions included before reduction were omitted: the snapshot exceeded its {ProjectSnapshot.MaxSnapshotCharacters:N0}-character budget.");
             snapshot = Compose(facts, tasks, sessions, entries, omissions, isWithinBudget: true);
 
             if (snapshot.EstimatedCharacters <= ProjectSnapshot.MaxSnapshotCharacters)
@@ -270,7 +274,7 @@ public sealed class ProjectSnapshotService(
             isWithinBudget,
             timeProvider.GetUtcNow());
 
-        return snapshot with { EstimatedCharacters = Measure(snapshot) };
+        return snapshot with { EstimatedCharacters = ProjectSnapshotSerialization.Measure(snapshot) };
     }
 
     /// <summary>
@@ -385,29 +389,6 @@ public sealed class ProjectSnapshotService(
             availability.Count(state => state == WorkerAvailability.Stale),
             availability.Count(state => state == WorkerAvailability.Offline));
     }
-
-    /// <summary>
-    /// The snapshot's serialized length.
-    ///
-    /// Measured with the two size fields and the observation time held at fixed placeholders. The
-    /// size fields would otherwise depend on their own result; the timestamp would make the same
-    /// project measure differently on two reads, because a serialized instant is one to seven
-    /// characters shorter when the clock lands on a round number. A budget that moves with the clock
-    /// is a budget that drops a section on one page load and keeps it on the next.
-    ///
-    /// Characters, not tokens: counting tokens requires a provider call, and this must work with
-    /// none configured.
-    /// </summary>
-    private static int Measure(ProjectSnapshot snapshot) =>
-        JsonSerializer.Serialize(
-            snapshot with { EstimatedCharacters = 0, IsWithinBudget = true, ObservedAt = default },
-            MeasurementOptions).Length;
-
-    private static readonly JsonSerializerOptions MeasurementOptions = new()
-    {
-        WriteIndented = false,
-        Converters = { new JsonStringEnumConverter() }
-    };
 
     /// <summary>
     /// The project-wide totals a snapshot needs in order to say what it left out, kept beside the
