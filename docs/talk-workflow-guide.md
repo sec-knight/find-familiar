@@ -4,6 +4,9 @@ The **Talk** page is the conversational way to start work. You describe what you
 language, review a structured proposal, and approve it. Approving creates one task and one Planner
 session, which an eligible worker then runs on its own.
 
+When a session finishes, Familiar proposes the next role and waits for you again. You approve each
+step; nothing chains itself.
+
 This guide covers what the workflow does, the guarantees it makes, and how to operate and
 troubleshoot it.
 
@@ -11,13 +14,16 @@ troubleshoot it.
 
 ## The one thing worth knowing
 
-**Nothing runs until you approve it.**
+**Nothing runs until you approve it — and that is true of every step, not just the first.**
 
 Describing work creates only a conversation, your message, and a proposal. No task exists. No
 session exists. No AI has been called. Your project's context is untouched.
 
 Approval is the single action that creates work — and it creates exactly one task and exactly one
 Planner session, no matter how many times the button is pressed.
+
+When that Planner finishes, Familiar works out what would come next and *offers* it. It never takes
+it. A worker that could run the next step will sit idle beside an unapproved one indefinitely.
 
 ---
 
@@ -43,7 +49,18 @@ One Ready task + one Started Planner session
     |
     v
 An eligible worker discovers and runs it automatically
+    |
+    v
+Familiar proposes the next step  ------> (still nothing started)
+    |
+    v
+Approve it, or decline it
+    |
+    v
+One Started session of that role — and the same gate again after it
 ```
+
+Every arrow into a running session passes through a decision you made.
 
 ### 1. Describe the work
 
@@ -103,6 +120,27 @@ for a session you started by hand.
 The conversation page shows the task and session status for convenience. It is display only — the
 conversation never decides what may run.
 
+### 6. Each next step is offered, never taken
+
+When the Planner finishes, Familiar works out what would come next — an Implementer session — and
+records it on the task page as a proposal. **It does not start it.** A worker that is fully capable of
+running that Implementer session will sit idle beside it for as long as you leave it undecided.
+
+Open the task, read the plan the Planner actually produced, then choose:
+
+- **Approve** starts exactly one Implementer session. A worker may claim it within seconds.
+- **Decline** ends that step permanently. Nothing is created and you are not asked again.
+
+The same happens after the Implementer: Familiar proposes a Reviewer, and waits. After the Reviewer
+it proposes nothing at all — what to do with a reviewed task is your decision, and completing a task
+is always a human action.
+
+If a session is cancelled, the proposal is to retry that same role.
+
+Approving an Implementer step is the one place Familiar changes files, and only where you configured
+that project for it. It works in a clean git worktree, and it cannot commit or push — you review the
+changes afterwards and decide what to keep.
+
 ---
 
 ## Guarantees
@@ -114,7 +152,10 @@ conversation never decides what may run.
 | Exactly one task and session | Concurrent or repeated approvals produce one task and one session |
 | All-or-nothing approval | A failure leaves no task, no session, and no context-revision drift |
 | Reviewed context only | If project context changed since you reviewed, approval stops |
-| Planner only | No Implementer or Reviewer session ever starts automatically |
+| No role starts itself | Every role after the first needs a separate, explicit approval |
+| One session at a time | A task can hold only one running session; the database enforces it |
+| Declining is final | A declined step is never proposed again |
+| Nothing completes a task | Task completion stays a human decision, always |
 | Works without JavaScript | Plain forms, POST/redirect/GET, standard antiforgery |
 
 ---
@@ -155,6 +196,27 @@ still links to the single task and session the first approval created.
 Your request was ambiguous — either several project names appeared, or none did and you have more
 than one active project. Choose the project in the revise form.
 
+### "This task already has a Started session, so another cannot begin."
+
+Something is already running on this task — usually a session that was approved but never captured
+or cancelled, often because no worker declares its role.
+
+**What to do:** open the task, capture the running session's result or cancel it, then approve the
+step again. The proposal is still valid and its button still works.
+
+### "That step was replaced by a newer one on this task."
+
+Another session finished on this task after the page you clicked from was rendered, so its proposal
+replaced the one you were looking at.
+
+**What to do:** reload the task and review the current proposal.
+
+### "This page was out of date, so nothing was changed."
+
+The step was decided or replaced between loading the page and clicking. Nothing was created.
+
+**What to do:** reload and review the current state.
+
 ---
 
 ## Operator notes
@@ -165,7 +227,38 @@ Sprint 08 adds no service, port, endpoint, credential or worker configuration. T
 version is unchanged. An existing, already-configured worker picks up approved sessions with no
 changes at all.
 
-### The migration
+Sprint 09 adds none either, but it does need two configuration decisions from you: which roles your
+workers declare in `capabilities`, and whether any project mapping opts in to `edit-worktree`. See
+the [worker runtime guide](worker-runtime-guide.md).
+
+### Back up before the first Sprint 09 start
+
+The `SessionHandoffsAndStartedSessionUniqueness` migration is the one migration in this project's
+history that changes existing data, and the application migrates at startup — so back up `App_Data`
+before starting a Sprint 09 build against a database you care about.
+
+It makes one Started session per task a rule the database enforces. ADR-0005 allowed the violating
+state and reported it in `/Work` as "Needs attention"; a unique index cannot be created over data
+that breaks it. So the migration repairs first: for every task holding more than one Started session
+it keeps the most recently started, cancels the others, writes the same cancellation context entry a
+manual cancellation would, and advances the project's context revision so the surviving session's
+assignment packet correctly warns that context moved.
+
+If `/Work` has never shown "Needs attention", this does nothing at all.
+
+`Down` drops the new table and index but **cannot un-cancel** those sessions. Their cancellation
+entries remain as the record. Full rollback means restoring the backup.
+
+### The Sprint 09 migration
+
+`SessionHandoffsAndStartedSessionUniqueness` adds one table:
+
+- `SessionHandoffs` — the proposed next step, its state, and a link to whatever approving it created
+
+and one index, `IX_AgentSessions_TaskId_Started`, which is what actually enforces one Started session
+per task across every path into the database.
+
+### The Sprint 08 migration
 
 One additive migration, `ConversationalWorkIntake`, creates three tables:
 
@@ -206,11 +299,28 @@ After approving, exactly one task and one session appear, and the project's cont
 advances by exactly two — one for task creation, one for the session start, the same as doing it by
 hand.
 
+The same check works for the handoff gate. After a session completes, a proposal exists but nothing
+has started:
+
+```sql
+SELECT Status, ProposedRole FROM SessionHandoffs WHERE TaskId = '<task>';
+-- Pending, Implementer
+
+SELECT COUNT(*) FROM AgentSessions WHERE TaskId = '<task>' AND Status = 'Started';
+-- 0, however long you wait, and whatever your workers can do
+```
+
+Recording a proposal moves no revision: consent is not context. Approving one advances the revision
+by exactly one, for the session start, because no task is created.
+
 ---
 
 ## Related
 
+- `docs/decisions/ADR-0010-human-gated-role-handoff.md` — why each role needs its own approval, how
+  that approval is fenced, and what would justify pre-authorizing a whole plan later
 - `docs/decisions/ADR-0009-conversational-work-intake.md` — why proposals are deterministic, how
   approval is fenced, and what would justify an AI-assisted generator later
 - `docs/decisions/ADR-0008-automatic-worker-pickup.md` — how an approved session is discovered
-- `docs/worker-runtime-guide.md` — configuring and running a worker
+- `docs/worker-runtime-guide.md` — configuring and running a worker, declaring capabilities, and
+  opting a project in to `edit-worktree`

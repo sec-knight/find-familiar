@@ -17,8 +17,14 @@ The explicit invocation still works and is unchanged — automatic pickup is an 
 a replacement.
 
 What the worker still does **not** do: it never starts a session, never chooses a role, never
-chains Planner to Implementer, and never completes a task. Those remain your decisions in the
-`/Work` queue.
+chains Planner to Implementer, and never completes a task. Those remain your decisions.
+
+Since Sprint 09 the chaining decision is one click instead of four. When a session finishes,
+Familiar records the step it proposes next and shows it on the task page; nothing runs until you
+approve it. The worker is not involved in that decision and cannot make it — a worker holding
+`Implementer` capability will sit idle next to an unapproved Implementer step. See the
+[Talk workflow guide](talk-workflow-guide.md) for the workflow and
+[ADR-0010](decisions/ADR-0010-human-gated-role-handoff.md) for why the gate is where it is.
 
 ## Prerequisites
 
@@ -69,12 +75,26 @@ Notes:
 
 - `workerKey` is your durable identity. Keep it stable across restarts — changing it registers a
   second worker.
-- `capabilities` lists the roles this worker will accept. Start with `["Planner"]`.
+- `capabilities` lists the roles this worker will accept. List every role you intend to approve
+  handoffs for — usually all three. **An approved step whose role no worker declares stays `Started`
+  and blocks its task**, because a task may hold only one Started session; you then have to notice it
+  in `/Work` and capture or cancel it by hand.
 - `projects` is the repository mapping. **Only** projects listed here are ever offered to this
   worker, and the paths never leave this machine — the worker sends project GUIDs to the server,
   never paths.
-- `mode` must be `read-only`. Automatic pickup refuses to start with `edit-worktree`; run those
-  explicitly, by hand, so a claimed session can never write to a repository unattended.
+- `mode` is `read-only` or `edit-worktree`, and defaults to `read-only`.
+
+  `edit-worktree` lets an **approved** Implementer session change files in that worktree. Opting a
+  project in does not make every session a writing one: Planner and Reviewer stay read-only even
+  here, because neither of their jobs is to change files.
+
+  Edit mode requires a **clean linked git worktree** and refuses to start otherwise, so a run never
+  mixes its changes with yours. It cannot commit or push: the adapter's tool list excludes `Bash`, so
+  there is no path to `git` from inside the model's turn. You review the working tree afterwards and
+  decide what to keep.
+
+  A session only ever writes if a human approved that specific step. If you would rather review a
+  plan before any file changes, leave the mapping `read-only` and run Implementer work explicitly.
 - The adapter still enforces its own containment (`allowedRoot`, worktree checks). The worker
   chooses *which* repository; the adapter still decides whether that repository is allowed.
 

@@ -86,7 +86,7 @@ public sealed class SessionHandoffService(FamiliarDbContext dbContext) : ISessio
     /// A completed Reviewer proposes nothing: the chain ends at a human decision about the task, which
     /// ADR-0003 and ADR-0005 both keep out of the software's hands.
     /// </summary>
-    internal static (AgentSessionRole Role, SessionHandoffKind Kind)? Propose(
+    public static (AgentSessionRole Role, SessionHandoffKind Kind)? Propose(
         AgentSessionRole role,
         AgentSessionStatus terminalStatus) =>
         terminalStatus switch

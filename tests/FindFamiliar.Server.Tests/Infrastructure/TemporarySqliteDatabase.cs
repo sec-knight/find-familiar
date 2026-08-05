@@ -1,5 +1,7 @@
 using FindFamiliar.Server.Data;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 
 namespace FindFamiliar.Server.Tests.Infrastructure;
 
@@ -23,12 +25,29 @@ public sealed class TemporarySqliteDatabase : IDisposable
 
     public async Task<FamiliarDbContext> CreateContextAsync()
     {
+        var dbContext = CreateUnmigratedContext();
+        await dbContext.Database.MigrateAsync();
+        return dbContext;
+    }
+
+    /// <summary>
+    /// A context migrated only as far as <paramref name="targetMigration"/>, for tests that need to
+    /// seed a database as it existed before a later migration and then apply it.
+    /// </summary>
+    public async Task<FamiliarDbContext> CreateContextAtMigrationAsync(string targetMigration)
+    {
+        var dbContext = CreateUnmigratedContext();
+        await dbContext.GetService<IMigrator>().MigrateAsync(targetMigration);
+        return dbContext;
+    }
+
+    private FamiliarDbContext CreateUnmigratedContext()
+    {
         var options = new DbContextOptionsBuilder<FamiliarDbContext>()
             .UseSqlite(ConnectionString)
             .Options;
 
         var dbContext = new FamiliarDbContext(options);
-        await dbContext.Database.MigrateAsync();
         _contexts.Add(dbContext);
         return dbContext;
     }

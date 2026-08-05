@@ -71,6 +71,20 @@ public sealed class ConversationalDispatchPickupTests(FindFamiliarWebApplication
         Assert.Single(sessions);
         Assert.Equal(AgentSessionRole.Planner, sessions[0].Role);
 
+        // What exists instead is a proposal awaiting a human. Sprint 09 turns the assertion above
+        // from "nothing happened" into "consent is pending": the next step is recorded, visible and
+        // inert until someone approves it. Staging it moved no revision, which is why the +3 above
+        // is still exact.
+        var handoff = await dbContext.SessionHandoffs
+            .AsNoTracking()
+            .SingleAsync(candidate => candidate.TaskId == taskId);
+        Assert.Equal(SessionHandoffStatus.Pending, handoff.Status);
+        Assert.Equal(SessionHandoffKind.NextRole, handoff.Kind);
+        Assert.Equal(AgentSessionRole.Implementer, handoff.ProposedRole);
+        Assert.Equal(sessionId, handoff.SourceSessionId);
+        Assert.Null(handoff.CreatedSessionId);
+        Assert.Null(handoff.DecidedUtc);
+
         // The conversation displays the result but was never consulted to authorize execution.
         var conversation = await dbContext.Conversations
             .AsNoTracking()

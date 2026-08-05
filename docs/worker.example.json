@@ -5,7 +5,8 @@
   "baseUrl": "https://familiar.example-tailnet.ts.net",
   "workerKey": "example-worker-key",
   "displayName": "Example worker",
-  "capabilities": ["Planner"],
+  "//capabilities": "Roles this worker accepts. An approved step whose role no worker declares stays Started and blocks its task until you capture or cancel it.",
+  "capabilities": ["Planner", "Implementer", "Reviewer"],
 
   "adapterPath": "/absolute/path/to/FindFamiliar.Adapter.Claude",
   "adapterArguments": [],
@@ -24,6 +25,8 @@
       "projectId": "00000000-0000-0000-0000-000000000000",
       "worktree": "/absolute/path/to/repository",
       "allowedRoot": "/absolute/path/to/parent-of-repository",
+
+      "//mode": "read-only, or edit-worktree to let approved Implementer sessions change files here. Even then only the Implementer writes; Planner and Reviewer stay read-only. edit-worktree needs a clean LINKED git worktree and refuses to start otherwise.",
       "mode": "read-only"
     }
   ]

@@ -93,6 +93,11 @@ dotnet FindFamiliar.Runner.dll \
   Inspect the diff yourself afterwards. Claude cannot commit or push; do not do it on its behalf
   without reviewing.
 
+Automatic pickup can also run `edit-worktree`, for approved Implementer sessions only, when a project
+mapping opts in. The rules above are unchanged and still enforced by the adapter — the worker chooses
+which repository and which mode, the adapter decides whether that is allowed. See the
+[worker runtime guide](worker-runtime-guide.md).
+
 ## Exit codes
 
 `0` success. Non-zero values are stable categories: configuration invalid, invocation invalid,

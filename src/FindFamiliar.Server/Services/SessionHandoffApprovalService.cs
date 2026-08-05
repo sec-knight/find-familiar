@@ -344,8 +344,11 @@ public sealed class SessionHandoffApprovalService(
     {
         for (var current = exception; current is not null; current = current.InnerException)
         {
+            // The extended code, not the primary one: SQLITE_CONSTRAINT (19) also covers foreign-key
+            // and check violations, which are ordinary failures rather than a lost race for the
+            // Started-session index.
             if (current is SqliteException sqlite &&
-                sqlite.SqliteErrorCode == SqliteConstraintErrorCode)
+                sqlite.SqliteExtendedErrorCode == SqliteConstraintUniqueErrorCode)
             {
                 return true;
             }
@@ -354,6 +357,6 @@ public sealed class SessionHandoffApprovalService(
         return false;
     }
 
-    /// <summary>SQLITE_CONSTRAINT.</summary>
-    private const int SqliteConstraintErrorCode = 19;
+    /// <summary>SQLITE_CONSTRAINT_UNIQUE.</summary>
+    private const int SqliteConstraintUniqueErrorCode = 2067;
 }
