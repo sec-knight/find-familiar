@@ -1,6 +1,7 @@
 using FindFamiliar.Server.Domain;
 using FindFamiliar.Server.Services;
 using FindFamiliar.Server.Tests.Infrastructure;
+using Microsoft.EntityFrameworkCore;
 using TaskStatus = FindFamiliar.Server.Domain.TaskStatus;
 
 namespace FindFamiliar.Server.Tests.Services;
@@ -35,6 +36,80 @@ public sealed class SessionCancellationServiceTests
 
         var refreshedProject = dbContext.Projects.Single(candidate => candidate.Id == project.Id);
         Assert.Equal(revisionBefore + 1, refreshedProject.ContextRevision);
+    }
+
+    /// <summary>
+    /// A cancelled attempt proposes the same role again (ADR-0010). The work queue already derived
+    /// this advisorily; recording it makes the suggestion actionable and auditable, and — because it
+    /// is a proposal — a flapping worker cannot turn it into a retry loop.
+    /// </summary>
+    [Theory]
+    [InlineData(AgentSessionRole.Planner)]
+    [InlineData(AgentSessionRole.Implementer)]
+    [InlineData(AgentSessionRole.Reviewer)]
+    public async Task Cancellation_proposes_a_retry_of_the_same_role(AgentSessionRole role)
+    {
+        using var database = new TemporarySqliteDatabase();
+        await using var dbContext = await database.CreateContextAsync();
+        var (project, task, session) = await SeedStartedSessionAsync(dbContext, role);
+        var revisionBefore = project.ContextRevision;
+
+        var service = new SessionCancellationService(dbContext, new SessionHandoffService(dbContext));
+        var outcome = await service.CancelAsync(
+            new SessionCancellationRequest(task.Id, session.Id, "Adapter failed before submission."));
+
+        Assert.Equal(SessionCancellationStatus.Success, outcome.Status);
+
+        var handoff = await dbContext.SessionHandoffs.AsNoTracking().SingleAsync(h => h.TaskId == task.Id);
+        Assert.Equal(SessionHandoffStatus.Pending, handoff.Status);
+        Assert.Equal(SessionHandoffKind.RetrySameRole, handoff.Kind);
+        Assert.Equal(role, handoff.ProposedRole);
+        Assert.Equal(AgentSessionStatus.Cancelled, handoff.SourceOutcome);
+
+        // Cancellation's own effects are unchanged: one entry, one increment.
+        Assert.Single(await dbContext.ContextEntries.AsNoTracking()
+            .Where(entry => entry.SourceSessionId == session.Id).ToListAsync());
+        Assert.Equal(
+            revisionBefore + 1,
+            (await dbContext.Projects.AsNoTracking().SingleAsync(p => p.Id == project.Id)).ContextRevision);
+    }
+
+    /// <summary>
+    /// A newer terminal event replaces the decision point. Only one proposal per task is ever
+    /// actionable, which is what makes concurrent approval a race for a single row.
+    /// </summary>
+    [Fact]
+    public async Task A_newer_terminal_event_supersedes_the_pending_proposal()
+    {
+        using var database = new TemporarySqliteDatabase();
+        await using var dbContext = await database.CreateContextAsync();
+
+        var (_, task, first) = await SeedStartedSessionAsync(dbContext, AgentSessionRole.Planner);
+
+        var service = new SessionCancellationService(dbContext, new SessionHandoffService(dbContext));
+        await service.CancelAsync(new SessionCancellationRequest(task.Id, first.Id, "First attempt abandoned."));
+
+        var second = new AgentSession
+        {
+            Id = Guid.NewGuid(),
+            TaskId = task.Id,
+            Role = AgentSessionRole.Planner,
+            Status = AgentSessionStatus.Started,
+            ContextRevisionRead = 0,
+            StartedUtc = DateTime.UtcNow
+        };
+        dbContext.AgentSessions.Add(second);
+        await dbContext.SaveChangesAsync();
+
+        await service.CancelAsync(new SessionCancellationRequest(task.Id, second.Id, "Second attempt abandoned."));
+
+        var handoffs = await dbContext.SessionHandoffs.AsNoTracking()
+            .Where(h => h.TaskId == task.Id).ToListAsync();
+
+        Assert.Equal(2, handoffs.Count);
+        Assert.Single(handoffs, h => h.Status == SessionHandoffStatus.Pending);
+        Assert.Single(handoffs, h => h.Status == SessionHandoffStatus.Superseded);
+        Assert.Equal(second.Id, handoffs.Single(h => h.Status == SessionHandoffStatus.Pending).SourceSessionId);
     }
 
     [Theory]

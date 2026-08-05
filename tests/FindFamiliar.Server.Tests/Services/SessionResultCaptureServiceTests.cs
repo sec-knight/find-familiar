@@ -54,6 +54,91 @@ public sealed class SessionResultCaptureServiceTests
         Assert.Equal(revisionBefore + 1, refreshedProject.ContextRevision);
     }
 
+    /// <summary>
+    /// Capture also stages the proposed next step (ADR-0010). These assertions live here rather than
+    /// beside the handoff service because the property that matters is that adding staging did not
+    /// change capture: still Success, still four entries, still exactly one revision increment.
+    /// </summary>
+    [Theory]
+    [InlineData(AgentSessionRole.Planner, AgentSessionRole.Implementer)]
+    [InlineData(AgentSessionRole.Implementer, AgentSessionRole.Reviewer)]
+    public async Task Capture_stages_the_next_role_without_changing_its_own_effects(
+        AgentSessionRole role,
+        AgentSessionRole expectedProposal)
+    {
+        using var database = new TemporarySqliteDatabase();
+        await using var dbContext = await database.CreateContextAsync();
+
+        var (project, task, session) = await SeedStartedSessionAsync(dbContext, role);
+        var revisionBefore = project.ContextRevision;
+
+        var outcome = await CaptureAsync(dbContext, task.Id, session.Id);
+        Assert.Equal(SessionResultCaptureStatus.Success, outcome.Status);
+
+        var handoff = await dbContext.SessionHandoffs.AsNoTracking().SingleAsync(h => h.TaskId == task.Id);
+        Assert.Equal(SessionHandoffStatus.Pending, handoff.Status);
+        Assert.Equal(SessionHandoffKind.NextRole, handoff.Kind);
+        Assert.Equal(expectedProposal, handoff.ProposedRole);
+        Assert.Equal(session.Id, handoff.SourceSessionId);
+        Assert.Equal(AgentSessionStatus.Completed, handoff.SourceOutcome);
+        Assert.Null(handoff.CreatedSessionId);
+
+        // Staging a proposal creates no work and moves no revision: consent is not context.
+        Assert.Equal(4, await dbContext.ContextEntries.CountAsync(entry => entry.SourceSessionId == session.Id));
+        Assert.Equal(
+            revisionBefore + 1,
+            (await dbContext.Projects.AsNoTracking().SingleAsync(p => p.Id == project.Id)).ContextRevision);
+        Assert.Equal(handoff.ObservedContextRevision, revisionBefore + 1);
+    }
+
+    /// <summary>
+    /// The chain stops after a review. What happens to a reviewed task is a decision about the task,
+    /// which ADR-0003 and ADR-0005 both keep with the human.
+    /// </summary>
+    [Fact]
+    public async Task Capturing_a_reviewer_result_proposes_nothing()
+    {
+        using var database = new TemporarySqliteDatabase();
+        await using var dbContext = await database.CreateContextAsync();
+
+        var (_, task, session) = await SeedStartedSessionAsync(dbContext, AgentSessionRole.Reviewer);
+
+        Assert.Equal(SessionResultCaptureStatus.Success, (await CaptureAsync(dbContext, task.Id, session.Id)).Status);
+
+        Assert.Empty(await dbContext.SessionHandoffs.AsNoTracking().Where(h => h.TaskId == task.Id).ToListAsync());
+    }
+
+    [Fact]
+    public async Task A_replayed_capture_stages_no_second_handoff()
+    {
+        using var database = new TemporarySqliteDatabase();
+        await using var dbContext = await database.CreateContextAsync();
+
+        var (_, task, session) = await SeedStartedSessionAsync(dbContext, AgentSessionRole.Planner);
+
+        Assert.Equal(SessionResultCaptureStatus.Success, (await CaptureAsync(dbContext, task.Id, session.Id)).Status);
+
+        // The session is no longer Started, so the conditional transition rejects the replay before
+        // staging is ever reached.
+        Assert.Equal(SessionResultCaptureStatus.NotStarted, (await CaptureAsync(dbContext, task.Id, session.Id)).Status);
+
+        Assert.Single(await dbContext.SessionHandoffs.AsNoTracking().Where(h => h.TaskId == task.Id).ToListAsync());
+    }
+
+    private static Task<SessionResultCaptureOutcome> CaptureAsync(
+        Data.FamiliarDbContext dbContext,
+        Guid taskId,
+        Guid sessionId) =>
+        new SessionResultCaptureService(dbContext, new SessionHandoffService(dbContext)).CaptureAsync(
+            new SessionResultCaptureRequest(
+                taskId,
+                sessionId,
+                "The exact prompt.",
+                "A bounded raw output excerpt.",
+                "A concise summary.",
+                "Artifact title",
+                "Artifact content."));
+
     [Fact]
     public async Task Content_fields_are_trimmed()
     {
