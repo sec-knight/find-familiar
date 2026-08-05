@@ -21,6 +21,8 @@ public sealed class FamiliarDbContext(DbContextOptions<FamiliarDbContext> option
 
     public DbSet<WorkProposal> WorkProposals => Set<WorkProposal>();
 
+    public DbSet<SessionHandoff> SessionHandoffs => Set<SessionHandoff>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.Entity<FamiliarProject>(entity =>
@@ -72,6 +74,22 @@ public sealed class FamiliarDbContext(DbContextOptions<FamiliarDbContext> option
             entity.HasIndex(session => new { session.TaskId, session.StartedUtc });
             // Supports the claim scan, which filters Started sessions by remaining lease.
             entity.HasIndex(session => new { session.Status, session.ClaimExpiresUtc });
+
+            // At most one Started session per task, enforced by the database (ADR-0010).
+            //
+            // ADR-0005 deliberately deferred this: with a single human command path, an
+            // authoritative read at command time was enough. Sprint 09 adds a second concurrent
+            // session-creation writer — handoff approval — so the invariant now needs enforcement
+            // that does not depend on a caller remembering to check. This index is authoritative
+            // for the invariant across every write path, including direct SQL.
+            //
+            // The filter matches the stored TEXT because Status uses HasConversion<string>() above.
+            // If that conversion is ever removed, this filter silently stops matching and the
+            // invariant silently disappears — AgentSessionStartedUniqueIndexTests guards against it.
+            entity.HasIndex(session => session.TaskId)
+                .IsUnique()
+                .HasFilter("\"Status\" = 'Started'")
+                .HasDatabaseName("IX_AgentSessions_TaskId_Started");
             entity.HasMany(session => session.ContextEntries)
                 .WithOne(entry => entry.SourceSession)
                 .HasForeignKey(entry => entry.SourceSessionId)
@@ -157,6 +175,52 @@ public sealed class FamiliarDbContext(DbContextOptions<FamiliarDbContext> option
             entity.HasOne(proposal => proposal.Project)
                 .WithMany()
                 .HasForeignKey(proposal => proposal.ProjectId)
+                .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<SessionHandoff>(entity =>
+        {
+            entity.ToTable("SessionHandoffs");
+            entity.HasKey(handoff => handoff.Id);
+            entity.Property(handoff => handoff.SourceOutcome).HasConversion<string>().HasMaxLength(32);
+            entity.Property(handoff => handoff.ProposedRole).HasConversion<string>().HasMaxLength(32);
+            entity.Property(handoff => handoff.Kind).HasConversion<string>().HasMaxLength(32);
+            entity.Property(handoff => handoff.Status).HasConversion<string>().HasMaxLength(32);
+
+            // One handoff per terminal session. A replayed result capture is already rejected by the
+            // conditional Started transition; this is the database-level belt to that suspenders.
+            entity.HasIndex(handoff => handoff.SourceSessionId).IsUnique();
+
+            // At most one actionable handoff per task. This is what makes concurrent approval
+            // trivially safe: contenders can only ever race for the same row, never for two rows
+            // that would each start a session.
+            entity.HasIndex(handoff => handoff.TaskId)
+                .IsUnique()
+                .HasFilter("\"Status\" = 'Pending'")
+                .HasDatabaseName("IX_SessionHandoffs_TaskId_Pending");
+
+            // One session was created by at most one handoff, mirroring Conversation.ApprovedSessionId.
+            entity.HasIndex(handoff => handoff.CreatedSessionId)
+                .IsUnique()
+                .HasFilter("\"CreatedSessionId\" IS NOT NULL");
+
+            entity.HasOne(handoff => handoff.Task)
+                .WithMany()
+                .HasForeignKey(handoff => handoff.TaskId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            // Cascade, not Restrict: deleting a task cascades to its sessions, and a Restrict here
+            // would abort that cascade if SQLite removed the session rows first.
+            entity.HasOne(handoff => handoff.SourceSession)
+                .WithMany()
+                .HasForeignKey(handoff => handoff.SourceSessionId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            // Restrict: a session a handoff claims to have created must never be deleted out from
+            // under that claim.
+            entity.HasOne(handoff => handoff.CreatedSession)
+                .WithMany()
+                .HasForeignKey(handoff => handoff.CreatedSessionId)
                 .OnDelete(DeleteBehavior.Restrict);
         });
 

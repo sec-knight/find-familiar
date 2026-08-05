@@ -504,3 +504,8 @@ $RECYCLE.BIN/
 worker.json
 worker.*.json
 !docs/worker.example.json
+
+# Sprint packages are handed to the session from outside the repository; the durable
+# record of a sprint is its ADR and, when user-facing, a docs/*-guide.md.
+SPRINT-*.md
+USER-GUIDE.md
