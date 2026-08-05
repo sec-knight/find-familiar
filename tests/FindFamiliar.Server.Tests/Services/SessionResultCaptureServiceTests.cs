@@ -23,7 +23,7 @@ public sealed class SessionResultCaptureServiceTests
         var (project, task, session) = await SeedStartedSessionAsync(dbContext, role);
         var revisionBefore = project.ContextRevision;
 
-        var service = new SessionResultCaptureService(dbContext);
+        var service = new SessionResultCaptureService(dbContext, new SessionHandoffService(dbContext));
         var outcome = await service.CaptureAsync(new SessionResultCaptureRequest(
             task.Id,
             session.Id,
@@ -61,7 +61,7 @@ public sealed class SessionResultCaptureServiceTests
         await using var dbContext = await database.CreateContextAsync();
         var (_, task, session) = await SeedStartedSessionAsync(dbContext, AgentSessionRole.Planner);
 
-        var service = new SessionResultCaptureService(dbContext);
+        var service = new SessionResultCaptureService(dbContext, new SessionHandoffService(dbContext));
         await service.CaptureAsync(new SessionResultCaptureRequest(
             task.Id,
             session.Id,
@@ -91,7 +91,7 @@ public sealed class SessionResultCaptureServiceTests
         var (project, task, session) = await SeedStartedSessionAsync(dbContext, AgentSessionRole.Planner);
         var revisionBefore = project.ContextRevision;
 
-        var service = new SessionResultCaptureService(dbContext);
+        var service = new SessionResultCaptureService(dbContext, new SessionHandoffService(dbContext));
         var outcome = await service.CaptureAsync(
             new SessionResultCaptureRequest(task.Id, session.Id, prompt, rawOutput, summary, artifactTitle, artifactContent));
 
@@ -112,7 +112,7 @@ public sealed class SessionResultCaptureServiceTests
         await using var dbContext = await database.CreateContextAsync();
         var (_, task, session) = await SeedStartedSessionAsync(dbContext, AgentSessionRole.Planner);
 
-        var service = new SessionResultCaptureService(dbContext);
+        var service = new SessionResultCaptureService(dbContext, new SessionHandoffService(dbContext));
         var outcome = await service.CaptureAsync(new SessionResultCaptureRequest(
             task.Id,
             session.Id,
@@ -134,7 +134,7 @@ public sealed class SessionResultCaptureServiceTests
         await using var dbContext = await database.CreateContextAsync();
         var (_, task, _) = await SeedStartedSessionAsync(dbContext, AgentSessionRole.Planner);
 
-        var service = new SessionResultCaptureService(dbContext);
+        var service = new SessionResultCaptureService(dbContext, new SessionHandoffService(dbContext));
         var outcome = await service.CaptureAsync(new SessionResultCaptureRequest(
             task.Id, Guid.NewGuid(), "Prompt.", "Raw output.", "Summary.", "Title", "Content."));
 
@@ -161,7 +161,7 @@ public sealed class SessionResultCaptureServiceTests
         dbContext.Tasks.Add(siblingTask);
         await dbContext.SaveChangesAsync();
 
-        var service = new SessionResultCaptureService(dbContext);
+        var service = new SessionResultCaptureService(dbContext, new SessionHandoffService(dbContext));
         var outcome = await service.CaptureAsync(new SessionResultCaptureRequest(
             siblingTask.Id, session.Id, "Prompt.", "Raw output.", "Summary.", "Title", "Content."));
 
@@ -181,7 +181,7 @@ public sealed class SessionResultCaptureServiceTests
         await dbContext.SaveChangesAsync();
         var revisionBefore = project.ContextRevision;
 
-        var service = new SessionResultCaptureService(dbContext);
+        var service = new SessionResultCaptureService(dbContext, new SessionHandoffService(dbContext));
         var outcome = await service.CaptureAsync(new SessionResultCaptureRequest(
             task.Id, session.Id, "Prompt.", "Raw output.", "Summary.", "Title", "Content."));
 
@@ -198,7 +198,7 @@ public sealed class SessionResultCaptureServiceTests
         await using var dbContext = await database.CreateContextAsync();
         var (project, task, session) = await SeedStartedSessionAsync(dbContext, AgentSessionRole.Planner);
 
-        var service = new SessionResultCaptureService(dbContext);
+        var service = new SessionResultCaptureService(dbContext, new SessionHandoffService(dbContext));
         var first = await service.CaptureAsync(new SessionResultCaptureRequest(
             task.Id, session.Id, "Prompt.", "Raw output.", "Summary.", "Title", "Content."));
         Assert.Equal(SessionResultCaptureStatus.Success, first.Status);
@@ -225,7 +225,7 @@ public sealed class SessionResultCaptureServiceTests
         session.ClaimExpiresUtc = DateTime.UtcNow.AddMinutes(5);
         await dbContext.SaveChangesAsync();
 
-        var service = new SessionResultCaptureService(dbContext);
+        var service = new SessionResultCaptureService(dbContext, new SessionHandoffService(dbContext));
         var stale = await service.CaptureAsync(new SessionResultCaptureRequest(
             task.Id,
             session.Id,
@@ -275,7 +275,7 @@ public sealed class SessionResultCaptureServiceTests
         async Task<SessionResultCaptureOutcome> CaptureAsync(Data.FamiliarDbContext context, string title)
         {
             await barrier.Task;
-            return await new SessionResultCaptureService(context).CaptureAsync(new SessionResultCaptureRequest(
+            return await new SessionResultCaptureService(context, new SessionHandoffService(context)).CaptureAsync(new SessionResultCaptureRequest(
                 task.Id,
                 session.Id,
                 "Prompt.",

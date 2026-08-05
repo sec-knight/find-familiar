@@ -14,9 +14,16 @@ public sealed class DetailsModel(
     IContextProjectionService contextProjection,
     ISessionResultCaptureService resultCapture,
     ISessionCancellationService cancellation,
-    IWorkflowDispatchService workflowDispatch) : PageModel
+    IWorkflowDispatchService workflowDispatch,
+    ISessionHandoffApprovalService handoffApproval) : PageModel
 {
     public TaskContextDocument? Document { get; private set; }
+
+    /// <summary>
+    /// The task's current proposed next step, if a human has not decided on it yet. Display state
+    /// only: nothing about execution consults it.
+    /// </summary>
+    public SessionHandoff? PendingHandoff { get; private set; }
 
     public IReadOnlyList<AgentSessionDocument> StartedSessions =>
         Document?.Sessions.Where(session => session.Status == AgentSessionStatus.Started).ToList()
@@ -42,6 +49,9 @@ public sealed class DetailsModel(
 
     [BindProperty]
     public TaskStatus NewTaskStatus { get; set; }
+
+    [BindProperty]
+    public SessionHandoffDecisionInput HandoffDecision { get; set; } = new();
 
     public async Task<IActionResult> OnGetAsync(Guid id, Guid? sessionId, CancellationToken cancellationToken)
     {
@@ -77,36 +87,104 @@ public sealed class DetailsModel(
             return Page();
         }
 
-        var task = await dbContext.Tasks
-            .Include(candidate => candidate.Project)
-            .SingleOrDefaultAsync(candidate => candidate.Id == id, cancellationToken);
+        var outcome = await workflowDispatch.StartSessionForTaskAsync(
+            id,
+            NewSession.Role,
+            NewSession.Provider,
+            NewSession.ExternalSessionReference,
+            DateTime.UtcNow,
+            cancellationToken);
 
-        if (task is null)
+        switch (outcome.Status)
+        {
+            case StartSessionStatus.Started:
+                var session = outcome.Session!;
+                TempData["StatusMessage"] = $"Started a {session.Role.ToString().ToLowerInvariant()} session. Copy the generated Markdown into a new AI conversation.";
+                return RedirectToPage(new { id, sessionId = session.Id });
+
+            case StartSessionStatus.NotFound:
+                return NotFound();
+
+            case StartSessionStatus.AlreadyStarted:
+            default:
+                ModelState.AddModelError(
+                    "NewSession.Role",
+                    "This task already has a Started session. Capture its result or cancel it before starting another.");
+                await LoadContextAsync(id, cancellationToken);
+                return Page();
+        }
+    }
+
+    public async Task<IActionResult> OnPostApproveHandoffAsync(Guid id, CancellationToken cancellationToken)
+    {
+        var outcome = await handoffApproval.ApproveAsync(
+            new SessionHandoffDecisionRequest(HandoffDecision.HandoffId, HandoffDecision.ExpectedConcurrencyToken),
+            cancellationToken);
+
+        if (outcome.Status == SessionHandoffDecisionStatus.NotFound)
         {
             return NotFound();
         }
 
-        if (await workflowDispatch.HasStartedSessionAsync(id, cancellationToken))
+        TempData["StatusMessage"] = DescribeDecision(outcome, approving: true);
+
+        return outcome.Status == SessionHandoffDecisionStatus.Approved
+            ? RedirectToPage(new { id, sessionId = outcome.SessionId })
+            : RedirectToPage(new { id });
+    }
+
+    public async Task<IActionResult> OnPostDeclineHandoffAsync(Guid id, CancellationToken cancellationToken)
+    {
+        var outcome = await handoffApproval.DeclineAsync(
+            new SessionHandoffDecisionRequest(HandoffDecision.HandoffId, HandoffDecision.ExpectedConcurrencyToken),
+            cancellationToken);
+
+        if (outcome.Status == SessionHandoffDecisionStatus.NotFound)
         {
-            ModelState.AddModelError(
-                "NewSession.Role",
-                "This task already has a Started session. Capture its result or cancel it before starting another.");
-            await LoadContextAsync(id, cancellationToken);
-            return Page();
+            return NotFound();
         }
 
-        var session = workflowDispatch.StartSession(
-            task,
-            task.Project,
-            NewSession.Role,
-            NewSession.Provider,
-            NewSession.ExternalSessionReference,
-            DateTime.UtcNow);
+        TempData["StatusMessage"] = DescribeDecision(outcome, approving: false);
+        return RedirectToPage(new { id });
+    }
 
-        await dbContext.SaveChangesAsync(cancellationToken);
+    private static string DescribeDecision(SessionHandoffDecisionOutcome outcome, bool approving)
+    {
+        var role = outcome.Role?.ToString().ToLowerInvariant() ?? "next";
 
-        TempData["StatusMessage"] = $"Started a {session.Role.ToString().ToLowerInvariant()} session. Copy the generated Markdown into a new AI conversation.";
-        return RedirectToPage(new { id, sessionId = session.Id });
+        return outcome.Status switch
+        {
+            SessionHandoffDecisionStatus.Approved =>
+                $"Started a {role} session. A worker may claim it automatically.",
+
+            SessionHandoffDecisionStatus.Declined =>
+                $"Declined the {role} step. Nothing was started.",
+
+            SessionHandoffDecisionStatus.AlreadyApproved =>
+                $"That {role} step was already approved, so nothing new was started.",
+
+            SessionHandoffDecisionStatus.AlreadyDeclined =>
+                $"That {role} step was already declined.",
+
+            SessionHandoffDecisionStatus.Superseded =>
+                "That step was replaced by a newer one on this task. Review the current proposal.",
+
+            SessionHandoffDecisionStatus.StaleHandoff =>
+                "This page was out of date, so nothing was changed. Review the current proposal and try again.",
+
+            SessionHandoffDecisionStatus.SessionAlreadyStarted =>
+                "This task already has a Started session, so another cannot begin. Capture or cancel it first.",
+
+            SessionHandoffDecisionStatus.TaskClosed =>
+                "This task is Completed, so no further work was started.",
+
+            SessionHandoffDecisionStatus.ProjectInactive =>
+                "This project is no longer active, so nothing was started.",
+
+            _ => approving
+                ? "Another change reached this step first, so nothing was started."
+                : "Another change reached this step first, so nothing was declined."
+        };
     }
 
     public async Task<IActionResult> OnPostCreateContextEntryAsync(Guid id, CancellationToken cancellationToken)
@@ -278,8 +356,30 @@ public sealed class DetailsModel(
     private async Task<bool> LoadContextAsync(Guid id, CancellationToken cancellationToken)
     {
         Document = await contextProjection.GetTaskContextAsync(id, cancellationToken);
-        return Document is not null;
+        if (Document is null)
+        {
+            return false;
+        }
+
+        PendingHandoff = await dbContext.SessionHandoffs
+            .AsNoTracking()
+            .SingleOrDefaultAsync(
+                handoff => handoff.TaskId == id && handoff.Status == SessionHandoffStatus.Pending,
+                cancellationToken);
+
+        return true;
     }
+}
+
+/// <summary>
+/// Only the identifier and the reviewed token are bound. Status, kind, proposed role, created session
+/// and timestamps are all derived server-side, so a crafted post cannot set them.
+/// </summary>
+public sealed class SessionHandoffDecisionInput
+{
+    public Guid HandoffId { get; set; }
+
+    public Guid ExpectedConcurrencyToken { get; set; }
 }
 
 public sealed class NewAgentSessionInput

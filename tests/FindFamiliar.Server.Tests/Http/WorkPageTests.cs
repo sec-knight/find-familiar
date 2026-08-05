@@ -12,37 +12,16 @@ namespace FindFamiliar.Server.Tests.Http;
 public sealed class WorkPageTests(FindFamiliarWebApplicationFactory factory)
 {
     [Fact]
-    public async Task Work_queue_lists_task_with_continue_link_and_flags_multiple_Started_sessions()
+    /// <summary>
+    /// The multiple-Started-sessions alert this test used to cover is no longer reachable through the
+    /// application: IX_AgentSessions_TaskId_Started forbids the state. NeedsAttention survives as a
+    /// corruption detector for a database restored from before that migration, and its derivation is
+    /// proved in WorkQueueServiceTests on an isolated database where the index can safely be dropped.
+    /// </summary>
+    public async Task Work_queue_lists_task_with_continue_link()
     {
         var uniqueMarker = Guid.NewGuid().ToString("N");
         var (project, task, session) = await SeedTaskWithStartedSessionAsync(uniqueMarker);
-
-        var alertProject = await SeedProjectAsync($"Alert project {uniqueMarker}");
-        var alertTask = await SeedTaskAsync(alertProject.Id, $"Alert task {uniqueMarker}");
-        using (var scope = factory.Services.CreateScope())
-        {
-            var dbContext = scope.ServiceProvider.GetRequiredService<FamiliarDbContext>();
-            dbContext.AgentSessions.AddRange(
-                new AgentSession
-                {
-                    Id = Guid.NewGuid(),
-                    TaskId = alertTask.Id,
-                    Role = AgentSessionRole.Planner,
-                    Status = AgentSessionStatus.Started,
-                    ContextRevisionRead = 0,
-                    StartedUtc = DateTime.UtcNow.AddMinutes(-10)
-                },
-                new AgentSession
-                {
-                    Id = Guid.NewGuid(),
-                    TaskId = alertTask.Id,
-                    Role = AgentSessionRole.Reviewer,
-                    Status = AgentSessionStatus.Started,
-                    ContextRevisionRead = 0,
-                    StartedUtc = DateTime.UtcNow.AddMinutes(-5)
-                });
-            await dbContext.SaveChangesAsync();
-        }
 
         using var client = factory.CreateClient();
         var response = await client.GetAsync("/Work");
@@ -51,8 +30,6 @@ public sealed class WorkPageTests(FindFamiliarWebApplicationFactory factory)
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.Contains(task.Title, html);
         Assert.Contains($"sessionId={session.Id}", html);
-        Assert.Contains(alertTask.Title, html);
-        Assert.Contains("Needs attention", html);
     }
 
     [Fact]

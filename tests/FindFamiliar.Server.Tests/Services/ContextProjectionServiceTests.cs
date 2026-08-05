@@ -28,7 +28,7 @@ public sealed class ContextProjectionServiceTests
         var siblingTaskEntry = NewEntry(targetProject.Id, siblingTask.Id, ContextEntryState.Active, "Sibling task entry", now.AddMinutes(-10));
         var otherProjectEntry = NewEntry(otherProject.Id, taskId: null, ContextEntryState.Active, "Other project entry", now.AddMinutes(-5));
 
-        var earlierSession = NewSession(targetTask.Id, AgentSessionRole.Planner, now.AddHours(-2));
+        var earlierSession = NewSession(targetTask.Id, AgentSessionRole.Planner, now.AddHours(-2), AgentSessionStatus.Completed);
         var laterSession = NewSession(targetTask.Id, AgentSessionRole.Implementer, now.AddHours(-1));
         var siblingTaskSession = NewSession(siblingTask.Id, AgentSessionRole.Reviewer, now.AddHours(-1));
 
@@ -71,7 +71,7 @@ public sealed class ContextProjectionServiceTests
         var earlierEntry = NewEntry(project.Id, task.Id, ContextEntryState.Active, "Earlier entry", now.AddMinutes(-10));
 
         var laterSession = NewSession(task.Id, AgentSessionRole.Reviewer, now.AddMinutes(-1));
-        var earlierSession = NewSession(task.Id, AgentSessionRole.Planner, now.AddMinutes(-10));
+        var earlierSession = NewSession(task.Id, AgentSessionRole.Planner, now.AddMinutes(-10), AgentSessionStatus.Completed);
 
         dbContext.AddRange(project, task, laterEntry, earlierEntry, laterSession, earlierSession);
         await dbContext.SaveChangesAsync();
@@ -129,13 +129,18 @@ public sealed class ContextProjectionServiceTests
         CreatedUtc = createdUtc
     };
 
-    private static AgentSession NewSession(Guid taskId, AgentSessionRole role, DateTime startedUtc) => new()
+    private static AgentSession NewSession(
+        Guid taskId,
+        AgentSessionRole role,
+        DateTime startedUtc,
+        AgentSessionStatus status = AgentSessionStatus.Started) => new()
     {
         Id = Guid.NewGuid(),
         TaskId = taskId,
         Role = role,
-        Status = AgentSessionStatus.Started,
+        Status = status,
         ContextRevisionRead = 0,
-        StartedUtc = startedUtc
+        StartedUtc = startedUtc,
+        CompletedUtc = status == AgentSessionStatus.Started ? null : startedUtc.AddMinutes(1)
     };
 }

@@ -36,6 +36,8 @@ builder.Services.AddScoped<IConversationIntakeService, ConversationIntakeService
 builder.Services.AddScoped<IConversationDetailsService, ConversationDetailsService>();
 builder.Services.AddScoped<IWorkProposalService, WorkProposalService>();
 builder.Services.AddScoped<IWorkApprovalService, WorkApprovalService>();
+builder.Services.AddScoped<ISessionHandoffService, SessionHandoffService>();
+builder.Services.AddScoped<ISessionHandoffApprovalService, SessionHandoffApprovalService>();
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.Configure<RunnerBridgeOptions>(builder.Configuration.GetSection(RunnerBridgeOptions.SectionName));
 

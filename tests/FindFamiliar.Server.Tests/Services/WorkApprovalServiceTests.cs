@@ -590,6 +590,16 @@ public sealed class WorkApprovalServiceTests
         public Task<bool> HasStartedSessionAsync(Guid taskId, CancellationToken cancellationToken = default) =>
             inner.HasStartedSessionAsync(taskId, cancellationToken);
 
+        public Task<StartSessionOutcome> StartSessionForTaskAsync(
+            Guid taskId,
+            AgentSessionRole role,
+            string? provider,
+            string? externalSessionReference,
+            DateTime startedUtc,
+            CancellationToken cancellationToken = default) =>
+            inner.StartSessionForTaskAsync(
+                taskId, role, provider, externalSessionReference, startedUtc, cancellationToken);
+
         public FamiliarTask CreateReadyTask(
             FamiliarProject project,
             string title,

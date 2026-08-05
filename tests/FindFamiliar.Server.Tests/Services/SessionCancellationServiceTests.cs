@@ -16,7 +16,7 @@ public sealed class SessionCancellationServiceTests
         var (project, task, session) = await SeedStartedSessionAsync(dbContext, AgentSessionRole.Implementer);
         var revisionBefore = project.ContextRevision;
 
-        var service = new SessionCancellationService(dbContext);
+        var service = new SessionCancellationService(dbContext, new SessionHandoffService(dbContext));
         var outcome = await service.CancelAsync(new SessionCancellationRequest(task.Id, session.Id, "Adapter failed before submission."));
 
         Assert.Equal(SessionCancellationStatus.Success, outcome.Status);
@@ -48,7 +48,7 @@ public sealed class SessionCancellationServiceTests
         var (project, task, session) = await SeedStartedSessionAsync(dbContext, AgentSessionRole.Planner);
         var revisionBefore = project.ContextRevision;
 
-        var service = new SessionCancellationService(dbContext);
+        var service = new SessionCancellationService(dbContext, new SessionHandoffService(dbContext));
         var outcome = await service.CancelAsync(new SessionCancellationRequest(task.Id, session.Id, reason));
 
         Assert.Equal(SessionCancellationStatus.ValidationFailed, outcome.Status);
@@ -66,7 +66,7 @@ public sealed class SessionCancellationServiceTests
         await using var dbContext = await database.CreateContextAsync();
         var (_, task, session) = await SeedStartedSessionAsync(dbContext, AgentSessionRole.Planner);
 
-        var service = new SessionCancellationService(dbContext);
+        var service = new SessionCancellationService(dbContext, new SessionHandoffService(dbContext));
         var outcome = await service.CancelAsync(new SessionCancellationRequest(
             task.Id, session.Id, new string('x', SessionCancellationService.ReasonMaxLength + 1)));
 
@@ -81,7 +81,7 @@ public sealed class SessionCancellationServiceTests
         await using var dbContext = await database.CreateContextAsync();
         var (_, task, _) = await SeedStartedSessionAsync(dbContext, AgentSessionRole.Planner);
 
-        var service = new SessionCancellationService(dbContext);
+        var service = new SessionCancellationService(dbContext, new SessionHandoffService(dbContext));
         var outcome = await service.CancelAsync(new SessionCancellationRequest(task.Id, Guid.NewGuid(), "Reason."));
 
         Assert.Equal(SessionCancellationStatus.NotFound, outcome.Status);
@@ -107,7 +107,7 @@ public sealed class SessionCancellationServiceTests
         dbContext.Tasks.Add(siblingTask);
         await dbContext.SaveChangesAsync();
 
-        var service = new SessionCancellationService(dbContext);
+        var service = new SessionCancellationService(dbContext, new SessionHandoffService(dbContext));
         var outcome = await service.CancelAsync(new SessionCancellationRequest(siblingTask.Id, session.Id, "Reason."));
 
         Assert.Equal(SessionCancellationStatus.NotFound, outcome.Status);
@@ -126,7 +126,7 @@ public sealed class SessionCancellationServiceTests
         await dbContext.SaveChangesAsync();
         var revisionBefore = project.ContextRevision;
 
-        var service = new SessionCancellationService(dbContext);
+        var service = new SessionCancellationService(dbContext, new SessionHandoffService(dbContext));
         var outcome = await service.CancelAsync(new SessionCancellationRequest(task.Id, session.Id, "Reason."));
 
         Assert.Equal(SessionCancellationStatus.NotStarted, outcome.Status);
@@ -142,7 +142,7 @@ public sealed class SessionCancellationServiceTests
         await using var dbContext = await database.CreateContextAsync();
         var (project, task, session) = await SeedStartedSessionAsync(dbContext, AgentSessionRole.Planner);
 
-        var service = new SessionCancellationService(dbContext);
+        var service = new SessionCancellationService(dbContext, new SessionHandoffService(dbContext));
         var first = await service.CancelAsync(new SessionCancellationRequest(task.Id, session.Id, "First cancellation."));
         Assert.Equal(SessionCancellationStatus.Success, first.Status);
 
@@ -166,7 +166,7 @@ public sealed class SessionCancellationServiceTests
         session.ClaimExpiresUtc = DateTime.UtcNow.AddMinutes(5);
         await dbContext.SaveChangesAsync();
 
-        var service = new SessionCancellationService(dbContext);
+        var service = new SessionCancellationService(dbContext, new SessionHandoffService(dbContext));
         var stale = await service.CancelAsync(new SessionCancellationRequest(
             task.Id,
             session.Id,

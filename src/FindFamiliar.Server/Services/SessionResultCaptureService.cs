@@ -51,7 +51,9 @@ public interface ISessionResultCaptureService
 /// The single atomic result-capture transaction, used by both Task Details and the runner API.
 /// Central validation and provenance derivation live here so neither caller can bypass them.
 /// </summary>
-public sealed class SessionResultCaptureService(FamiliarDbContext dbContext) : ISessionResultCaptureService
+public sealed class SessionResultCaptureService(
+    FamiliarDbContext dbContext,
+    ISessionHandoffService sessionHandoffs) : ISessionResultCaptureService
 {
     public const int LongFieldMaxLength = 12_000;
     public const int SummaryMaxLength = 4_000;
@@ -187,6 +189,15 @@ public sealed class SessionResultCaptureService(FamiliarDbContext dbContext) : I
 
         session.Task.UpdatedUtc = capturedUtc;
         session.Task.Project.IncrementContextRevision();
+
+        // The proposed next step, staged in this same transaction so a completed session never exists
+        // without one. It creates no work and does not move the revision — the value recorded below is
+        // the post-capture revision, kept for display only (ADR-0010).
+        await sessionHandoffs.StageHandoffAsync(
+            session,
+            session.Task.Project.ContextRevision,
+            capturedUtc,
+            cancellationToken);
 
         try
         {

@@ -47,7 +47,9 @@ public interface ISessionCancellationService
 /// The single atomic cancellation transaction, used by both Task Details and the runner API
 /// (including pre-submit adapter-failure cancellation).
 /// </summary>
-public sealed class SessionCancellationService(FamiliarDbContext dbContext) : ISessionCancellationService
+public sealed class SessionCancellationService(
+    FamiliarDbContext dbContext,
+    ISessionHandoffService sessionHandoffs) : ISessionCancellationService
 {
     public const int ReasonMaxLength = 2_000;
 
@@ -142,6 +144,14 @@ public sealed class SessionCancellationService(FamiliarDbContext dbContext) : IS
 
         session.Task.UpdatedUtc = cancelledUtc;
         session.Task.Project.IncrementContextRevision();
+
+        // A cancelled attempt proposes a retry of the same role, staged in this same transaction.
+        // It creates no work and does not move the revision (ADR-0010).
+        await sessionHandoffs.StageHandoffAsync(
+            session,
+            session.Task.Project.ContextRevision,
+            cancelledUtc,
+            cancellationToken);
 
         try
         {

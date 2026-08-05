@@ -1,14 +1,45 @@
 using FindFamiliar.Server.Data;
 using FindFamiliar.Server.Domain;
+using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using TaskStatus = FindFamiliar.Server.Domain.TaskStatus;
 
 namespace FindFamiliar.Server.Services;
 
+public enum StartSessionStatus
+{
+    Started,
+    NotFound,
+
+    /// <summary>The task already owns a Started session.</summary>
+    AlreadyStarted,
+
+    ProjectInactive
+}
+
+public sealed record StartSessionOutcome(StartSessionStatus Status, AgentSession? Session = null)
+{
+    public static readonly StartSessionOutcome NotFound = new(StartSessionStatus.NotFound);
+    public static readonly StartSessionOutcome AlreadyStarted = new(StartSessionStatus.AlreadyStarted);
+    public static readonly StartSessionOutcome ProjectInactive = new(StartSessionStatus.ProjectInactive);
+}
+
 public interface IWorkflowDispatchService
 {
     /// <summary>True when the task already owns a Started session, which forbids starting another.</summary>
     Task<bool> HasStartedSessionAsync(Guid taskId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Starts a session on an existing task and commits it, mapping a lost race to a typed outcome.
+    /// Used by the manual start form, which has no proposal row to fence against.
+    /// </summary>
+    Task<StartSessionOutcome> StartSessionForTaskAsync(
+        Guid taskId,
+        AgentSessionRole role,
+        string? provider,
+        string? externalSessionReference,
+        DateTime startedUtc,
+        CancellationToken cancellationToken = default);
 
     FamiliarTask CreateReadyTask(FamiliarProject project, string title, string requestedOutcome, DateTime nowUtc);
 
@@ -40,6 +71,49 @@ public sealed class WorkflowDispatchService(FamiliarDbContext dbContext) : IWork
         dbContext.AgentSessions.AnyAsync(
             candidate => candidate.TaskId == taskId && candidate.Status == AgentSessionStatus.Started,
             cancellationToken);
+
+    public async Task<StartSessionOutcome> StartSessionForTaskAsync(
+        Guid taskId,
+        AgentSessionRole role,
+        string? provider,
+        string? externalSessionReference,
+        DateTime startedUtc,
+        CancellationToken cancellationToken = default)
+    {
+        var task = await dbContext.Tasks
+            .Include(candidate => candidate.Project)
+            .SingleOrDefaultAsync(candidate => candidate.Id == taskId, cancellationToken);
+
+        if (task is null)
+        {
+            return StartSessionOutcome.NotFound;
+        }
+
+        // A friendly pre-check only. Unlike handoff approval there is no proposal row to consume
+        // conditionally, so IX_AgentSessions_TaskId_Started is the actual enforcement here — this
+        // read just turns the common case into a readable message instead of a constraint violation.
+        if (await HasStartedSessionAsync(taskId, cancellationToken))
+        {
+            return StartSessionOutcome.AlreadyStarted;
+        }
+
+        var session = StartSession(task, task.Project, role, provider, externalSessionReference, startedUtc);
+
+        try
+        {
+            await dbContext.SaveChangesAsync(cancellationToken);
+        }
+        catch (Exception exception) when (
+            exception is DbUpdateException or SqliteException
+            && SessionHandoffApprovalService.IsUniqueConstraintViolation(exception))
+        {
+            // The index caught a session that committed between the check above and this write.
+            dbContext.ChangeTracker.Clear();
+            return StartSessionOutcome.AlreadyStarted;
+        }
+
+        return new StartSessionOutcome(StartSessionStatus.Started, session);
+    }
 
     public FamiliarTask CreateReadyTask(
         FamiliarProject project,

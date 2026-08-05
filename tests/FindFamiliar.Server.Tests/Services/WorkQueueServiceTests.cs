@@ -1,6 +1,7 @@
 using FindFamiliar.Server.Domain;
 using FindFamiliar.Server.Services;
 using FindFamiliar.Server.Tests.Infrastructure;
+using Microsoft.EntityFrameworkCore;
 using TaskStatus = FindFamiliar.Server.Domain.TaskStatus;
 
 namespace FindFamiliar.Server.Tests.Services;
@@ -55,6 +56,14 @@ public sealed class WorkQueueServiceTests
     {
         using var database = new TemporarySqliteDatabase();
         await using var dbContext = await database.CreateContextAsync();
+
+        // IX_AgentSessions_TaskId_Started makes this state unreachable through the application, which
+        // is the point of ADR-0010. It remains reachable in a database restored from before that
+        // migration, so dropping the index here reproduces that database faithfully — NeedsAttention
+        // exists precisely to surface data the application can no longer create. Safe to drop because
+        // TemporarySqliteDatabase is per-test and discarded afterwards.
+        await dbContext.Database.ExecuteSqlRawAsync(
+            "DROP INDEX IF EXISTS \"IX_AgentSessions_TaskId_Started\";");
 
         var project = NewProject("Multiple started");
         var task = NewTask(project.Id, "Multiple started task");
