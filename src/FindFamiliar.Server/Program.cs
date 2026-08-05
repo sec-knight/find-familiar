@@ -46,6 +46,11 @@ builder.Services.AddScoped<IDemiplaneProjectionService, DemiplaneProjectionServi
 // Deterministic project state for the Familiar. No reasoning provider is registered: the snapshot
 // and its summary are the part of the Familiar that must work with no credentials at all.
 builder.Services.AddScoped<IProjectSnapshotService, ProjectSnapshotService>();
+
+// The read side of a project's conversation. It writes nothing, so the Familiar page's GET stays a
+// read and a project nobody has spoken to keeps no conversation row.
+builder.Services.AddScoped<IFamiliarConversationService, FamiliarConversationService>();
+
 builder.Services.AddScoped<IProviderCapacityService, ProviderCapacityService>();
 
 // The only provider this application invokes is Claude, through the compiled adapter, and it exposes

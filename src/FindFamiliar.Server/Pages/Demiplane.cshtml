@@ -27,6 +27,7 @@
         <p class="intro-copy">@plane.ProjectPurpose</p>
         <p>
             <a asp-page="/Projects/Details" asp-route-id="@plane.ProjectId">Project settings</a>
+            · <a asp-page="/Familiar" asp-route-projectId="@plane.ProjectId">Familiar</a>
             · <a asp-page="/Work">All work</a>
             @if (plane.ProjectStatus != FindFamiliar.Server.Domain.ProjectStatus.Active)
             {

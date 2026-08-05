@@ -775,3 +775,127 @@ h2 {
     color: #0b1020;
   }
 }
+
+/* ---------------------------------------------------------------------------
+   Familiar
+   ---------------------------------------------------------------------------
+   The deterministic account sits above the conversation because it is the thing
+   most likely to be true and least likely to be missing. Limitations are part of
+   that block, always rendered, never behind a disclosure control.
+
+   Proposed actions get their own bordered region outside the transcript. A
+   proposal must never be able to be mistaken for a sentence somebody said.
+   --------------------------------------------------------------------------- */
+
+.familiar-standing,
+.familiar-conversation,
+.familiar-proposals,
+.familiar-compose {
+  margin-top: 2rem;
+}
+
+.familiar-statement {
+  margin: 0 0 0.5rem;
+}
+
+.familiar-detail-list {
+  margin: 0 0 0.75rem;
+  padding-left: 1.25rem;
+}
+
+.familiar-limitations {
+  margin-top: 1.25rem;
+  padding: 0.75rem 1rem;
+  background: var(--surface-muted);
+  border-left: 4px solid var(--state-waiting);
+  border-radius: 0.5rem;
+}
+
+.familiar-limitations h3 {
+  margin: 0 0 0.5rem;
+  font-size: 1rem;
+}
+
+.familiar-note {
+  margin: 0.75rem 0 0;
+  color: var(--text-secondary);
+}
+
+.familiar-messages {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.familiar-message {
+  margin-bottom: 1.25rem;
+}
+
+.familiar-message-meta {
+  margin: 0 0 0.375rem;
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+}
+
+.familiar-message-author {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.familiar-message.is-system .conversation-block {
+  border-left: 4px solid var(--warning);
+}
+
+.familiar-evidence {
+  margin: 0.375rem 0 0;
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+}
+
+.familiar-evidence-item + .familiar-evidence-item::before {
+  content: " · ";
+}
+
+.familiar-proposal {
+  padding: 1rem 1.25rem;
+  background: var(--surface);
+  border: 2px solid var(--accent);
+  border-radius: 0.75rem;
+}
+
+.familiar-proposal + .familiar-proposal {
+  margin-top: 1rem;
+}
+
+.familiar-proposal h3 {
+  margin: 0 0 0.75rem;
+}
+
+.familiar-proposal-detail dt {
+  font-weight: 600;
+  margin-top: 0.5rem;
+}
+
+.familiar-proposal-detail dd {
+  margin: 0.125rem 0 0;
+}
+
+.familiar-compose-label {
+  display: block;
+  margin-bottom: 0.375rem;
+  font-weight: 600;
+}
+
+.familiar-compose-input {
+  width: 100%;
+  padding: 0.625rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  background: var(--surface-muted);
+  color: var(--text-primary);
+  font: inherit;
+}
+
+.familiar-compose-send {
+  margin-top: 0.625rem;
+}

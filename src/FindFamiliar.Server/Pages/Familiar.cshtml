@@ -1,0 +1,256 @@
+@page "/Familiar/{projectId:guid}"
+@using FindFamiliar.Server.Domain
+@using FindFamiliar.Server.Services.Familiar
+@model FindFamiliar.Server.Pages.FamiliarModel
+@{
+    ViewData["Title"] = Model.Snapshot is null ? "Familiar" : $"Familiar — {Model.Snapshot.ProjectName}";
+}
+
+@* No meta refresh, deliberately. Unlike the Demiplane there is no in-flight work on this page to
+   poll for, and re-requesting the URL would re-render a conversation somebody is part-way through
+   reading. No script either: nothing on this page requires JavaScript to function. *@
+
+@if (Model.Snapshot is null)
+{
+    <section class="dashboard-intro" aria-labelledby="familiar-title">
+        <p class="eyebrow">Familiar</p>
+        <h1 id="familiar-title">This project could not be read</h1>
+        <p class="intro-copy">@(Model.UnavailableDetail ?? "This project could not be read just now.")</p>
+    </section>
+}
+else
+{
+    var snapshot = Model.Snapshot;
+
+    <section class="dashboard-intro" aria-labelledby="familiar-title">
+        <p class="eyebrow">Familiar · context revision @snapshot.ContextRevision</p>
+        <h1 id="familiar-title">@snapshot.ProjectName</h1>
+        <p class="intro-copy">@snapshot.ProjectPurpose</p>
+        <p>
+            <a asp-page="/Projects/Details" asp-route-id="@snapshot.ProjectId">Project settings</a>
+            · <a asp-page="/Demiplane" asp-route-id="@snapshot.ProjectId">Demiplane</a>
+            · <a asp-page="/Work">All work</a>
+            <span> · Project status <strong>@snapshot.ProjectStatus</strong></span>
+        </p>
+    </section>
+
+    @* ------------------------------------------------------- Deterministic account of the project *@
+    <section class="familiar-standing" aria-labelledby="standing-title">
+        <div class="section-heading">
+            <div>
+                <p class="eyebrow">Where things stand</p>
+                <h2 id="standing-title">What is recorded</h2>
+            </div>
+        </div>
+
+        @if (Model.Summary is { } summary)
+        {
+            <p class="familiar-statement">@summary.ProjectStatement</p>
+            <p class="familiar-statement">@summary.ActivityStatement</p>
+
+            @if (summary.AttentionStatement is { } attention)
+            {
+                <p class="familiar-statement">@attention</p>
+                <ul class="familiar-detail-list">
+                    @foreach (var line in summary.AttentionDetails)
+                    {
+                        <li>@line</li>
+                    }
+                </ul>
+            }
+
+            @if (summary.BlockedStatement is { } blocked)
+            {
+                <p class="familiar-statement">@blocked</p>
+                <ul class="familiar-detail-list">
+                    @foreach (var line in summary.BlockedDetails)
+                    {
+                        <li>@line</li>
+                    }
+                </ul>
+            }
+
+            @if (summary.NextSteps.Count > 0)
+            {
+                <h3>Recommended next</h3>
+                <ul class="familiar-detail-list">
+                    @foreach (var step in summary.NextSteps)
+                    {
+                        <li>@step</li>
+                    }
+                </ul>
+            }
+        }
+
+        @* Always rendered, never behind a disclosure control. A limitation somebody has to click to
+           read is a limitation they do not know about. *@
+        <div class="familiar-limitations">
+            <h3 id="limitations-title">What I can't see</h3>
+            <ul class="familiar-detail-list" aria-labelledby="limitations-title">
+                @foreach (var limitation in snapshot.Limitations)
+                {
+                    <li>@limitation</li>
+                }
+            </ul>
+        </div>
+
+        @if (Model.SnapshotOverBudget)
+        {
+            <p role="status" class="familiar-note">
+                This project is larger than this application can summarise for a reasoning provider safely.
+                The account above is complete and accurate, and nothing about this project has been sent anywhere.
+            </p>
+        }
+    </section>
+
+    @* ---------------------------------------------------------------------------- Conversation *@
+    <section class="familiar-conversation" aria-labelledby="conversation-title">
+        <div class="section-heading">
+            <div>
+                <p class="eyebrow">Conversation</p>
+                <h2 id="conversation-title">What has been asked</h2>
+            </div>
+        </div>
+
+        @if (Model.Conversation is not { Messages.Count: > 0 })
+        {
+            <p>Nothing asked yet. What is recorded about this project is above.</p>
+        }
+        else
+        {
+            @* Oldest first, in Sequence order as the service returned them — never by timestamp,
+               which cannot order two messages written in the same tick. *@
+            <ol class="familiar-messages">
+                @foreach (var message in Model.Conversation.Messages)
+                {
+                    <li class="familiar-message @FamiliarModel.AuthorCss(message.Author)">
+                        <p class="familiar-message-meta">
+                            <span class="familiar-message-author">@FamiliarModel.AuthorLabel(message.Author)</span>
+                            @if (message.Author == FamiliarMessageAuthor.Familiar
+                                 && !string.IsNullOrWhiteSpace(message.ProviderName))
+                            {
+                                <span> · @message.ProviderName</span>
+                                @if (!string.IsNullOrWhiteSpace(message.ProviderModel))
+                                {
+                                    <span> (@message.ProviderModel)</span>
+                                }
+                            }
+                            <span> · <time datetime="@message.CreatedUtc.ToString("O")">@message.CreatedUtc.ToString("dd MMM yyyy, HH:mm") UTC</time></span>
+                            @if (message.Delivery != FamiliarMessageDelivery.Delivered)
+                            {
+                                <span> · <strong>@message.Delivery</strong></span>
+                            }
+                        </p>
+
+                        @* Encoded by Razor, and nothing here interprets it: no Html.Raw, no markdown
+                           rendering, no autolinking. A URL a provider wrote stays characters. Line
+                           breaks come from CSS white-space: pre-wrap on .conversation-block. *@
+                        <p class="conversation-block">@message.Content</p>
+
+                        @if (message.Evidence.Count > 0)
+                        {
+                            <p class="familiar-evidence">
+                                <span>Based on:</span>
+                                @foreach (var evidence in message.Evidence)
+                                {
+                                    @* Labels and hrefs are both composed by the server from persisted
+                                       rows. No link in this region originates from provider text. *@
+                                    <span class="familiar-evidence-item">
+                                        @if (evidence.Kind == FamiliarEvidenceKind.Task)
+                                        {
+                                            <a asp-page="/Tasks/Details" asp-route-id="@evidence.ReferenceId">@evidence.Label</a>
+                                        }
+                                        else
+                                        {
+                                            @evidence.Label
+                                        }
+                                    </span>
+                                }
+                            </p>
+                        }
+                    </li>
+                }
+            </ol>
+        }
+    </section>
+
+    @* --------------------------------------------------------------------------- Proposed actions *@
+    @if (Model.Conversation is { PendingProposals.Count: > 0 })
+    {
+        <section class="familiar-proposals" aria-labelledby="proposals-title">
+            <div class="section-heading">
+                <div>
+                    <p class="eyebrow">Proposed action — nothing has happened yet</p>
+                    <h2 id="proposals-title">Waiting for your decision</h2>
+                </div>
+            </div>
+
+            @foreach (var proposal in Model.Conversation.PendingProposals)
+            {
+                <article class="familiar-proposal">
+                    <h3>@FamiliarModel.ActionHeading(proposal.Kind)</h3>
+
+                    <dl class="familiar-proposal-detail">
+                        <dt>What would happen</dt>
+                        <dd>@FamiliarModel.ActionEffect(proposal.Kind)</dd>
+
+                        @if (proposal.Kind == FamiliarActionKind.CreateTask)
+                        {
+                            <dt>Title</dt>
+                            <dd>@proposal.Title</dd>
+
+                            <dt>Requested outcome</dt>
+                            <dd class="conversation-block">@proposal.RequestedOutcome</dd>
+                        }
+                        else
+                        {
+                            <dt>Target task</dt>
+                            <dd>
+                                @if (proposal.TargetTaskId is { } targetTaskId)
+                                {
+                                    <a asp-page="/Tasks/Details" asp-route-id="@targetTaskId">@(proposal.TargetTaskTitle ?? "This project's task")</a>
+                                }
+                                else
+                                {
+                                    <span>Not recorded.</span>
+                                }
+                            </dd>
+                        }
+
+                        <dt>Proposed at context revision</dt>
+                        <dd>@proposal.ObservedContextRevision</dd>
+                    </dl>
+
+                    @* Deliberately no Confirm and no Dismiss in this slice. There is no handler on
+                       this page that could act on either, and a control that does nothing is worse
+                       than none. *@
+                    <p class="familiar-note">
+                        Nothing has been created. Confirming or dismissing a proposed action is not available yet.
+                    </p>
+                </article>
+            }
+        </section>
+    }
+
+    @* ----------------------------------------------------------------------------------- Input *@
+    <section class="familiar-compose" aria-labelledby="compose-title">
+        <div class="section-heading">
+            <div>
+                <p class="eyebrow">Ask</p>
+                <h2 id="compose-title">Ask about this project</h2>
+            </div>
+        </div>
+
+        @if (Model.IsArchived)
+        {
+            <p role="status">This project is archived, so no work can be started from here. Everything above stays readable — archiving hides nothing.</p>
+        }
+
+        <p>Asking is not available yet. This page currently reads what is recorded; the conversation itself arrives with the reasoning provider.</p>
+
+        <label class="familiar-compose-label" for="familiar-message">Your message</label>
+        <textarea id="familiar-message" class="familiar-compose-input" rows="3"
+                  placeholder="Ask about this project…" disabled aria-describedby="compose-title"></textarea>
+        <button type="button" class="familiar-compose-send" disabled>Send</button>
+    </section>
+}
