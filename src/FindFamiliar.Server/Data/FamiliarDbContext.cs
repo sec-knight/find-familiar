@@ -23,6 +23,14 @@ public sealed class FamiliarDbContext(DbContextOptions<FamiliarDbContext> option
 
     public DbSet<SessionHandoff> SessionHandoffs => Set<SessionHandoff>();
 
+    public DbSet<FamiliarConversation> FamiliarConversations => Set<FamiliarConversation>();
+
+    public DbSet<FamiliarMessage> FamiliarMessages => Set<FamiliarMessage>();
+
+    public DbSet<FamiliarEvidence> FamiliarEvidence => Set<FamiliarEvidence>();
+
+    public DbSet<FamiliarActionProposal> FamiliarActionProposals => Set<FamiliarActionProposal>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.Entity<FamiliarProject>(entity =>
@@ -221,6 +229,133 @@ public sealed class FamiliarDbContext(DbContextOptions<FamiliarDbContext> option
             entity.HasOne(handoff => handoff.CreatedSession)
                 .WithMany()
                 .HasForeignKey(handoff => handoff.CreatedSessionId)
+                .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<FamiliarConversation>(entity =>
+        {
+            entity.ToTable("FamiliarConversations");
+            entity.HasKey(conversation => conversation.Id);
+
+            // One conversation per project. The subject of the conversation is the project, and
+            // continuity across days is the point; relaxing this index is all that multiple threads
+            // per project would need later.
+            entity.HasIndex(conversation => conversation.ProjectId).IsUnique();
+
+            entity.HasOne(conversation => conversation.Project)
+                .WithMany()
+                .HasForeignKey(conversation => conversation.ProjectId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasMany(conversation => conversation.Messages)
+                .WithOne(message => message.Conversation)
+                .HasForeignKey(message => message.ConversationId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasMany(conversation => conversation.Proposals)
+                .WithOne(proposal => proposal.Conversation)
+                .HasForeignKey(proposal => proposal.ConversationId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<FamiliarMessage>(entity =>
+        {
+            entity.ToTable("FamiliarMessages");
+            entity.HasKey(message => message.Id);
+            entity.Property(message => message.Author).HasConversion<string>().HasMaxLength(32);
+            entity.Property(message => message.Delivery).HasConversion<string>().HasMaxLength(32);
+            entity.Property(message => message.Content)
+                .HasMaxLength(FamiliarMessage.MaxContentLength)
+                .IsRequired();
+            entity.Property(message => message.ProviderName).HasMaxLength(FamiliarMessage.MaxProviderNameLength);
+            entity.Property(message => message.ProviderModel).HasMaxLength(FamiliarMessage.MaxProviderModelLength);
+            entity.Property(message => message.FailureCode).HasMaxLength(FamiliarMessage.MaxFailureCodeLength);
+
+            // Unique, so two racing appends can never produce an ambiguous display order.
+            entity.HasIndex(message => new { message.ConversationId, message.Sequence }).IsUnique();
+
+            entity.HasMany(message => message.Evidence)
+                .WithOne(evidence => evidence.Message)
+                .HasForeignKey(evidence => evidence.MessageId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<FamiliarEvidence>(entity =>
+        {
+            entity.ToTable("FamiliarEvidence");
+            entity.HasKey(evidence => evidence.Id);
+            entity.Property(evidence => evidence.Kind).HasConversion<string>().HasMaxLength(32);
+            entity.Property(evidence => evidence.Label)
+                // Qualified: the DbSet property above shadows the entity type's simple name here.
+                .HasMaxLength(Domain.FamiliarEvidence.MaxLabelLength)
+                .IsRequired();
+
+            // ReferenceId carries no foreign key on purpose. One nullable FK per evidence kind would
+            // encode the same fact four ways and still need a constraint saying exactly one is set,
+            // and none of them could express the guarantee that actually matters: the id was present
+            // in the snapshot that produced the message.
+        });
+
+        modelBuilder.Entity<FamiliarActionProposal>(entity =>
+        {
+            entity.ToTable("FamiliarActionProposals");
+            entity.HasKey(proposal => proposal.Id);
+            entity.Property(proposal => proposal.Kind).HasConversion<string>().HasMaxLength(32);
+            entity.Property(proposal => proposal.Status).HasConversion<string>().HasMaxLength(32);
+            entity.Property(proposal => proposal.Title).HasMaxLength(FamiliarActionProposal.MaxTitleLength);
+            entity.Property(proposal => proposal.RequestedOutcome)
+                .HasMaxLength(FamiliarActionProposal.MaxRequestedOutcomeLength);
+
+            // At most one actionable proposal per conversation, which is what makes concurrent
+            // confirmation trivially safe for the same reason IX_SessionHandoffs_TaskId_Pending does:
+            // contenders can only ever race for one row.
+            //
+            // The filter matches the stored TEXT because Status uses HasConversion<string>() above.
+            // If that conversion is ever removed the filter silently stops matching and the invariant
+            // silently disappears — FamiliarProposalPendingUniqueIndexTests guards against it.
+            entity.HasIndex(proposal => proposal.ConversationId)
+                .IsUnique()
+                .HasFilter("\"Status\" = 'Pending'")
+                .HasDatabaseName("IX_FamiliarActionProposals_ConversationId_Pending");
+
+            // One created task or session belongs to at most one proposal, so a replayed confirmation
+            // can never let two proposals claim the same row. Filtered, because every undecided and
+            // dismissed proposal holds NULL.
+            entity.HasIndex(proposal => proposal.CreatedTaskId)
+                .IsUnique()
+                .HasFilter("\"CreatedTaskId\" IS NOT NULL")
+                .HasDatabaseName("IX_FamiliarActionProposals_CreatedTaskId");
+            entity.HasIndex(proposal => proposal.CreatedSessionId)
+                .IsUnique()
+                .HasFilter("\"CreatedSessionId\" IS NOT NULL")
+                .HasDatabaseName("IX_FamiliarActionProposals_CreatedSessionId");
+
+            // Cascade from the project and from the originating message, not Restrict: deleting a
+            // project cascades its conversation and messages, and a Restrict on either FK would abort
+            // that cascade when SQLite removed those rows first.
+            entity.HasOne(proposal => proposal.Project)
+                .WithMany()
+                .HasForeignKey(proposal => proposal.ProjectId)
+                .OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(proposal => proposal.Message)
+                .WithMany()
+                .HasForeignKey(proposal => proposal.MessageId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            // Restrict on all three task and session links: a proposal describes work a human
+            // reviewed, and a task or session it names must never be deleted out from under that
+            // record while the proposal still points at it.
+            entity.HasOne(proposal => proposal.TargetTask)
+                .WithMany()
+                .HasForeignKey(proposal => proposal.TargetTaskId)
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne(proposal => proposal.CreatedTask)
+                .WithMany()
+                .HasForeignKey(proposal => proposal.CreatedTaskId)
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne(proposal => proposal.CreatedSession)
+                .WithMany()
+                .HasForeignKey(proposal => proposal.CreatedSessionId)
                 .OnDelete(DeleteBehavior.Restrict);
         });
 
