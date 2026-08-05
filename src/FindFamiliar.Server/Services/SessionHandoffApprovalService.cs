@@ -36,6 +36,14 @@ public enum SessionHandoffDecisionStatus
 
     ProjectInactive,
 
+    /// <summary>
+    /// SQLite could not take the lock this request needed. Nothing was changed and nobody won —
+    /// retrying is correct. Kept distinct from <see cref="Conflict"/> because reporting an
+    /// infrastructure fault as "someone else got there first" is a lie that sends the user looking
+    /// for a second actor who does not exist.
+    /// </summary>
+    DatabaseBusy,
+
     /// <summary>Lost a race in a way none of the states above describes.</summary>
     Conflict
 }
@@ -273,10 +281,20 @@ public sealed class SessionHandoffApprovalService(
             dbContext.ChangeTracker.Clear();
 
             // A unique-constraint failure here means the index caught a Started session this
-            // transaction could not see. Anything else is a race we cannot name precisely.
-            return IsUniqueConstraintViolation(exception)
-                ? new SessionHandoffDecisionOutcome(
+            // transaction could not see. A busy or locked database is not a race at all — nobody won,
+            // and saying otherwise would report an infrastructure fault as a competing decision.
+            // Anything else is a genuine conflict we cannot name precisely.
+            if (IsUniqueConstraintViolation(exception))
+            {
+                return new SessionHandoffDecisionOutcome(
                     SessionHandoffDecisionStatus.SessionAlreadyStarted,
+                    TaskId: handoff.TaskId,
+                    Role: handoff.ProposedRole);
+            }
+
+            return IsDatabaseBusy(exception)
+                ? new SessionHandoffDecisionOutcome(
+                    SessionHandoffDecisionStatus.DatabaseBusy,
                     TaskId: handoff.TaskId,
                     Role: handoff.ProposedRole)
                 : new SessionHandoffDecisionOutcome(
@@ -357,6 +375,31 @@ public sealed class SessionHandoffApprovalService(
         return false;
     }
 
+    /// <summary>
+    /// True when SQLite refused the operation because the database was locked, rather than because
+    /// this caller lost a race. Nothing was written in either case, but only one of them means
+    /// another decision beat this one.
+    /// </summary>
+    internal static bool IsDatabaseBusy(Exception exception)
+    {
+        for (var current = exception; current is not null; current = current.InnerException)
+        {
+            if (current is SqliteException sqlite &&
+                sqlite.SqliteErrorCode is SqliteBusyErrorCode or SqliteLockedErrorCode)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     /// <summary>SQLITE_CONSTRAINT_UNIQUE.</summary>
     private const int SqliteConstraintUniqueErrorCode = 2067;
+
+    /// <summary>SQLITE_BUSY.</summary>
+    private const int SqliteBusyErrorCode = 5;
+
+    /// <summary>SQLITE_LOCKED.</summary>
+    private const int SqliteLockedErrorCode = 6;
 }

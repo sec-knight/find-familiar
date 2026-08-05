@@ -18,7 +18,8 @@
             <nav class="site-nav" aria-label="Primary navigation">
                 <a class="nav-link @(ViewContext.RouteData.Values["page"]?.ToString() == "/Index" ? "is-active" : "")" asp-area="" asp-page="/Index">Dashboard</a>
                 <a class="nav-link @(ViewContext.RouteData.Values["page"]?.ToString()?.StartsWith("/Talk", StringComparison.Ordinal) == true ? "is-active" : "")" asp-area="" asp-page="/Talk/Index">Talk</a>
-                <a class="nav-link @(ViewContext.RouteData.Values["page"]?.ToString() == "/Projects/Index" ? "is-active" : "")" asp-area="" asp-page="/Projects/Index">Projects</a>
+@* A Demiplane is always a specific project's, so it has no bare nav entry; it keeps Projects lit. *@
+                <a class="nav-link @(ViewContext.RouteData.Values["page"]?.ToString() is "/Projects/Index" or "/Demiplane" ? "is-active" : "")" asp-area="" asp-page="/Projects/Index">Projects</a>
                 <a class="nav-link @(ViewContext.RouteData.Values["page"]?.ToString() == "/Work" ? "is-active" : "")" asp-area="" asp-page="/Work">Work queue</a>
                 <a class="nav-link @(ViewContext.RouteData.Values["page"]?.ToString() == "/Workers" ? "is-active" : "")" asp-area="" asp-page="/Workers">Workers</a>
                 <a class="nav-link @(ViewContext.RouteData.Values["page"]?.ToString() == "/About" ? "is-active" : "")" asp-area="" asp-page="/About">About</a>

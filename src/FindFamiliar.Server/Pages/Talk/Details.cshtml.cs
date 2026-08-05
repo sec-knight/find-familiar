@@ -154,6 +154,12 @@ public sealed class DetailsModel(
                     "Another request changed this conversation at the same time. Nothing was created. Review the current state and try again.");
                 return await ReturnPageAsync(id, cancellationToken);
 
+            case WorkApprovalStatus.DatabaseBusy:
+                ModelState.AddModelError(
+                    string.Empty,
+                    "The database was busy and this approval was not applied. Nothing was created and nobody else approved it — try again.");
+                return await ReturnPageAsync(id, cancellationToken);
+
             case WorkApprovalStatus.ValidationFailed:
             default:
                 foreach (var (field, message) in outcome.ValidationErrors ?? new Dictionary<string, string>())

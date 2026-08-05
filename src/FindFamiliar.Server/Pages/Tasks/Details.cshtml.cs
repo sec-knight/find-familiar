@@ -181,6 +181,9 @@ public sealed class DetailsModel(
             SessionHandoffDecisionStatus.ProjectInactive =>
                 "This project is no longer active, so nothing was started.",
 
+            SessionHandoffDecisionStatus.DatabaseBusy =>
+                "The database was busy and this decision was not applied. Nothing changed — try again.",
+
             _ => approving
                 ? "Another change reached this step first, so nothing was started."
                 : "Another change reached this step first, so nothing was declined."

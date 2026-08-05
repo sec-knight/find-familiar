@@ -3,6 +3,8 @@ using FindFamiliar.Server.Api.Runner;
 using FindFamiliar.Server.Data;
 using FindFamiliar.Server.Domain;
 using FindFamiliar.Server.Services;
+using FindFamiliar.Server.Services.Demiplane;
+using FindFamiliar.Server.Services.Providers;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.EntityFrameworkCore;
 using SQLitePCL;
@@ -38,6 +40,16 @@ builder.Services.AddScoped<IWorkProposalService, WorkProposalService>();
 builder.Services.AddScoped<IWorkApprovalService, WorkApprovalService>();
 builder.Services.AddScoped<ISessionHandoffService, SessionHandoffService>();
 builder.Services.AddScoped<ISessionHandoffApprovalService, SessionHandoffApprovalService>();
+builder.Services.AddScoped<IDemiplaneProjectionService, DemiplaneProjectionService>();
+builder.Services.AddScoped<IProviderCapacityService, ProviderCapacityService>();
+
+// The only provider this application invokes is Claude, through the compiled adapter, and it exposes
+// no non-interactive usage surface — so the honest reading is Unknown. ADR-0011 records what a real
+// reader would require and why estimating instead was rejected.
+builder.Services.AddScoped<IProviderCapacityReader>(services => new UnknownProviderCapacityReader(
+    "Claude",
+    services.GetRequiredService<TimeProvider>(),
+    "The Claude Code CLI exposes no non-interactive usage or quota surface, so remaining capacity cannot be read."));
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.Configure<RunnerBridgeOptions>(builder.Configuration.GetSection(RunnerBridgeOptions.SectionName));
 

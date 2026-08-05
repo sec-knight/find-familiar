@@ -26,7 +26,18 @@ public enum WorkApprovalStatus
     StaleContext,
 
     /// <summary>A concurrent writer won. This caller created nothing.</summary>
-    Conflict
+    Conflict,
+
+    /// <summary>
+    /// SQLite could not take the lock this request needed. Nothing was written and nobody won, so
+    /// retrying is correct.
+    ///
+    /// This is deliberately not <see cref="Conflict"/>. Until Sprint 10 every SqliteException here —
+    /// including a busy database, a locked file, or a disk error — was reported as a lost approval
+    /// race, which is both untrue and misleading: it sends the user looking for a second decision
+    /// that never happened, and it can leave an approval with no winner at all.
+    /// </summary>
+    DatabaseBusy
 }
 
 public sealed record WorkApprovalRequest(Guid ConversationId, Guid ExpectedConcurrencyToken);
@@ -273,6 +284,15 @@ public sealed class WorkApprovalService(
             // presenting a rolled-back transaction as success.
             await transaction.RollbackAsync(CancellationToken.None);
             dbContext.ChangeTracker.Clear();
+
+            // A locked database is not a lost race. Saying it is would claim a competing approval
+            // that never happened, and — because the winner can hit this too — could leave a
+            // contended approval reporting no winner at all.
+            if (SessionHandoffApprovalService.IsDatabaseBusy(exception))
+            {
+                return new WorkApprovalOutcome(WorkApprovalStatus.DatabaseBusy);
+            }
+
             return await DescribeLostRaceAsync(request.ConversationId, CancellationToken.None);
         }
     }

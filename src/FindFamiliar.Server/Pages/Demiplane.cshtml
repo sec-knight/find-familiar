@@ -1,0 +1,331 @@
+@page "/Demiplane/{id:guid}"
+@using FindFamiliar.Server.Services.Demiplane
+@using FindFamiliar.Server.Services.Providers
+@model FindFamiliar.Server.Pages.DemiplaneModel
+@{
+    ViewData["Title"] = Model.Projection is null ? "Demiplane" : $"Demiplane — {Model.Projection.ProjectName}";
+}
+
+@if (Model.Projection is { } plane)
+{
+    @* Only refresh while something is genuinely in flight. A settled project never reloads, so a
+       human reading a summary is not interrupted, and no request is made that nobody needs. *@
+    @if (plane.HasActiveWork)
+    {
+        <meta http-equiv="refresh" content="@DemiplaneModel.ActiveRefreshSeconds" />
+    }
+
+    <section class="dashboard-intro" aria-labelledby="demiplane-title">
+        <p class="eyebrow">Demiplane · context revision @plane.ContextRevision</p>
+        <h1 id="demiplane-title">@plane.ProjectName</h1>
+        <p class="intro-copy">@plane.ProjectPurpose</p>
+        <p>
+            <a asp-page="/Projects/Details" asp-route-id="@plane.ProjectId">Project settings</a>
+            · <a asp-page="/Work">All work</a>
+            @if (plane.ProjectStatus != FindFamiliar.Server.Domain.ProjectStatus.Active)
+            {
+                <span> · <strong>Project is @plane.ProjectStatus</strong></span>
+            }
+        </p>
+    </section>
+
+    @if (TempData["StatusMessage"] is string statusMessage)
+    {
+        <p role="status" class="demiplane-flash">@statusMessage</p>
+    }
+
+    @* ---------------------------------------------------------------- Observatory: project health *@
+    <section class="demiplane-health" aria-labelledby="health-title">
+        <div class="section-heading">
+            <div>
+                <p class="eyebrow">Observatory</p>
+                <h2 id="health-title">Where we are</h2>
+            </div>
+        </div>
+
+        @if (plane.Tasks.Count == 0)
+        {
+            <p>This project has no tasks yet. Describe some work in <a asp-page="/Talk/Index">Talk</a>, or add a task from the project page.</p>
+        }
+        else
+        {
+            <ul class="health-tally">
+                @foreach (var state in new[]
+                {
+                    TaskDisplayState.NeedsAttention,
+                    TaskDisplayState.Running,
+                    TaskDisplayState.Waiting,
+                    TaskDisplayState.Blocked,
+                    TaskDisplayState.Failed,
+                    TaskDisplayState.NotStarted,
+                    TaskDisplayState.Cancelled,
+                    TaskDisplayState.Succeeded
+                })
+                {
+                    var count = plane.CountOf(state);
+                    if (count > 0)
+                    {
+                        <li class="health-tally-item @DemiplaneModel.CssFor(state)">
+                            <span class="state-marker" aria-hidden="true">@DemiplaneModel.MarkerFor(state)</span>
+                            <span class="health-count">@count</span>
+                            <span class="health-label">@DemiplaneModel.LabelFor(state)</span>
+                        </li>
+                    }
+                }
+            </ul>
+        }
+    </section>
+
+    @* ------------------------------------------------------------ What needs a human right now *@
+    <section class="demiplane-attention" aria-labelledby="attention-title">
+        <div class="section-heading">
+            <div>
+                <p class="eyebrow">Summoning circle</p>
+                <h2 id="attention-title">Waiting for you</h2>
+            </div>
+        </div>
+
+        @if (plane.NeedsAttention.Count == 0)
+        {
+            <p>Nothing is waiting on a decision from you.</p>
+        }
+        else
+        {
+            <ul class="attention-list">
+                @foreach (var task in plane.NeedsAttention)
+                {
+                    <li class="attention-item">
+                        <p class="attention-task">
+                            <a asp-page="/Demiplane" asp-route-id="@plane.ProjectId" asp-route-taskId="@task.TaskId">@task.Title</a>
+                        </p>
+                        <p class="attention-reason">@task.ReasonText</p>
+                        @if (task.PendingHandoffId is { } handoffId && task.ProposedRole is { } proposedRole)
+                        {
+                            <div class="decision-actions">
+                                <form method="post" asp-page-handler="Approve" asp-route-id="@plane.ProjectId">
+                                    <input type="hidden" name="Decision.HandoffId" value="@handoffId" />
+                                    <input type="hidden" name="Decision.ExpectedConcurrencyToken" value="@task.PendingHandoffToken" />
+                                    <button type="submit" class="decision-approve">Approve — summon @proposedRole</button>
+                                </form>
+                                <form method="post" asp-page-handler="Decline" asp-route-id="@plane.ProjectId">
+                                    <input type="hidden" name="Decision.HandoffId" value="@handoffId" />
+                                    <input type="hidden" name="Decision.ExpectedConcurrencyToken" value="@task.PendingHandoffToken" />
+                                    <button type="submit" class="decision-decline">Decline</button>
+                                </form>
+                            </div>
+                        }
+                    </li>
+                }
+            </ul>
+        }
+    </section>
+
+    @* ------------------------------------------------------------------ Provider readiness strip *@
+    <section class="demiplane-providers" aria-labelledby="providers-title">
+        <div class="section-heading">
+            <div>
+                <p class="eyebrow">Scrying pool</p>
+                <h2 id="providers-title">Provider readiness</h2>
+            </div>
+        </div>
+
+        @if (plane.Providers.Count == 0)
+        {
+            <p>No providers are configured.</p>
+        }
+        else
+        {
+            <ul class="provider-strip">
+                @foreach (var provider in plane.Providers)
+                {
+                    var stale = provider.IsStale(plane.ObservedAt, ProviderCapacityService.StaleAfter);
+                    <li class="provider-card provider-@provider.Status.ToString().ToLowerInvariant()">
+                        <p class="provider-name">@provider.Provider</p>
+                        <p class="provider-status">
+                            <span class="state-marker" aria-hidden="true">@(provider.Status switch
+                            {
+                                ProviderCapacityStatus.Available => "✓",
+                                ProviderCapacityStatus.Constrained => "◐",
+                                ProviderCapacityStatus.Low => "!",
+                                ProviderCapacityStatus.Exhausted => "⊘",
+                                ProviderCapacityStatus.Unavailable => "✕",
+                                _ => "?"
+                            })</span>
+                            @provider.Status
+                        </p>
+
+                        @foreach (var window in provider.Windows)
+                        {
+                            <p class="provider-window">
+                                @window.Label:
+                                @(window.UsedPercent is { } used ? $"{used:0}% used" : "usage not reported")
+                                @if (window.ResetsAt is { } resets)
+                                {
+                                    <span> · resets @resets.ToLocalTime().ToString("g")</span>
+                                }
+                            </p>
+                        }
+
+                        @if (provider.CreditsRemaining is { } credits)
+                        {
+                            <p class="provider-window">Credits remaining: @credits</p>
+                        }
+
+                        @if (!string.IsNullOrWhiteSpace(provider.Detail))
+                        {
+                            <p class="provider-detail">@provider.Detail</p>
+                        }
+
+                        @if (!string.IsNullOrWhiteSpace(provider.Error))
+                        {
+                            <p class="provider-detail" role="note">@provider.Error</p>
+                        }
+
+                        <p class="provider-meta">
+                            Source: @provider.Source · confidence: @provider.Confidence
+                            @if (stale)
+                            {
+                                <strong> · reading is stale</strong>
+                            }
+                        </p>
+                    </li>
+                }
+            </ul>
+        }
+    </section>
+
+    @* ------------------------------------------------------- The work map / trail (same data) *@
+    <section class="demiplane-map" aria-labelledby="map-title">
+        <div class="section-heading">
+            <div>
+                <p class="eyebrow">Work map</p>
+                <h2 id="map-title">What is happening</h2>
+            </div>
+        </div>
+
+        @if (plane.Tasks.Count > 0)
+        {
+            <p class="map-note">
+                Each task shows the sessions that have run and the step proposed next. Tasks are listed
+                independently because this project records no dependencies between them.
+            </p>
+
+            <ul class="task-map">
+                @foreach (var task in plane.Tasks)
+                {
+                    var selected = Model.SelectedTask?.TaskId == task.TaskId;
+                    <li class="task-node @DemiplaneModel.CssFor(task.DisplayState) @(selected ? "is-selected" : string.Empty)">
+                        <p class="task-node-state">
+                            <span class="state-marker" aria-hidden="true">@DemiplaneModel.MarkerFor(task.DisplayState)</span>
+                            <span class="task-node-state-label">@DemiplaneModel.LabelFor(task.DisplayState)</span>
+                        </p>
+
+                        <h3 class="task-node-title">
+                            <a asp-page="/Demiplane" asp-route-id="@plane.ProjectId" asp-route-taskId="@task.TaskId">@task.Title</a>
+                        </h3>
+
+                        <p class="task-node-reason">@task.ReasonText</p>
+
+                        @if (task.Chain.Count > 0)
+                        {
+                            <ol class="task-chain">
+                                @foreach (var step in task.Chain)
+                                {
+                                    <li class="task-chain-step @(step.IsProposed ? "is-proposed" : string.Empty) @(step.IsCurrent ? "is-current" : string.Empty)">
+                                        <span class="state-marker" aria-hidden="true">@DemiplaneModel.StepMarker(step)</span>
+                                        <span>@step.Role</span>
+                                        <span class="task-chain-status">@DemiplaneModel.StepLabel(step)</span>
+                                    </li>
+                                }
+                            </ol>
+                        }
+
+                        @if (!string.IsNullOrWhiteSpace(task.Provider))
+                        {
+                            <p class="task-node-meta">Provider: @task.Provider</p>
+                        }
+                    </li>
+                }
+            </ul>
+        }
+    </section>
+
+    @* --------------------------------------------------------------------- Selected task detail *@
+    @if (Model.SelectedTask is { } detail)
+    {
+        <section class="demiplane-detail @DemiplaneModel.CssFor(detail.DisplayState)" aria-labelledby="detail-title" id="task-detail">
+            <div class="section-heading">
+                <div>
+                    <p class="eyebrow">
+                        <span class="state-marker" aria-hidden="true">@DemiplaneModel.MarkerFor(detail.DisplayState)</span>
+                        @DemiplaneModel.LabelFor(detail.DisplayState)
+                    </p>
+                    <h2 id="detail-title">@detail.Title</h2>
+                </div>
+            </div>
+
+            <div class="familiar-summary">
+                <h3>The Familiar's account</h3>
+                <dl>
+                    <dt>What happened</dt>
+                    <dd>@detail.Summary.WhatHappened</dd>
+
+                    <dt>Right now</dt>
+                    <dd>@detail.Summary.CurrentState</dd>
+
+                    @if (!string.IsNullOrWhiteSpace(detail.Summary.WhyWaiting))
+                    {
+                        <dt>Why</dt>
+                        <dd>@detail.Summary.WhyWaiting</dd>
+                    }
+
+                    @if (!string.IsNullOrWhiteSpace(detail.Summary.OutcomeDetail))
+                    {
+                        <dt>Recorded reason</dt>
+                        <dd><pre class="conversation-block">@detail.Summary.OutcomeDetail</pre></dd>
+                    }
+
+                    @if (!string.IsNullOrWhiteSpace(detail.Summary.NeedsAttention))
+                    {
+                        <dt>Needs you</dt>
+                        <dd>@detail.Summary.NeedsAttention</dd>
+                    }
+
+                    @if (!string.IsNullOrWhiteSpace(detail.Summary.RecommendedNextAction))
+                    {
+                        <dt>Recommended next</dt>
+                        <dd>@detail.Summary.RecommendedNextAction</dd>
+                    }
+
+                    <dt>Build and tests</dt>
+                    <dd>Not recorded. This project stores no structured build or test result, so the Familiar does not claim one.</dd>
+                </dl>
+            </div>
+
+            @if (detail.PendingHandoffId is { } detailHandoffId && detail.ProposedRole is { } detailRole)
+            {
+                <div class="decision-actions" role="group" aria-label="Approve or decline the proposed session">
+                    <form method="post" asp-page-handler="Approve" asp-route-id="@plane.ProjectId">
+                        <input type="hidden" name="Decision.HandoffId" value="@detailHandoffId" />
+                        <input type="hidden" name="Decision.ExpectedConcurrencyToken" value="@detail.PendingHandoffToken" />
+                        <button type="submit" class="decision-approve">Approve — summon @detailRole</button>
+                    </form>
+                    <form method="post" asp-page-handler="Decline" asp-route-id="@plane.ProjectId">
+                        <input type="hidden" name="Decision.HandoffId" value="@detailHandoffId" />
+                        <input type="hidden" name="Decision.ExpectedConcurrencyToken" value="@detail.PendingHandoffToken" />
+                        <button type="submit" class="decision-decline">Decline</button>
+                    </form>
+                </div>
+            }
+
+            <p class="detail-links">
+                <a asp-page="/Tasks/Details" asp-route-id="@detail.TaskId">Full task record, sessions and context</a>
+                @if (detail.CurrentSessionId is { } currentSessionId)
+                {
+                    <span> · <a href="/tasks/@detail.TaskId/sessions/@currentSessionId/assignment.md">Assignment packet</a></span>
+                }
+                <span> · <a href="/tasks/@detail.TaskId/context.md">Raw context</a></span>
+            </p>
+        </section>
+    }
+}
