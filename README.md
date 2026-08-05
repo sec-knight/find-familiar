@@ -109,6 +109,15 @@ The first ADR establishes the project's core philosophy:
 
 ---
 
+## Sprint Acceptance
+
+Accepted sprints, the commits and tags they were accepted at, and what was verified at the time are
+recorded in [`docs/sprint-acceptance.md`](docs/sprint-acceptance.md).
+
+The current accepted baseline is **Sprint 10 — The Demiplane**, tagged `demiplane-baseline-v0`.
+
+---
+
 ## License
 
 License to be determined.
