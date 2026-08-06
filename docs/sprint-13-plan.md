@@ -116,37 +116,43 @@ phone.
 ### Slice 4 — Approve it in the conversation
 
 The plan renders inline in the transcript with per-item controls, exactly as the per-project Familiar
-renders a proposal today. Approving creates the tasks and starts the sessions the plan named, through
-`FamiliarActionService`, with every gate re-checked inside the applying transaction.
+renders a proposal today. Approving creates every included task and starts **one** session — the
+first — through `FamiliarActionService`, with every gate re-checked inside the applying transaction.
 
 **Accept:** approving a drafted plan in the chat creates exactly the approved items with the human's
-edits, starts exactly the sessions the card described, and nothing else. Declining creates nothing.
-No task page is opened at any point.
+edits, starts exactly one session, and nothing else. Declining creates nothing. No task page is
+opened at any point.
 
 *Slices 1–4 are the sprint.*
 
-### Slice 5 — The loop closes in conversation
+### Slice 5 — The loop closes in conversation, one session at a time
 
-Pending handoffs and finished sessions surface in the conversation. Approving a Planner → Implementer
-handoff there starts the next session. Accepting a result captures it, and slice 1 makes it
-retrievable on the next turn.
+A session finishes; the Familiar reports what came back and asks what to do next — start the next
+item as planned, change it, or stop. Pending handoffs surface the same way: approving a Planner →
+Implementer handoff in the conversation starts the next session. Accepting a result captures it, and
+slice 1 makes it retrievable on the turn after.
 
-**Accept:** a task goes from proposed to planned to implemented to reviewed, and every human decision
-along the way is made in the conversation.
+The plan never drains on its own. Each step is approved on the evidence of the one before it, which
+is the whole reason to run them one at a time rather than launching six on a guess (ADR-0014 §4).
+
+**Accept:** a task goes from proposed to planned to implemented to reviewed; every human decision
+along the way is made in the conversation; and the Familiar's account of each session cites the
+context entry that session actually produced.
 
 ### Slice 6 — Warm open
 
 A new conversation opens with the Familiar speaking first: where things stand, what needs a decision,
 what has been sitting untouched.
 
-## The action kinds question
+## The action kinds — settled
 
-`CreateTask` and `StartPlanner` cannot express a plan that starts an Implementer, nor "this is already
-done" — the thing actually asked for the day Sprint 12 shipped.
+They grow. `CreateTask` and `StartPlanner` are two because Sprint 11 shipped what it could reach, not
+because two was right: neither can express starting an Implementer, nor "this is already done" — the
+first thing actually asked of the Familiar the day it could talk.
 
-`FamiliarConversationModelTests` asserts there are exactly two kinds, deliberately, so a third cannot
-appear by accident. The kinds this sprint needs change in the same commit as that test, with the
-reasoning recorded, or they do not change at all.
+`FamiliarConversationModelTests` asserts there are exactly two, and that guard stays. It is amended
+in the same commit as the kinds it guards, with the reasoning recorded in ADR-0014, and it keeps
+asserting an exact count afterwards. Growth is a decision; drift is what the guard forbids.
 
 ## Risks
 

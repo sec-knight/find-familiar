@@ -88,20 +88,41 @@ one row, a human decides once, and a half-approved sprint cannot exist in the da
 
 The items are not tasks. They are a record of what a person will be shown — not authority to act.
 
-### 4. Approval creates the work *and* starts the sessions the plan named
+### 4. Approval creates the whole plan and starts exactly one session
 
-Approving a plan does what the plan said it would do, including starting sessions. Requiring a second
-trip elsewhere to start each one would rebuild exactly the split this ADR rejects.
+Approving a plan creates every included task at once — the plan is the unit, and a half-created sprint
+is the thing §3's single-row shape exists to prevent. But it starts **one** session, the first, and
+then stops.
 
-The blast radius is real and is handled by disclosure and itemisation rather than by an extra door:
+When that session finishes, the Familiar reports what came back in the conversation and asks what to
+do next: start the next session as planned, change the next item, or abandon the rest. The plan is a
+statement of intent, not a queue that drains on its own.
 
-- the card states plainly what will happen — how many tasks, which sessions start immediately — before
-  anything is clicked;
+This is a deliberate narrowing of an earlier draft, which started every session the plan named on
+approval. One at a time is better for reasons that are not only about caution:
+
+- **A plan written before any of it ran is a guess.** The first session's result is the best evidence
+  available about whether the second is still the right thing to do, and a plan that drains
+  automatically throws that evidence away at exactly the moment it is worth most.
+- **Six sessions started at once are six chances to be wrong before anyone reads anything.** Approving
+  the *first* step is a smaller claim than approving six, and it is the claim a person can actually
+  evaluate.
+- **It makes the report the loop's heartbeat.** The Familiar has to come back and account for what
+  happened before it gets to do anything else, which is the behaviour this system is supposed to have.
+
+The remaining blast radius is handled by disclosure and itemisation rather than by an extra door:
+
+- the card states plainly what will happen — how many tasks are created, and which single session
+  starts now — before anything is clicked;
 - each item can be excluded, and each title and outcome edited, with the human's version being what
   gets created;
 - the applying transaction re-checks project status, observed context revision, and every per-item
   gate, refusing with the specific reason if the world moved;
 - the existing single-started-session-per-task invariant still bounds what can run at once.
+
+The cost is that a plan cannot run unattended, and is not meant to. If that becomes the constraint
+that hurts, the change to make is a per-plan "continue without asking" the human sets deliberately —
+not a default that drains.
 
 ### 5. The invariant is unchanged
 
@@ -137,11 +158,15 @@ human stands when they decide*, not how many code paths can create work. There i
 
 ### Neutral
 
-- The action kinds must grow: a plan that starts an Implementer, and a way to say "this is already
-  done", cannot be expressed by `CreateTask` and `StartPlanner`.
-  `FamiliarConversationModelTests` asserts there are exactly two, deliberately, so a third cannot
-  appear by accident. That test changes in the same commit as the kinds, with the reasoning recorded,
-  or the kinds do not change.
+- **The action kinds grow, deliberately.** `CreateTask` and `StartPlanner` are not two kinds because
+  two was the right number; they are two because Sprint 11 shipped what it could reach. A plan that
+  starts an Implementer, and a way to record that something is already done, cannot be said in that
+  vocabulary — and the second was the very first thing asked of the Familiar the day it could talk.
+
+  `FamiliarConversationModelTests` asserts there are exactly two, and that guard is doing its job:
+  it makes growth a decision rather than a drift. It is amended in the same commit as the kinds it
+  guards, with the reasoning recorded here, and it keeps asserting an exact count afterwards. What
+  the guard forbids is a kind appearing because something needed one, not a kind existing.
 
 ## Constraint carried forward
 
