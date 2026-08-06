@@ -8,5 +8,6 @@
     <Project Path="tests/FindFamiliar.Server.Tests/FindFamiliar.Server.Tests.csproj" />
     <Project Path="tests/FindFamiliar.FakeAdapter/FindFamiliar.FakeAdapter.csproj" />
     <Project Path="tests/FindFamiliar.FakeClaudeRuntime/FindFamiliar.FakeClaudeRuntime.csproj" />
+    <Project Path="tests/FindFamiliar.FakeReasoningProvider/FindFamiliar.FakeReasoningProvider.csproj" />
   </Folder>
 </Solution>

@@ -25,6 +25,7 @@
     <ProjectReference Include="..\..\src\FindFamiliar.Adapter.Claude\FindFamiliar.Adapter.Claude.csproj" />
     <ProjectReference Include="..\FindFamiliar.FakeAdapter\FindFamiliar.FakeAdapter.csproj" />
     <ProjectReference Include="..\FindFamiliar.FakeClaudeRuntime\FindFamiliar.FakeClaudeRuntime.csproj" />
+    <ProjectReference Include="..\FindFamiliar.FakeReasoningProvider\FindFamiliar.FakeReasoningProvider.csproj" />
   </ItemGroup>
 
 </Project>

@@ -3,6 +3,7 @@ using System.Reflection;
 using FindFamiliar.Server.Data;
 using FindFamiliar.Server.Domain;
 using FindFamiliar.Server.Pages;
+using FindFamiliar.Server.Services.Familiar.Reasoning;
 using FindFamiliar.Server.Tests.Infrastructure;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -280,19 +281,21 @@ public sealed class FamiliarPageTests(FindFamiliarWebApplicationFactory factory)
     }
 
     /// <summary>
-    /// The structural guarantee for this slice: there is no write path off this page, because there
-    /// is no handler that could write.
+    /// Send is the only write this page has. Confirm and Dismiss belong to Slice 5, and until they
+    /// exist there must be no handler that could decide a proposal — a control that appears before
+    /// the transaction behind it is how a proposal gets confirmed without its gates.
     /// </summary>
     [Fact]
-    public async Task The_page_has_no_post_handler()
+    public async Task Send_is_the_only_post_handler()
     {
         var handlers = typeof(FamiliarModel)
             .GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly)
             .Where(method => method.Name.StartsWith("OnPost", StringComparison.Ordinal))
             .Select(method => method.Name)
+            .OrderBy(name => name, StringComparer.Ordinal)
             .ToList();
 
-        Assert.Empty(handlers);
+        Assert.Equal(["OnPostSendAsync"], handlers);
 
         var project = await SeedProjectAsync();
         var task = await SeedTaskAsync(project.Id, $"Token source {Guid.NewGuid():N}");
@@ -373,9 +376,143 @@ public sealed class FamiliarPageTests(FindFamiliarWebApplicationFactory factory)
         Assert.Contains("This project is archived", html, StringComparison.Ordinal);
         Assert.Contains("Project status <strong>Archived</strong>", html, StringComparison.Ordinal);
 
-        // Nothing writable is offered, on an archived project or any other.
-        Assert.DoesNotContain("<form", html, StringComparison.OrdinalIgnoreCase);
+        // The input is disabled and the reason is stated, exactly as user-experience.md §5 requires.
         Assert.Contains("disabled", html, StringComparison.Ordinal);
+        Assert.Contains("no work can be started from here", html, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A disabled control is a hint to a browser, not a boundary. A crafted post to an archived
+    /// project must be refused by the server and write nothing.
+    /// </summary>
+    [Fact]
+    public async Task An_archived_project_refuses_a_crafted_send()
+    {
+        var project = await SeedProjectAsync(ProjectStatus.Archived);
+        var task = await SeedTaskAsync(project.Id, $"Archived {Guid.NewGuid():N}");
+
+        var before = await CaptureAsync(project.Id);
+
+        var afClient = new AntiforgeryHttpClient(factory.CreateClient(new() { AllowAutoRedirect = false }));
+        var (_, tokenPage) = await afClient.GetPageAsync($"/Tasks/Details/{task.Id}");
+
+        var response = await afClient.PostFormAsync(
+            $"/Familiar/{project.Id}?handler=Send",
+            AntiforgeryHttpClient.ExtractAntiforgeryToken(tokenPage),
+            [new("Message", "start something on this archived project")]);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Contains(
+            "This project is archived",
+            await response.Content.ReadAsStringAsync(),
+            StringComparison.Ordinal);
+
+        Assert.Equal(before, await CaptureAsync(project.Id));
+    }
+
+    /// <summary>
+    /// The stock build: no credential anywhere, and sending still works. The message is saved and
+    /// the page says the one thing that is true about why there is no reply.
+    /// </summary>
+    [Fact]
+    public async Task Sending_works_with_no_provider_configured()
+    {
+        var project = await SeedProjectAsync();
+        var task = await SeedTaskAsync(project.Id, $"Sendable {Guid.NewGuid():N}");
+        var marker = Guid.NewGuid().ToString("N");
+
+        var afClient = new AntiforgeryHttpClient(factory.CreateClient(new() { AllowAutoRedirect = false }));
+        var (_, tokenPage) = await afClient.GetPageAsync($"/Tasks/Details/{task.Id}");
+
+        var response = await afClient.PostFormAsync(
+            $"/Familiar/{project.Id}?handler=Send",
+            AntiforgeryHttpClient.ExtractAntiforgeryToken(tokenPage),
+            [new("Message", $"why is this blocked? {marker}")]);
+
+        // Post/redirect/get, so a refresh does not send again.
+        Assert.Equal(HttpStatusCode.Redirect, response.StatusCode);
+
+        using var client = factory.CreateClient();
+        var html = await client.GetStringAsync($"/Familiar/{project.Id}");
+
+        Assert.Contains($"why is this blocked? {marker}", html, StringComparison.Ordinal);
+        Assert.Contains(
+            "No reasoning provider is configured, so I can only show you what is recorded.",
+            html,
+            StringComparison.Ordinal);
+
+        // The deterministic account is intact beside the failure, which is the whole point.
+        Assert.Contains("What is recorded", html, StringComparison.Ordinal);
+        Assert.Contains("What I can't see", html, StringComparison.Ordinal);
+    }
+
+    /// <summary>The default registration is the honest one.</summary>
+    [Fact]
+    public void The_unconfigured_provider_is_the_default_registration()
+    {
+        using var scope = factory.Services.CreateScope();
+        var provider = scope.ServiceProvider.GetRequiredService<IFamiliarReasoningProvider>();
+
+        Assert.IsType<UnconfiguredFamiliarReasoningProvider>(provider);
+        Assert.Equal(UnconfiguredFamiliarReasoningProvider.ProviderName, provider.Provider);
+    }
+
+    [Fact]
+    public async Task Sending_requires_an_antiforgery_token()
+    {
+        var project = await SeedProjectAsync();
+        var before = await CaptureAsync(project.Id);
+
+        using var raw = factory.CreateClient(new() { AllowAutoRedirect = false });
+
+        var response = await raw.PostAsync(
+            $"/Familiar/{project.Id}?handler=Send",
+            new FormUrlEncodedContent(new Dictionary<string, string> { ["Message"] = "unguarded" }));
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal(before, await CaptureAsync(project.Id));
+    }
+
+    [Fact]
+    public async Task An_empty_send_is_refused_in_place_and_writes_nothing()
+    {
+        var project = await SeedProjectAsync();
+        var task = await SeedTaskAsync(project.Id, $"Empty {Guid.NewGuid():N}");
+        var before = await CaptureAsync(project.Id);
+
+        var afClient = new AntiforgeryHttpClient(factory.CreateClient(new() { AllowAutoRedirect = false }));
+        var (_, tokenPage) = await afClient.GetPageAsync($"/Tasks/Details/{task.Id}");
+
+        var response = await afClient.PostFormAsync(
+            $"/Familiar/{project.Id}?handler=Send",
+            AntiforgeryHttpClient.ExtractAntiforgeryToken(tokenPage),
+            [new("Message", "   ")]);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Contains(
+            "Type a message before sending.",
+            await response.Content.ReadAsStringAsync(),
+            StringComparison.Ordinal);
+
+        Assert.Equal(before, await CaptureAsync(project.Id));
+    }
+
+    /// <summary>Sending to a project that does not exist is a 404, not a new conversation.</summary>
+    [Fact]
+    public async Task Sending_to_an_unknown_project_is_not_found()
+    {
+        var project = await SeedProjectAsync();
+        var task = await SeedTaskAsync(project.Id, $"Token {Guid.NewGuid():N}");
+
+        var afClient = new AntiforgeryHttpClient(factory.CreateClient(new() { AllowAutoRedirect = false }));
+        var (_, tokenPage) = await afClient.GetPageAsync($"/Tasks/Details/{task.Id}");
+
+        var response = await afClient.PostFormAsync(
+            $"/Familiar/{Guid.NewGuid()}?handler=Send",
+            AntiforgeryHttpClient.ExtractAntiforgeryToken(tokenPage),
+            [new("Message", "hello")]);
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
     }
 
     // ---------------------------------------------------------------- helpers

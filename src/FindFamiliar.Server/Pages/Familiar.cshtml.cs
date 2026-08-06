@@ -47,13 +47,33 @@ public sealed class FamiliarModel(
 
     public bool IsArchived => Snapshot?.ProjectStatus == ProjectStatus.Archived;
 
-    public async Task<IActionResult> OnGetAsync(Guid projectId, CancellationToken cancellationToken)
+    /// <summary>
+    /// The message being composed. The only value bound from the send form — the project comes from
+    /// the route and everything else is server-side, so a crafted post cannot address another
+    /// project's conversation.
+    /// </summary>
+    [BindProperty]
+    public string? Message { get; set; }
+
+    /// <summary>Shown beside the textarea when a send was refused. Authored by the service.</summary>
+    public string? SendValidationMessage { get; private set; }
+
+    public async Task<IActionResult> OnGetAsync(Guid projectId, CancellationToken cancellationToken) =>
+        await LoadAsync(projectId, cancellationToken) ? Page() : NotFound();
+
+    /// <summary>
+    /// Reads everything the page renders. False means the project does not exist.
+    ///
+    /// This is the only path that touches the database on a render, and it writes nothing on any
+    /// branch — a project you only look at stays untouched.
+    /// </summary>
+    private async Task<bool> LoadAsync(Guid projectId, CancellationToken cancellationToken)
     {
         var result = await snapshots.GetSnapshotAsync(projectId, cancellationToken);
 
         if (result.Outcome == ProjectSnapshotOutcome.ProjectNotFound)
         {
-            return NotFound();
+            return false;
         }
 
         if (result.Snapshot is null)
@@ -61,7 +81,7 @@ public sealed class FamiliarModel(
             // The project exists but the read failed. Saying so beats a 500, for the reason
             // ProviderCapacitySnapshot.Faulted exists: an operational hiccup is a fact to report.
             UnavailableDetail = result.Detail;
-            return Page();
+            return true;
         }
 
         Snapshot = result.Snapshot;
@@ -69,7 +89,46 @@ public sealed class FamiliarModel(
         Summary = FamiliarSummaryWriter.Compose(result.Snapshot);
         Conversation = await conversations.GetAsync(projectId, cancellationToken);
 
-        return Page();
+        return true;
+    }
+
+    /// <summary>
+    /// Sends a message and redirects.
+    ///
+    /// The handler contains no business logic: validation, the two-transaction append, the snapshot,
+    /// the envelope bound and the provider call all belong to the service, so the same rules apply
+    /// however a send arrives. Post/redirect/get, so a refresh after sending does not send again.
+    /// </summary>
+    public async Task<IActionResult> OnPostSendAsync(Guid projectId, CancellationToken cancellationToken)
+    {
+        var result = await conversations.SendAsync(projectId, Message ?? string.Empty, cancellationToken);
+
+        if (result.Status == FamiliarSendStatus.ProjectNotFound)
+        {
+            return NotFound();
+        }
+
+        if (result.Status == FamiliarSendStatus.Invalid)
+        {
+            // Re-render in place so the person keeps what they typed and sees why it was refused.
+            SendValidationMessage = result.ValidationMessage;
+
+            if (!await LoadAsync(projectId, cancellationToken))
+            {
+                return NotFound();
+            }
+
+            return Page();
+        }
+
+        if (result.Status == FamiliarSendStatus.DatabaseBusy)
+        {
+            // No competitor is claimed, because none has been established.
+            TempData["StatusMessage"] =
+                "The database was busy and your message was not sent. Nothing was changed — try again.";
+        }
+
+        return RedirectToPage(new { projectId });
     }
 
     /// <summary>Who a message is attributed to, in the page's own words rather than the enum's.</summary>

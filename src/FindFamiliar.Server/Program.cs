@@ -5,6 +5,7 @@ using FindFamiliar.Server.Domain;
 using FindFamiliar.Server.Services;
 using FindFamiliar.Server.Services.Demiplane;
 using FindFamiliar.Server.Services.Familiar;
+using FindFamiliar.Server.Services.Familiar.Reasoning;
 using FindFamiliar.Server.Services.Providers;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.EntityFrameworkCore;
@@ -47,9 +48,17 @@ builder.Services.AddScoped<IDemiplaneProjectionService, DemiplaneProjectionServi
 // and its summary are the part of the Familiar that must work with no credentials at all.
 builder.Services.AddScoped<IProjectSnapshotService, ProjectSnapshotService>();
 
-// The read side of a project's conversation. It writes nothing, so the Familiar page's GET stays a
-// read and a project nobody has spoken to keeps no conversation row.
 builder.Services.AddScoped<IFamiliarConversationService, FamiliarConversationService>();
+
+builder.Services.Configure<FamiliarReasoningOptions>(
+    builder.Configuration.GetSection(FamiliarReasoningOptions.SectionName));
+
+// The honest default, exactly as UnknownProviderCapacityReader is for provider capacity (ADR-0011):
+// with nothing configured the application starts, the Familiar page renders, the deterministic
+// summary is complete, and a message sent on a stock build is durably saved and answered with the
+// one sentence that is true. No credential is required to run this application, and none is read
+// from configuration — a provider that needs a key reads it from the environment only.
+builder.Services.AddScoped<IFamiliarReasoningProvider, UnconfiguredFamiliarReasoningProvider>();
 
 builder.Services.AddScoped<IProviderCapacityService, ProviderCapacityService>();
 

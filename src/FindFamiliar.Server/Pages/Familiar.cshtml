@@ -10,6 +10,11 @@
    poll for, and re-requesting the URL would re-render a conversation somebody is part-way through
    reading. No script either: nothing on this page requires JavaScript to function. *@
 
+@if (TempData["StatusMessage"] is string statusMessage)
+{
+    <p role="status" class="demiplane-flash">@statusMessage</p>
+}
+
 @if (Model.Snapshot is null)
 {
     <section class="dashboard-intro" aria-labelledby="familiar-title">
@@ -246,11 +251,31 @@ else
             <p role="status">This project is archived, so no work can be started from here. Everything above stays readable — archiving hides nothing.</p>
         }
 
-        <p>Asking is not available yet. This page currently reads what is recorded; the conversation itself arrives with the reasoning provider.</p>
+        @* One textarea, one submit button, one antiforgery token. Nothing here needs JavaScript:
+           the character bound is enforced server-side and stated in text, so a browser that runs no
+           script behaves exactly like one that does. *@
+        <form method="post" asp-page-handler="Send" asp-route-projectId="@snapshot.ProjectId">
+            <label class="familiar-compose-label" for="familiar-message">Your message</label>
 
-        <label class="familiar-compose-label" for="familiar-message">Your message</label>
-        <textarea id="familiar-message" class="familiar-compose-input" rows="3"
-                  placeholder="Ask about this project…" disabled aria-describedby="compose-title"></textarea>
-        <button type="button" class="familiar-compose-send" disabled>Send</button>
+            @if (Model.SendValidationMessage is { } validationMessage)
+            {
+                <p class="familiar-compose-error" role="alert" id="familiar-message-error">@validationMessage</p>
+            }
+
+            @* Disabled on an archived project. The rule is enforced server-side as well — a disabled
+               control is a hint to a browser, not a boundary. *@
+            <textarea id="familiar-message" name="Message" class="familiar-compose-input" rows="3"
+                      maxlength="@FamiliarConversationService.MaxUserMessageCharacters"
+                      placeholder="Ask about this project…"
+                      aria-describedby="familiar-message-hint@(Model.SendValidationMessage is null ? "" : " familiar-message-error")"
+                      disabled="@Model.IsArchived" required>@Model.Message</textarea>
+
+            <p class="familiar-compose-hint" id="familiar-message-hint">
+                Up to @FamiliarConversationService.MaxUserMessageCharacters.ToString("N0") characters.
+                The Familiar answers from what is recorded above, and cannot change anything.
+            </p>
+
+            <button type="submit" class="familiar-compose-send" disabled="@Model.IsArchived">Send</button>
+        </form>
     </section>
 }
