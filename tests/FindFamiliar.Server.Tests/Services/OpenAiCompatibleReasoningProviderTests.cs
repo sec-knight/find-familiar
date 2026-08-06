@@ -146,6 +146,39 @@ public sealed class OpenAiCompatibleReasoningProviderTests
         Assert.Equal([real], outcome.EvidenceIds);
     }
 
+    /// <summary>
+    /// Models wrap JSON in a Markdown fence even when a schema was requested — observed against a
+    /// real endpoint, which returned bare JSON for a short snapshot and fenced JSON for a full one.
+    /// The payload inside is still parsed and validated strictly; only the packaging is normalised.
+    /// </summary>
+    [Theory]
+    [InlineData("```json\n{\"reply\":\"Fenced.\",\"action\":null,\"evidence\":null}\n```")]
+    [InlineData("```\n{\"reply\":\"Fenced.\",\"action\":null,\"evidence\":null}\n```")]
+    [InlineData("  ```json\n{\"reply\":\"Fenced.\",\"action\":null,\"evidence\":null}\n```  ")]
+    [InlineData("```json\n{\"reply\":\"Fenced.\",\"action\":null,\"evidence\":null}")]
+    public async Task A_reply_wrapped_in_a_markdown_fence_is_still_read(string content)
+    {
+        var handler = Scripted(HttpStatusCode.OK, Completion(content));
+
+        var outcome = await NewProvider(handler).RespondAsync(NewRequest());
+
+        Assert.Equal(FamiliarReasoningStatus.Answered, outcome.Status);
+        Assert.Equal("Fenced.", outcome.Reply);
+    }
+
+    /// <summary>Unfencing normalises packaging; it does not make invalid content acceptable.</summary>
+    [Theory]
+    [InlineData("```json\nnot json at all\n```")]
+    [InlineData("```json\n{\"reply\":\"\"}\n```")]
+    public async Task A_fenced_but_invalid_reply_is_still_malformed(string content)
+    {
+        var handler = Scripted(HttpStatusCode.OK, Completion(content));
+
+        Assert.Equal(
+            FamiliarReasoningStatus.Malformed,
+            (await NewProvider(handler).RespondAsync(NewRequest())).Status);
+    }
+
     [Theory]
     [InlineData("not json at all")]
     [InlineData("{\"reply\":\"\"}")]

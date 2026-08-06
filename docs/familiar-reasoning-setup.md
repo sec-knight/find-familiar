@@ -108,6 +108,35 @@ ollama pull qwen3:4b
 > Check with `grep -o -m1 avx2 /proc/cpuinfo`. With AVX2 and a 4B model, expect answers in
 > tens of seconds; with any modest GPU, seconds.
 
+### Choosing a model — what actually matters
+
+Two things bite in practice, and neither is visible from a model's advertised capabilities. Both were
+found by pointing this at real free-tier endpoints.
+
+**1. "Supports `response_format`" does not mean "honours it."** A model can accept the parameter,
+return HTTP 200, and reply in plain prose anyway. You will see `provider-response-unusable`. Test any
+candidate with one short request before committing to it:
+
+```bash
+curl -s https://openrouter.ai/api/v1/chat/completions \
+  -H "Authorization: Bearer $OPENROUTER_API_KEY" -H 'Content-Type: application/json' \
+  -d '{"model":"<candidate>","max_tokens":256,
+       "messages":[{"role":"user","content":"Say the project is fine. No action, no evidence."}],
+       "response_format":{"type":"json_schema","json_schema":{"name":"t","strict":true,
+         "schema":{"type":"object","properties":{"reply":{"type":"string"}},
+                   "required":["reply"],"additionalProperties":false}}}}' | head -c 300
+```
+
+If the content is JSON, the model is a candidate. If it is prose, pick another.
+
+**2. Schema adherence degrades as the prompt grows.** A model that returns bare JSON for a short
+prompt may wrap it in a Markdown fence for a full project snapshot. This application unfences before
+parsing, so it is handled — but it is why a model that passes the short test above can still
+disappoint on a large project, and why it is worth asking a real question before settling.
+
+**Free tiers are shared pools.** Expect `provider-rate-limited` intermittently, independent of your
+own usage. Configure a model you can fall back to.
+
 ### Using a hosted endpoint
 
 The same provider, a different base address. Hosted open models cost a small fraction of a penny per

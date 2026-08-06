@@ -56,7 +56,7 @@ public static class FamiliarStructuredReply
 
         try
         {
-            payload = JsonSerializer.Deserialize<FamiliarReplyPayload>(json, Options);
+            payload = JsonSerializer.Deserialize<FamiliarReplyPayload>(Unfence(json), Options);
         }
         catch (JsonException)
         {
@@ -65,6 +65,46 @@ public static class FamiliarStructuredReply
         }
 
         return string.IsNullOrWhiteSpace(payload?.Reply) ? null : payload;
+    }
+
+    /// <summary>
+    /// Strips a Markdown code fence around the payload, if one is present.
+    ///
+    /// Models routinely wrap JSON in <c>```json … ```</c> even when a schema was requested, and the
+    /// habit gets stronger as the prompt gets longer — observed against a real endpoint that returned
+    /// bare JSON for a short snapshot and fenced JSON for a full one. Only endpoints doing true
+    /// constrained decoding never do it, and this application deliberately supports ones that do not.
+    ///
+    /// This normalises a known wrapper; it does not loosen anything. What is inside the fence is
+    /// still parsed strictly and validated against the same rules, so a fenced payload that is not a
+    /// valid reply is still rejected. Refusing to read one would discard a correct answer over its
+    /// packaging.
+    /// </summary>
+    private static string Unfence(string json)
+    {
+        var trimmed = json.Trim();
+
+        if (!trimmed.StartsWith("```", StringComparison.Ordinal))
+        {
+            return trimmed;
+        }
+
+        // Drop the opening fence and its optional language tag ("```json"), which occupy the first
+        // line, then the closing fence at the end if it is there.
+        var firstBreak = trimmed.IndexOf('\n');
+        if (firstBreak < 0)
+        {
+            return trimmed;
+        }
+
+        var body = trimmed[(firstBreak + 1)..].TrimEnd();
+
+        if (body.EndsWith("```", StringComparison.Ordinal))
+        {
+            body = body[..^3].TrimEnd();
+        }
+
+        return body;
     }
 
     /// <summary>
