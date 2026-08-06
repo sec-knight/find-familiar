@@ -174,6 +174,7 @@ public sealed class OpenAiCompatibleFamiliarChatProvider(
         string? resolvedModel = null;
         int? promptTokens = null;
         int? completionTokens = null;
+        int? cachedPromptTokens = null;
 
         while (true)
         {
@@ -228,6 +229,9 @@ public sealed class OpenAiCompatibleFamiliarChatProvider(
             {
                 promptTokens = usage.InputTokens ?? promptTokens;
                 completionTokens = usage.OutputTokens ?? completionTokens;
+                cachedPromptTokens = usage.Details?.CachedTokens
+                                     ?? usage.Details?.CachedPromptTextTokens
+                                     ?? cachedPromptTokens;
             }
 
             if (chunk.Choices?.FirstOrDefault() is not { } choice)
@@ -259,7 +263,8 @@ public sealed class OpenAiCompatibleFamiliarChatProvider(
                     ? FamiliarChatProviderStatus.Completed
                     : FamiliarChatProviderStatus.Unavailable);
 
-        yield return new FamiliarChatStreamEvent.Finished(status, resolvedModel, promptTokens, completionTokens);
+        yield return new FamiliarChatStreamEvent.Finished(
+            status, resolvedModel, promptTokens, completionTokens, cachedPromptTokens);
     }
 
     private readonly record struct BodyResult(StreamReader? Reader, FamiliarChatProviderStatus? Failure);
@@ -406,7 +411,13 @@ public sealed class OpenAiCompatibleFamiliarChatProvider(
     /// The cached portion of the input. Optional in the de-facto standard, so its absence means "not
     /// reported" rather than "nothing was cached" — the column stays null and the dashboard says
     /// unknown instead of claiming a zero it did not observe.
+    ///
+    /// Two spellings, for the same reason the refusal signal accepts two: this shape is a convention
+    /// rather than a specification. <c>cached_tokens</c> is what OpenAI-compatible endpoints emit;
+    /// <c>cached_prompt_text_tokens</c> is xAI's. Whichever arrives first wins, and neither arriving
+    /// leaves the value null rather than zero.
     /// </summary>
     private sealed record StreamUsageDetails(
-        [property: JsonPropertyName("cached_tokens")] int? CachedTokens);
+        [property: JsonPropertyName("cached_tokens")] int? CachedTokens,
+        [property: JsonPropertyName("cached_prompt_text_tokens")] int? CachedPromptTextTokens);
 }
