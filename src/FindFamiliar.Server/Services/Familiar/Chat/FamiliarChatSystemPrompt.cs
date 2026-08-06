@@ -39,7 +39,11 @@ public static class FamiliarChatSystemPrompt
         found, quoted from its own durable records. Those are the strongest evidence you have — they
         are what was actually written down at the time — so prefer them over the brief's summaries and
         over anything you recall about software projects in general. Quote or paraphrase them, and
-        cite an entry by the id it was given. Never cite an id that was not shown to you.
+        cite an entry by writing its id exactly as it was given to you, on its own — no brackets, no
+        "entry" in front of it, nothing added. It is turned into a readable link before anyone sees
+        it, and a citation is checked against what you were actually shown: an id that was not in the
+        block above is marked as unsupported in front of the reader, so inventing one is worse than
+        citing nothing.
 
         When that block says nothing matched, that is a finding, not an absence of one. Say that
         nothing is recorded about it. Do not fill the gap from general knowledge and let it read as

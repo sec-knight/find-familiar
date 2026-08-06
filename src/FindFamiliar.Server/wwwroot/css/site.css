@@ -894,6 +894,45 @@ h2 {
   font-size: 0.875rem;
 }
 
+/* A checked citation, sitting inline in a reply where the raw id would otherwise be. Sized for a
+   thumb rather than a cursor: this is read on a phone more often than not, and a source you cannot
+   reliably tap is a source you do not check. */
+.familiar-citation {
+  display: inline-block;
+  max-width: 100%;
+  margin: 0 0.125rem;
+  padding: 0.125rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--accent-strong);
+  font-size: 0.8125rem;
+  line-height: 1.6;
+  text-decoration: none;
+  vertical-align: baseline;
+
+  /* The reply body is pre-wrap so a person's own line breaks survive; a chip inside it must not
+     inherit that and stretch on the whitespace in a title. */
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.familiar-citation:hover,
+.familiar-citation:focus-visible {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* A reference to something this answer was never given. Deliberately unlike the others: it is not a
+   source, and it must not be possible to mistake it for one at a glance. */
+.familiar-citation.is-unsupported {
+  border-style: dashed;
+  border-color: var(--warning);
+  color: var(--warning);
+  background: var(--warning-background);
+  cursor: help;
+}
+
 .familiar-evidence-item + .familiar-evidence-item::before {
   content: " · ";
 }

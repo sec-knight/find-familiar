@@ -187,7 +187,13 @@ public static class FamiliarChatStreamEndpoint
             var before = previous.Turns[index];
             var now = current.Turns[index];
 
-            if (before.State != now.State || before.Output.Length != now.Output.Length)
+            // Citations are counted as well as text, because they are written before any output
+            // arrives. Without this a turn that gained its evidence but has not yet said anything
+            // would look unchanged, and the first frame carrying text would be the first a reader
+            // could check a citation against.
+            if (before.State != now.State
+                || before.Output.Length != now.Output.Length
+                || before.Cited.Count != now.Cited.Count)
             {
                 return true;
             }

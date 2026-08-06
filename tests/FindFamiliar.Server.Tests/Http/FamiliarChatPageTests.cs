@@ -287,6 +287,94 @@ public sealed class FamiliarChatPageTests(FindFamiliarWebApplicationFactory fact
         return await dbContext.FamiliarChats.AsNoTracking().CountAsync();
     }
 
+    // ---------------------------------------------------------------- citations on the page
+
+    /// <summary>
+    /// A cited id renders as a readable, tappable chip rather than as a raw UUID mid-sentence, and it
+    /// links to the project the entry belongs to. A source nobody can follow is not a source.
+    /// </summary>
+    [Fact]
+    public async Task A_supported_citation_renders_as_a_chip_and_not_as_a_raw_id()
+    {
+        var project = await SeedProjectAsync();
+        var entryId = await SeedEntryAsync(project.Id, "Two provider seams (ADR-0013)");
+        var chatId = await StartConversationAsync("why are the lanes separate?");
+
+        await AnswerWithCitationAsync(chatId, entryId, offered: true);
+
+        using var client = factory.CreateClient();
+        var html = await client.GetStringAsync($"/Familiar/Chat/{chatId}");
+
+        Assert.Contains("familiar-citation", html, StringComparison.Ordinal);
+        Assert.Contains("Two provider seams (ADR-0013)", html, StringComparison.Ordinal);
+        Assert.Contains($"/Demiplane/{project.Id}", html, StringComparison.OrdinalIgnoreCase);
+
+        // The id itself is gone from the prose: the chip replaced it, rather than being added beside it.
+        Assert.DoesNotContain(entryId.ToString(), html, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// The check that makes citations worth anything. An id the answer was never given renders as
+    /// unsupported — visible, and visibly not a source.
+    /// </summary>
+    [Fact]
+    public async Task An_unsupported_citation_is_marked_on_the_page()
+    {
+        var chatId = await StartConversationAsync("why are the lanes separate?");
+
+        await AnswerWithCitationAsync(chatId, Guid.NewGuid(), offered: false);
+
+        using var client = factory.CreateClient();
+        var html = await client.GetStringAsync($"/Familiar/Chat/{chatId}");
+
+        Assert.Contains("is-unsupported", html, StringComparison.Ordinal);
+        Assert.Contains("unsupported reference", html, StringComparison.Ordinal);
+    }
+
+    private async Task<Guid> SeedEntryAsync(Guid projectId, string title)
+    {
+        using var scope = factory.Services.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<FamiliarDbContext>();
+
+        var entry = new ContextEntry
+        {
+            Id = Guid.NewGuid(),
+            ProjectId = projectId,
+            Kind = ContextEntryKind.Decision,
+            Title = title,
+            Content = "Conversation and agentic execution do not share a provider abstraction.",
+            State = ContextEntryState.Active,
+            CreatedUtc = DateTime.UtcNow
+        };
+
+        dbContext.ContextEntries.Add(entry);
+        await dbContext.SaveChangesAsync();
+
+        return entry.Id;
+    }
+
+    /// <summary>
+    /// Completes the conversation's in-flight turn with a reply that cites an id, standing in for the
+    /// generation host so this test stays about rendering.
+    /// </summary>
+    private async Task AnswerWithCitationAsync(Guid chatId, Guid entryId, bool offered)
+    {
+        using var scope = factory.Services.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<FamiliarDbContext>();
+
+        var turn = await dbContext.FamiliarChatTurns
+            .Where(candidate => candidate.ChatId == chatId)
+            .OrderByDescending(candidate => candidate.Sequence)
+            .FirstAsync();
+
+        turn.State = FamiliarChatTurnState.Completed;
+        turn.Output = $"They are different seams ({entryId}).";
+        turn.EvidenceEntryIds = offered ? FamiliarChatCitations.SerialiseEvidence([entryId]) : null;
+        turn.CompletedUtc = DateTime.UtcNow;
+
+        await dbContext.SaveChangesAsync();
+    }
+
     private async Task<FamiliarProject> SeedProjectAsync()
     {
         using var scope = factory.Services.CreateScope();

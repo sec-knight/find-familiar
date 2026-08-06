@@ -273,6 +273,18 @@ internal sealed class FamiliarChatTurnOutputSink(
     private long _lastFlushTimestamp = timeProvider.GetTimestamp();
     private int _unflushedCharacters;
 
+    public async Task RecordEvidenceAsync(
+        IReadOnlyCollection<Guid> entryIds,
+        CancellationToken cancellationToken = default)
+    {
+        turn.EvidenceEntryIds = FamiliarChatCitations.SerialiseEvidence(entryIds);
+
+        // Committed now, not on the throttle. The first sentence of a reply can contain a citation,
+        // and a chip that cannot be checked yet would render as unsupported and then correct itself —
+        // which is worse than not rendering, because a reader would have seen the accusation.
+        await dbContext.SaveChangesAsync(cancellationToken);
+    }
+
     public async Task AppendAsync(string fragment, CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrEmpty(fragment))

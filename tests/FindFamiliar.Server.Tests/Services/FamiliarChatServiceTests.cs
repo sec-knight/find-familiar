@@ -318,6 +318,83 @@ public sealed class FamiliarChatServiceTests
         Assert.Equal(3, page.Turns.Count);
     }
 
+    // ---------------------------------------------------------------- citations, as read back
+
+    /// <summary>
+    /// A turn's citations are resolved when the transcript is read, not when the answer was written,
+    /// and through a query that re-applies the sensitivity filter.
+    ///
+    /// So marking a project sensitive today removes its titles from every transcript that ever cited
+    /// it, with nothing rewritten and nothing left behind to leak. The id still stands in the reply
+    /// text — the reply did cite something — but it is no longer shown as a source, which is the
+    /// honest rendering of "this reader cannot see what that was".
+    /// </summary>
+    [Fact]
+    public async Task A_citation_stops_resolving_once_its_project_is_marked_sensitive()
+    {
+        using var database = new TemporarySqliteDatabase();
+        await using var dbContext = await database.CreateContextAsync();
+        var service = NewService(dbContext);
+
+        var project = await SeedProjectAsync(dbContext);
+
+        var entry = new ContextEntry
+        {
+            Id = Guid.NewGuid(),
+            ProjectId = project.Id,
+            Kind = ContextEntryKind.Decision,
+            Title = "A distinctive decision title",
+            Content = "Body.",
+            State = ContextEntryState.Active,
+            CreatedUtc = Now.UtcDateTime
+        };
+
+        dbContext.ContextEntries.Add(entry);
+        await dbContext.SaveChangesAsync();
+
+        var sent = await service.SendAsync(null, "why?");
+        await SettleWithCitationAsync(dbContext, entry.Id);
+
+        var before = (await service.ReadTurnsAfterAsync(sent.ChatId, 0))!.Turns[0];
+
+        Assert.Equal("A distinctive decision title", Assert.Single(before.Cited).Title);
+        Assert.Contains(before.Segments, segment => segment.IsCitation && segment.IsSupported);
+
+        // The project becomes sensitive after the fact.
+        var stored = await dbContext.Projects.SingleAsync(candidate => candidate.Id == project.Id);
+        stored.IsSensitive = true;
+        await dbContext.SaveChangesAsync();
+        dbContext.ChangeTracker.Clear();
+
+        var after = (await service.ReadTurnsAfterAsync(sent.ChatId, 0))!.Turns[0];
+
+        Assert.Empty(after.Cited);
+        Assert.DoesNotContain("distinctive decision title", after.Output, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(after.Segments, segment => segment.IsCitation && segment.IsSupported);
+    }
+
+    /// <summary>
+    /// An id the turn was never offered does not become a source, however well-formed it is. This is
+    /// the check that makes a drafted plan's evidence worth reading.
+    /// </summary>
+    [Fact]
+    public async Task An_id_the_turn_was_never_offered_is_not_a_source()
+    {
+        using var database = new TemporarySqliteDatabase();
+        await using var dbContext = await database.CreateContextAsync();
+        var service = NewService(dbContext);
+
+        var sent = await service.SendAsync(null, "why?");
+
+        // Answered citing an id, having been offered nothing at all.
+        await SettleWithCitationAsync(dbContext, Guid.NewGuid(), offered: false);
+
+        var turn = (await service.ReadTurnsAfterAsync(sent.ChatId, 0))!.Turns[0];
+
+        Assert.Empty(turn.Cited);
+        Assert.Contains(turn.Segments, segment => segment.IsCitation && !segment.IsSupported);
+    }
+
     /// <summary>
     /// A conversation that does not exist and a conversation with nothing new are different answers.
     /// Collapsing them would leave a client polling a deleted conversation forever.
@@ -479,6 +556,29 @@ public sealed class FamiliarChatServiceTests
             turn.FailureCode = state == FamiliarChatTurnState.Failed ? "test-failure" : null;
             turn.CompletedUtc = Now.UtcDateTime;
         }
+
+        await dbContext.SaveChangesAsync();
+        dbContext.ChangeTracker.Clear();
+    }
+
+    /// <summary>
+    /// Completes the in-flight turn with a reply that cites <paramref name="entryId"/>, recording it
+    /// as offered unless a test is deliberately staging a reply that cited what it was never shown.
+    /// </summary>
+    private static async Task SettleWithCitationAsync(
+        FamiliarDbContext dbContext,
+        Guid entryId,
+        bool offered = true)
+    {
+        var turn = await dbContext.FamiliarChatTurns
+            .SingleAsync(candidate =>
+                candidate.State == FamiliarChatTurnState.Pending
+                || candidate.State == FamiliarChatTurnState.Generating);
+
+        turn.State = FamiliarChatTurnState.Completed;
+        turn.Output = $"Because of {entryId}, that is how it is.";
+        turn.EvidenceEntryIds = offered ? FamiliarChatCitations.SerialiseEvidence([entryId]) : null;
+        turn.CompletedUtc = Now.UtcDateTime;
 
         await dbContext.SaveChangesAsync();
         dbContext.ChangeTracker.Clear();

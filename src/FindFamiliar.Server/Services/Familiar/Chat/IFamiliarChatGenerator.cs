@@ -28,6 +28,20 @@ public interface IFamiliarChatOutputSink
     /// allowed to fail the write.
     /// </summary>
     Task AppendAsync(string fragment, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Records which context entries were put in front of the model for this turn.
+    ///
+    /// Called before any output, and committed immediately rather than on the append throttle: a
+    /// reply that starts citing in its first sentence must have something to check those citations
+    /// against, and a reader on another device must see the same chips as the one who asked.
+    ///
+    /// This is the durable half of the citation contract. Without it, "was this id in the pack?" can
+    /// only be answered by re-running the search, which by then answers a different question.
+    /// </summary>
+    Task RecordEvidenceAsync(
+        IReadOnlyCollection<Guid> entryIds,
+        CancellationToken cancellationToken = default);
 }
 
 /// <summary>

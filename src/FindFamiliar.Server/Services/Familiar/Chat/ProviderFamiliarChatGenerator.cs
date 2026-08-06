@@ -56,6 +56,12 @@ public sealed class ProviderFamiliarChatGenerator(
         // person's own message, and it cannot silently fail to fire the way a tool call can.
         var found = await retrieval.RetrieveAsync(request.UserText, request.FocusProjectId, cancellationToken);
 
+        // Recorded before the model is called, so every citation in the reply can be checked against
+        // what was actually offered — including while the reply is still being written.
+        await sink.RecordEvidenceAsync(
+            found.Entries.Select(entry => entry.EntryId).ToList(),
+            cancellationToken);
+
         var prompt = new FamiliarChatRequest(
             FamiliarChatSystemPrompt.Text,
             history,

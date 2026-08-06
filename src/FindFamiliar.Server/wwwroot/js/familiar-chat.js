@@ -69,7 +69,7 @@
         const pendingNode = node.querySelector("[data-pending]");
         const inFlight = turn.state === "Pending" || turn.state === "Generating";
 
-        outputNode.textContent = turn.output || "";
+        renderOutput(outputNode, turn);
         outputNode.hidden = !turn.output;
 
         // The waiting note shows only while nothing has arrived yet. Once text is streaming, the text
@@ -86,6 +86,67 @@
         if (!existing) {
             transcript.appendChild(node);
         }
+    }
+
+    // The canonical 8-4-4-4-12 form, bounded so the tail of a longer token cannot parse as an id and
+    // invent a citation out of something that was never one. Mirrors FamiliarChatCitations.Segment;
+    // the two must agree, because a page that arrived by render and one built here have to be
+    // indistinguishable.
+    const ID_PATTERN =
+        /(^|[^0-9A-Za-z-])([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})(?![0-9A-Za-z-])/g;
+
+    // Text is always textContent; only the chip is an element. Turn output is model-written and the
+    // rule that it is inert holds here exactly as it does in the Razor page.
+    function renderOutput(node, turn) {
+        node.textContent = "";
+
+        const output = turn.output || "";
+        const cited = {};
+
+        (turn.citations || []).forEach(function (citation) {
+            cited[String(citation.entryId).toLowerCase()] = citation;
+        });
+
+        let last = 0;
+        let match;
+
+        ID_PATTERN.lastIndex = 0;
+
+        while ((match = ID_PATTERN.exec(output)) !== null) {
+            const start = match.index + match[1].length;
+
+            if (start > last) {
+                node.appendChild(document.createTextNode(output.slice(last, start)));
+            }
+
+            node.appendChild(chip(cited[match[2].toLowerCase()]));
+            last = start + match[2].length;
+        }
+
+        if (last < output.length) {
+            node.appendChild(document.createTextNode(output.slice(last)));
+        }
+    }
+
+    function chip(citation) {
+        if (!citation) {
+            // Named, never silently deleted: a reply citing something it was never shown is the most
+            // diagnostic thing it can do, and a reader is entitled to see it happen.
+            const unsupported = document.createElement("span");
+            unsupported.className = "familiar-citation is-unsupported";
+            unsupported.title = "This reference was not among the entries this answer was given.";
+            unsupported.textContent = "unsupported reference";
+            return unsupported;
+        }
+
+        const link = document.createElement("a");
+        link.className = "familiar-citation";
+        // The route form the Razor page produces, not a query string. The two renderers must build
+        // the same link or a chip tapped on a streamed reply lands somewhere a rendered one does not.
+        link.href = "/Demiplane/" + encodeURIComponent(citation.projectId);
+        link.title = citation.kind + " — " + citation.title;
+        link.textContent = String(citation.kind).toLowerCase() + ": " + citation.title;
+        return link;
     }
 
     function stateCss(state) {

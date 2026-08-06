@@ -37,6 +37,12 @@ public sealed class FamiliarChatTurn
 
     public const int MaxProviderModelLength = 120;
 
+    /// <summary>
+    /// Room for <c>FamiliarRetrievalResult.MaxEntries</c> ids in the compact 32-character form,
+    /// space separated, with slack.
+    /// </summary>
+    public const int MaxEvidenceLength = 256;
+
     public Guid Id { get; set; }
 
     public Guid ChatId { get; set; }
@@ -109,6 +115,24 @@ public sealed class FamiliarChatTurn
     /// would be invisible until a bill arrived.
     /// </summary>
     public int? CachedInputTokens { get; set; }
+
+    /// <summary>
+    /// The context entries that were actually put in front of the model for this turn, as ids.
+    ///
+    /// <b>This is what makes a citation checkable.</b> A reply citing an id is claiming that id was
+    /// its evidence, and the only way to test that claim later is to know what was offered at the
+    /// time. Re-running the search when the transcript is read would validate against a different
+    /// pack than the model saw — the corpus moves, and an entry can be superseded or marked sensitive
+    /// between the answer and the reading — so what was offered is recorded rather than recomputed.
+    ///
+    /// Ids only. No titles, no content, no query. The entries are rows in this same database and are
+    /// read back through the query that re-checks sensitivity, so an entry flagged after the fact
+    /// stops being displayable without this row having to change.
+    ///
+    /// Written when retrieval runs rather than when the turn ends, so a reply still streaming can
+    /// render its citations as it writes them.
+    /// </summary>
+    public string? EvidenceEntryIds { get; set; }
 
     public DateTime CreatedUtc { get; set; }
 

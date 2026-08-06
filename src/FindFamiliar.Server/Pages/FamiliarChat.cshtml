@@ -108,7 +108,29 @@ else
                                 }
                             </p>
 
-                            <p class="conversation-block" data-output hidden="@(turn.Output.Length == 0)">@turn.Output</p>
+                            @* Segmented rather than printed whole, so a cited id becomes a chip. Every
+                               piece is still written as text by Razor — no Html.Raw anywhere — and the
+                               script builds the same shape with textContent for the same reason. *@
+                            <p class="conversation-block" data-output hidden="@(turn.Output.Length == 0)">@foreach (var segment in turn.Segments)
+                                {
+                                    if (!segment.IsCitation)
+                                    {
+                                        @segment.Text
+                                    }
+                                    else if (turn.Cited.FirstOrDefault(citation => citation.EntryId == segment.EntryId) is { } cited)
+                                    {
+                                        <a class="familiar-citation" asp-page="/Demiplane" asp-route-id="@cited.ProjectId"
+                                           title="@cited.Kind — @cited.Title">@cited.Kind.ToString().ToLowerInvariant(): @cited.Title</a>
+                                    }
+                                    else
+                                    {
+                                        @* Named, never silently deleted. A reply citing something it was
+                                           never shown is the most diagnostic thing it can do, and a
+                                           reader is entitled to see it happen. *@
+                                        <span class="familiar-citation is-unsupported"
+                                              title="This reference was not among the entries this answer was given.">unsupported reference</span>
+                                    }
+                                }</p>
 
                             <p role="status" data-pending hidden="@(!(turn.IsInFlight && turn.Output.Length == 0))">
                                 Working on this. It is being generated on the server, so you can close

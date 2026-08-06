@@ -1,4 +1,5 @@
 using FindFamiliar.Server.Domain;
+using System.Text.Json.Serialization;
 
 namespace FindFamiliar.Server.Services.Familiar.Chat;
 
@@ -19,12 +20,30 @@ public sealed record FamiliarChatSummary(
     DateTime UpdatedUtc);
 
 /// <summary>
+/// One context entry a reply may cite, resolved for display.
+///
+/// Resolved when the transcript is read, not when the answer was written, and through a query that
+/// re-applies the sensitivity filter. An entry flagged sensitive after it was cited stops being
+/// displayable without any turn having to be rewritten — the row records which ids were offered, and
+/// this decides which of those a reader may still be shown.
+/// </summary>
+public sealed record FamiliarChatCitationView(
+    Guid EntryId,
+    Guid ProjectId,
+    ContextEntryKind Kind,
+    string Title);
+
+/// <summary>
 /// One exchange, as a client renders it.
 ///
 /// <see cref="Output"/> is whatever has accumulated so far — partial while
 /// <see cref="FamiliarChatTurnState.Generating"/>, final afterwards. A client that reads a partial
 /// turn and comes back for the rest asks by <see cref="Sequence"/>, never by offset into the text.
 /// </summary>
+/// <param name="Citations">
+/// The entries this turn was answered from, in the order they were offered. An id in the reply that
+/// is not here was never in the pack, and the renderers mark it rather than showing it as a source.
+/// </param>
 public sealed record FamiliarChatTurnView(
     Guid TurnId,
     int Sequence,
@@ -35,9 +54,25 @@ public sealed record FamiliarChatTurnView(
     DateTime CreatedUtc,
     DateTime? CompletedUtc,
     string? ProviderName = null,
-    string? ProviderModel = null)
+    string? ProviderModel = null,
+    IReadOnlyList<FamiliarChatCitationView>? Citations = null)
 {
     public bool IsInFlight => State is FamiliarChatTurnState.Pending or FamiliarChatTurnState.Generating;
+
+    [JsonIgnore]
+    public IReadOnlyList<FamiliarChatCitationView> Cited => Citations ?? [];
+
+    /// <summary>
+    /// The reply split into text and citations, for the Razor page to walk.
+    ///
+    /// Off the wire deliberately. The script does its own segmentation from <see cref="Output"/> and
+    /// <see cref="Citations"/>, because sending pre-split text would mean every delta re-sent the
+    /// whole reply as an array — and the two renderers agreeing is a property worth testing rather
+    /// than one worth avoiding.
+    /// </summary>
+    [JsonIgnore]
+    public IReadOnlyList<FamiliarReplySegment> Segments =>
+        FamiliarChatCitations.Segment(Output, Cited.Select(citation => citation.EntryId).ToHashSet());
 }
 
 /// <summary>

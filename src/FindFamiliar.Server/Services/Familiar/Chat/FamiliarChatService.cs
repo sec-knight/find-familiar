@@ -276,12 +276,14 @@ public sealed class FamiliarChatService(
     private async Task<IReadOnlyList<FamiliarChatTurnView>> ReadTurnsAsync(
         Guid chatId,
         int afterSequence,
-        CancellationToken cancellationToken) =>
-        await dbContext.FamiliarChatTurns
+        CancellationToken cancellationToken)
+    {
+        var rows = await dbContext.FamiliarChatTurns
             .AsNoTracking()
             .Where(turn => turn.ChatId == chatId && turn.Sequence > afterSequence)
             .OrderBy(turn => turn.Sequence)
-            .Select(turn => new FamiliarChatTurnView(
+            .Select(turn => new
+            {
                 turn.Id,
                 turn.Sequence,
                 turn.State,
@@ -291,8 +293,72 @@ public sealed class FamiliarChatService(
                 turn.CreatedUtc,
                 turn.CompletedUtc,
                 turn.ProviderName,
-                turn.ProviderModel))
+                turn.ProviderModel,
+                turn.EvidenceEntryIds
+            })
             .ToListAsync(cancellationToken);
+
+        var evidence = rows.ToDictionary(
+            row => row.Id,
+            row => FamiliarChatCitations.ParseEvidence(row.EvidenceEntryIds));
+
+        var resolved = await ResolveCitationsAsync(
+            evidence.Values.SelectMany(ids => ids).Distinct().ToList(),
+            cancellationToken);
+
+        return rows
+            .Select(row => new FamiliarChatTurnView(
+                row.Id,
+                row.Sequence,
+                row.State,
+                row.UserText,
+                row.Output,
+                row.FailureCode,
+                row.CreatedUtc,
+                row.CompletedUtc,
+                row.ProviderName,
+                row.ProviderModel,
+                evidence[row.Id]
+                    .Where(resolved.ContainsKey)
+                    .Select(id => resolved[id])
+                    .ToList()))
+            .ToList();
+    }
+
+    /// <summary>
+    /// Turns offered ids into something displayable, re-applying the sensitivity filter as it goes.
+    ///
+    /// The filter is here rather than at write time on purpose. A turn records the ids it was given
+    /// and never changes; whether a reader may still see an entry is decided now, against the entry's
+    /// current flags. So marking a project sensitive today removes its titles from every past
+    /// transcript, with no rewriting and nothing left behind to leak.
+    ///
+    /// An id that resolves to nothing — deleted, or now withheld — simply does not become a chip. The
+    /// id still stands in the text, unmarked as a source, which is the honest rendering: the reply did
+    /// cite something, and this reader cannot see what.
+    /// </summary>
+    private async Task<Dictionary<Guid, FamiliarChatCitationView>> ResolveCitationsAsync(
+        IReadOnlyCollection<Guid> entryIds,
+        CancellationToken cancellationToken)
+    {
+        if (entryIds.Count == 0)
+        {
+            return [];
+        }
+
+        return await dbContext.ContextEntries
+            .AsNoTracking()
+            .Where(entry =>
+                entryIds.Contains(entry.Id)
+                && !entry.IsSensitive
+                && !entry.Project.IsSensitive)
+            .Select(entry => new FamiliarChatCitationView(
+                entry.Id,
+                entry.ProjectId,
+                entry.Kind,
+                entry.Title))
+            .ToDictionaryAsync(citation => citation.EntryId, cancellationToken);
+    }
 
     private async Task<int?> ReadInFlightSequenceAsync(Guid? chatId, CancellationToken cancellationToken)
     {

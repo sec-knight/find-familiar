@@ -400,6 +400,7 @@ public sealed class FamiliarDbContext(DbContextOptions<FamiliarDbContext> option
             entity.Property(turn => turn.FailureCode).HasMaxLength(FamiliarChatTurn.MaxFailureCodeLength);
             entity.Property(turn => turn.ProviderName).HasMaxLength(FamiliarChatTurn.MaxProviderNameLength);
             entity.Property(turn => turn.ProviderModel).HasMaxLength(FamiliarChatTurn.MaxProviderModelLength);
+            entity.Property(turn => turn.EvidenceEntryIds).HasMaxLength(FamiliarChatTurn.MaxEvidenceLength);
             entity.Ignore(turn => turn.IsInFlight);
 
             // Unique, so two racing sends can never produce an ambiguous display order — and so the

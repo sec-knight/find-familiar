@@ -279,13 +279,20 @@ public sealed class ProviderFamiliarChatGeneratorTests
         provider.Emit("ok");
         provider.Finish(FamiliarChatProviderStatus.Completed);
 
+        var sink = new RecordingSink();
+
         await NewGenerator(dbContext, provider)
-            .GenerateAsync(Request("why is the talk lane separate from the runner?"), new RecordingSink());
+            .GenerateAsync(Request("why is the talk lane separate from the runner?"), sink);
 
         var recorded = provider.LastRequest!.RecordedContext;
 
         Assert.NotNull(recorded);
         Assert.Contains("different seams", recorded!, StringComparison.Ordinal);
+
+        // Recorded before the model was called, so a reply that cites in its first sentence has
+        // something to be checked against while it is still being written.
+        Assert.NotEmpty(sink.Evidence);
+        Assert.True(sink.EvidenceRecordedBeforeOutput);
 
         // Its own segment, not folded into the constant head. This block changes every message, and
         // putting it in the stable head would invalidate the prefix cache on every single turn.
@@ -435,11 +442,29 @@ public sealed class ProviderFamiliarChatGeneratorTests
     {
         public List<string> Fragments { get; } = [];
 
+        public List<Guid> Evidence { get; } = [];
+
+        /// <summary>True once evidence was recorded, so a test can assert it happened before output.</summary>
+        public bool EvidenceRecordedBeforeOutput { get; private set; } = true;
+
         public string Text => string.Concat(Fragments);
 
         public Task AppendAsync(string fragment, CancellationToken cancellationToken = default)
         {
             Fragments.Add(fragment);
+            return Task.CompletedTask;
+        }
+
+        public Task RecordEvidenceAsync(
+            IReadOnlyCollection<Guid> entryIds,
+            CancellationToken cancellationToken = default)
+        {
+            if (Fragments.Count > 0)
+            {
+                EvidenceRecordedBeforeOutput = false;
+            }
+
+            Evidence.AddRange(entryIds);
             return Task.CompletedTask;
         }
     }
