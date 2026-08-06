@@ -56,9 +56,10 @@ public static class ClaudeResultParser
             return ClaudeResultOutcome.ErrorEnvelope;
         }
 
-        // A non-empty denial list means the model attempted a tool the policy blocked. With an
-        // empty --tools schema that should be impossible, so treat it as a policy failure rather
-        // than quietly returning a partial answer.
+        // A non-empty denial list means the model attempted a tool the policy blocked. Neither
+        // mode's --tools schema contains a tool that can change this machine, so that should be
+        // impossible either way, and it is treated as a policy failure rather than quietly
+        // returning a partial answer.
         if (envelope.PermissionDenials is { ValueKind: JsonValueKind.Array } denials && denials.GetArrayLength() > 0)
         {
             return ClaudeResultOutcome.PermissionDenied;

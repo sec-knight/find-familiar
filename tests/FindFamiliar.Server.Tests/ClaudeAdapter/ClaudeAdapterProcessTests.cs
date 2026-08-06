@@ -271,8 +271,8 @@ public sealed class ClaudeAdapterProcessTests
 
         Assert.Equal((int)ClaudeAdapterExitCode.Success, run.ExitCode);
 
-        // The CLI resolves repeated flags last-wins, so the policy's empty --tools must appear
-        // after the operator extra rather than before it.
+        // The CLI resolves repeated flags last-wins, so the policy's --tools must appear after the
+        // operator extra rather than before it — otherwise ["--tools","Bash"] would win.
         var argv = run.Stdout;
         var extraIndex = argv.IndexOf("--tools|Bash", StringComparison.Ordinal);
         var policyIndex = argv.LastIndexOf("--tools|", StringComparison.Ordinal);

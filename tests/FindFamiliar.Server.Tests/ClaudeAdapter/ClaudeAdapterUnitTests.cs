@@ -339,7 +339,34 @@ public sealed class ClaudeAdapterUnitTests
         Assert.Contains("--no-session-persistence", arguments);
         AssertFlagValue(arguments, "--output-format", "json");
         AssertFlagValue(arguments, "--permission-mode", "plan");
-        AssertFlagValue(arguments, "--tools", string.Empty);
+
+        // Read-only means "cannot change the repository", not "cannot see it". A session with no
+        // tools at all cannot read the tree it was assigned, and a model asked to plan a codebase
+        // it cannot see invents one — which is how fabricated work lands in durable context.
+        AssertFlagValue(arguments, "--tools", "Read,Grep,Glob");
+    }
+
+    /// <summary>
+    /// The boundary that actually matters in read-only mode: no tool that can change a file, run a
+    /// process, or reach git. Absence from the schema is the guarantee, not the permission prompt.
+    /// </summary>
+    [Fact]
+    public void Read_only_mode_grants_read_tools_but_never_edit_write_or_bash()
+    {
+        var arguments = ClaudeArgumentBuilder.Build(NewConfiguration(ClaudeAdapterMode.ReadOnly));
+
+        var tools = arguments[arguments.ToList().IndexOf("--tools") + 1];
+
+        Assert.Contains("Read", tools);
+        Assert.Contains("Grep", tools);
+        Assert.Contains("Glob", tools);
+        Assert.DoesNotContain("Edit", tools);
+        Assert.DoesNotContain("Write", tools);
+        Assert.DoesNotContain("Bash", tools);
+
+        // No --add-dir either: the runtime's working directory is the assigned worktree, so the
+        // read tools reach that tree and widening the boundary is never necessary.
+        Assert.DoesNotContain("--add-dir", arguments);
     }
 
     [Fact]

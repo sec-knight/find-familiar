@@ -38,11 +38,26 @@ public static class ClaudeArgumentBuilder
 
         if (configuration.Mode == ClaudeAdapterMode.ReadOnly)
         {
-            // An empty --tools list removes the tools from the model's schema entirely, so
-            // read-only does not depend on a permission prompt being answered. The plan
-            // permission mode is defence in depth on top of that.
+            // Read, Grep and Glob and nothing else. The boundary this mode enforces is "cannot
+            // change the repository", and it is enforced the same way edit mode enforces its own:
+            // by what is absent from the schema. Edit, Write and Bash are absent, so there is no
+            // tool path to a file change, a git commit, a push, or any process execution — the
+            // permission mode is defence in depth on top of that, not the thing being relied on.
+            //
+            // This list was empty until a Planner session proved why that was wrong. No tools at
+            // all does keep the repository safe, but it also leaves the model unable to read the
+            // repository it was assigned to plan or review — and a model asked to plan a codebase
+            // it cannot see does not decline, it invents one. That session exited zero, its result
+            // validated, and the platform recorded a confident plan for a directory layout this
+            // repository has never had. A read-only session that cannot read is not a safe session;
+            // it is a session whose output is untethered from the repository, written into the
+            // durable context this application exists to keep honest.
+            //
+            // The runtime's working directory is the worktree (ClaudeAdapterEngine passes it to
+            // the executor), so these tools reach the assigned tree and nothing else without
+            // --add-dir widening the boundary.
             arguments.Add("--tools");
-            arguments.Add(string.Empty);
+            arguments.Add("Read,Grep,Glob");
             arguments.Add("--permission-mode");
             arguments.Add("plan");
         }

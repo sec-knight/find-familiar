@@ -4,6 +4,9 @@
 
 **Date:** 2026-08-03
 
+**Amended:** 2026-08-06 — the read-only tool list is no longer empty. See
+[Amendment: read-only sessions must be able to read](#amendment-read-only-sessions-must-be-able-to-read).
+
 ---
 
 ## Context
@@ -110,6 +113,34 @@ machine: `-p --output-format json --no-session-persistence --tools "" --permissi
 empty `--tools` list is the hard guarantee — it removes tools from the model's schema entirely, so
 safety does not depend on a permission prompt being answered correctly. `--permission-mode plan`
 is defence in depth on top of that.
+
+#### Amendment: read-only sessions must be able to read
+
+*2026-08-06.* The empty `--tools` list shipped as written above and was wrong. It is now
+`--tools "Read,Grep,Glob"`, with `--permission-mode plan` unchanged.
+
+The original reasoning is still correct about where the guarantee lives: it is the schema, not the
+permission prompt. What it got wrong is which capability the boundary was supposed to remove. The
+boundary is *cannot change the repository*, and `Edit`, `Write` and `Bash` are what carry that —
+they remain absent, so there is still no tool path to a file change, a `git commit`, a push, or any
+process execution. Removing `Read`, `Grep` and `Glob` alongside them bought no safety and cost the
+session its subject matter.
+
+The failure this corrects was observed, not theorised. A Planner session on a real task exited
+zero, its result validated and captured, and the platform recorded a confident plan describing a
+directory layout (`FindFamiliar.Domain`, `FindFamiliar.Application`, `FindFamiliar.Infrastructure`,
+a Blazor `FindFamiliar.Web`, `FindFamiliar.sln`) that this repository has never had. It also
+reported dispatching exploration subagents and quoted their findings; with no tools in schema, none
+of that happened. A model asked to plan a codebase it cannot see does not decline — it invents one,
+and every layer downstream treats the invention as a successful session.
+
+That is a worse outcome than a session that fails. A failure is visible and recoverable; this wrote
+fabricated content into the durable canonical context this application exists to keep honest, with
+nothing in the pipeline able to distinguish it from a grounded plan.
+
+The runtime's working directory is already the assigned worktree, so the read tools reach that tree
+and nothing else. No `--add-dir` is emitted in read-only mode, so the boundary is not widened to
+grant them.
 
 `edit-worktree` is optional and additionally requires the target to be a **clean, linked,
 disposable git worktree** (verified by invoking `git` directly, never through a shell) so any
@@ -227,9 +258,11 @@ The native executable is directly launchable, so the shim buys nothing.
 
 ### Rely on `--permission-mode plan` alone for read-only safety
 
-Rejected as the primary control. A permission mode governs how prompts are answered; an empty
-`--tools` schema removes the capability outright. Using both, with the schema as the real
-guarantee, avoids depending on prompt-handling behavior in a noninteractive session.
+Rejected as the primary control. A permission mode governs how prompts are answered; omitting a
+tool from the `--tools` schema removes the capability outright. Using both, with the schema as the
+real guarantee, avoids depending on prompt-handling behavior in a noninteractive session. (The
+read-only schema is no longer empty — see the amendment above — but the mutating tools are still
+absent from it, so this reasoning is unchanged.)
 
 ### Trust the assignment Markdown to carry the safety rules
 
