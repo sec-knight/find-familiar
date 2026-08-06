@@ -22,6 +22,17 @@ namespace FindFamiliar.Server.Tests.Infrastructure;
 public sealed class FamiliarChatMigrationTests
 {
     /// <summary>The last migration before this one, i.e. the schema Sprint 11 shipped and accepted.</summary>
+    /// <summary>
+    /// The migration these tests are about.
+    ///
+    /// Named explicitly, and migrated to explicitly, because "apply the migration under test" and
+    /// "migrate to head" stopped being the same thing the moment a later migration added a column to
+    /// an existing table. Migrating to head here would quietly turn every assertion below into a
+    /// claim about the whole chain, and the first legitimately column-adding migration would fail a
+    /// test named after a different one.
+    /// </summary>
+    private const string MigrationUnderTest = "20260806172442_FamiliarChats";
+
     private const string Sprint11Baseline = "20260805215236_FamiliarConversations";
 
     private static readonly string[] NewTables = ["FamiliarChats", "FamiliarChatTurns"];
@@ -76,7 +87,7 @@ public sealed class FamiliarChatMigrationTests
         var schemaBefore = SqliteSchemaReader.Definitions(database.ConnectionString);
         var rowsBefore = await ReadEveryExistingRowAsync(database, Sprint11Baseline);
 
-        await using var after = await database.CreateContextAsync();
+        await using var after = await database.CreateContextAtMigrationAsync(MigrationUnderTest);
 
         // Every table and index that existed before still exists, with byte-identical DDL. This is
         // the assertion that would fail if a future edit to this migration recreated a table to add
@@ -88,7 +99,7 @@ public sealed class FamiliarChatMigrationTests
             Assert.Equal(sql, schemaAfter[name]);
         }
 
-        Assert.Equal(rowsBefore, await ReadEveryExistingRowAsync(database, targetMigration: null));
+        Assert.Equal(rowsBefore, await ReadEveryExistingRowAsync(database, MigrationUnderTest));
 
         // Spot-check the Sprint 11 conversation through EF as well: it is the aggregate this sprint
         // deliberately did not reshape, so it is the one worth reading back in the shape the
@@ -159,14 +170,13 @@ public sealed class FamiliarChatMigrationTests
 
         var rows = new List<string>();
 
-        rows.AddRange((await dbContext.Projects.AsNoTracking().ToListAsync())
-            .Select(project => $"Project {project.Id} {project.Name} {project.Status} {project.ContextRevision} {project.Purpose} {project.CreatedUtc:O} {project.UpdatedUtc:O}"));
+        // Read with explicit column lists, for the same reason they were written that way.
+        rows.AddRange(await LegacyRowSeeder.ReadProjectRowsAsync(dbContext));
         rows.AddRange((await dbContext.Tasks.AsNoTracking().ToListAsync())
             .Select(task => $"Task {task.Id} {task.ProjectId} {task.Title} {task.Status} {task.RequestedOutcome} {task.CreatedUtc:O} {task.UpdatedUtc:O}"));
         rows.AddRange((await dbContext.AgentSessions.AsNoTracking().ToListAsync())
             .Select(session => $"Session {session.Id} {session.TaskId} {session.Role} {session.Status} {session.ContextRevisionRead} {session.StartedUtc:O} {session.CompletedUtc:O}"));
-        rows.AddRange((await dbContext.ContextEntries.AsNoTracking().ToListAsync())
-            .Select(entry => $"ContextEntry {entry.Id} {entry.ProjectId} {entry.TaskId} {entry.Kind} {entry.State} {entry.Title} {entry.Content}"));
+        rows.AddRange(await LegacyRowSeeder.ReadContextEntryRowsAsync(dbContext));
         rows.AddRange((await dbContext.Workers.AsNoTracking().ToListAsync())
             .Select(worker => $"Worker {worker.Id} {worker.WorkerKey} {worker.DisplayName} {worker.Capabilities} {worker.Enabled} {worker.RegisteredUtc:O}"));
         rows.AddRange((await dbContext.FamiliarConversations.AsNoTracking().ToListAsync())
@@ -193,22 +203,24 @@ public sealed class FamiliarChatMigrationTests
     {
         var now = new DateTime(2026, 8, 6, 12, 0, 0, DateTimeKind.Utc);
 
-        var project = new FamiliarProject
-        {
-            Id = Guid.NewGuid(),
-            Name = $"Migration project {Guid.NewGuid():N}",
-            Purpose = "Seeded for FamiliarChatMigrationTests.",
-            Status = ProjectStatus.Active,
-            CreatedUtc = now,
-            UpdatedUtc = now
-        };
-
-        project.IncrementContextRevision();
+        // Inserted with explicit SQL, not through EF: this database is migrated only as far
+        // as the baseline above, and the current model describes columns that schema does not
+        // have. See LegacyRowSeeder.
+        var projectId = Guid.NewGuid();
+        const int seededContextRevision = 1;
+        await LegacyRowSeeder.InsertProjectAsync(
+            dbContext,
+            projectId,
+            $"Migration project {Guid.NewGuid():N}",
+            "Seeded for FamiliarChatMigrationTests.",
+            ProjectStatus.Active,
+            seededContextRevision,
+            now);
 
         var task = new FamiliarTask
         {
             Id = Guid.NewGuid(),
-            ProjectId = project.Id,
+            ProjectId = projectId,
             Title = "Migration task",
             RequestedOutcome = "Seeded for FamiliarChatMigrationTests.",
             Status = TaskStatus.Ready,
@@ -227,19 +239,6 @@ public sealed class FamiliarChatMigrationTests
             CompletedUtc = now.AddHours(-1)
         };
 
-        var entry = new ContextEntry
-        {
-            Id = Guid.NewGuid(),
-            ProjectId = project.Id,
-            TaskId = task.Id,
-            SourceSessionId = session.Id,
-            Kind = ContextEntryKind.Plan,
-            Title = "Migration plan",
-            Content = "Seeded for FamiliarChatMigrationTests.",
-            State = ContextEntryState.Active,
-            CreatedUtc = now
-        };
-
         var worker = new Worker
         {
             Id = Guid.NewGuid(),
@@ -254,7 +253,7 @@ public sealed class FamiliarChatMigrationTests
         var conversation = new FamiliarConversation
         {
             Id = Guid.NewGuid(),
-            ProjectId = project.Id,
+            ProjectId = projectId,
             CreatedUtc = now,
             UpdatedUtc = now
         };
@@ -283,7 +282,7 @@ public sealed class FamiliarChatMigrationTests
         {
             Id = Guid.NewGuid(),
             ConversationId = conversation.Id,
-            ProjectId = project.Id,
+            ProjectId = projectId,
             MessageId = message.Id,
             Kind = FamiliarActionKind.CreateTask,
             Status = FamiliarActionStatus.Pending,
@@ -295,10 +294,24 @@ public sealed class FamiliarChatMigrationTests
             UpdatedUtc = now
         };
 
-        dbContext.AddRange(project, task, session, entry, worker, conversation, message, evidence, proposal);
+        dbContext.AddRange(task, session, worker, conversation, message, evidence, proposal);
         await dbContext.SaveChangesAsync();
+
+        // Same reason as the project above: ContextEntries gained a column after this baseline.
+        await LegacyRowSeeder.InsertContextEntryAsync(
+            dbContext,
+            Guid.NewGuid(),
+            projectId,
+            task.Id,
+            session.Id,
+            ContextEntryKind.Plan,
+            "Migration plan",
+            "Seeded for a migration test.",
+            ContextEntryState.Active,
+            now);
+
         dbContext.ChangeTracker.Clear();
 
-        return new Sprint11Fixture(project.Id, conversation.Id);
+        return new Sprint11Fixture(projectId, conversation.Id);
     }
 }

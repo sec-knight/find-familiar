@@ -1,5 +1,6 @@
 using FindFamiliar.Server.Data;
 using FindFamiliar.Server.Domain;
+using FindFamiliar.Server.Services.Familiar.Chat.Brief;
 using FindFamiliar.Server.Services.Familiar.Chat.Providers;
 using Microsoft.EntityFrameworkCore;
 
@@ -15,13 +16,17 @@ namespace FindFamiliar.Server.Services.Familiar.Chat;
 /// them apart is what lets the provider be replaced without touching context assembly, and context
 /// assembly to be tested without a network.
 ///
-/// It is also the chokepoint through which everything leaves this machine. Nothing reaches a provider
-/// except the system prompt, prior visible turns of this one conversation, and the person's message —
-/// there is no project state in a slice 2 request because there is no code here that reads any.
+/// It is also the chokepoint through which everything leaves this machine. Exactly four things reach a
+/// provider: the constant system prompt, the standing brief, prior completed turns of this one
+/// conversation, and the person's message. The brief is built by
+/// <see cref="IFamiliarStandingBriefService"/>, which excludes anything marked sensitive at the query
+/// itself — so there is no point in this file at which flagged content is held in memory next to a
+/// request being assembled.
 /// </summary>
 public sealed class ProviderFamiliarChatGenerator(
     FamiliarDbContext dbContext,
-    IFamiliarChatProvider provider) : IFamiliarChatGenerator
+    IFamiliarChatProvider provider,
+    IFamiliarStandingBriefService briefs) : IFamiliarChatGenerator
 {
     /// <summary>
     /// Prior exchanges sent back with a new message. A count, not a size — Sprint 12 caps working
@@ -39,10 +44,16 @@ public sealed class ProviderFamiliarChatGenerator(
     {
         var history = await ReadHistoryAsync(request.ChatId, request.Sequence, cancellationToken);
 
+        // Built fresh per turn rather than cached in memory. It is a read of current state, and a
+        // Familiar answering from a brief assembled ten minutes ago would describe a system that has
+        // since moved — the exact failure this application exists to prevent.
+        var brief = await briefs.GetBriefAsync(request.FocusProjectId, cancellationToken);
+
         var prompt = new FamiliarChatRequest(
             FamiliarChatSystemPrompt.Text,
             history,
-            request.UserText);
+            request.UserText,
+            FamiliarStandingBriefWriter.Write(brief));
 
         var emitted = 0;
         var metadata = new FamiliarChatGenerationMetadata(provider.Name, provider.Model);
@@ -78,7 +89,8 @@ public sealed class ProviderFamiliarChatGenerator(
             // What actually answered, when the endpoint named it.
             ProviderModel = string.IsNullOrWhiteSpace(finished.Model) ? provider.Model : finished.Model,
             InputTokens = finished.InputTokens,
-            OutputTokens = finished.OutputTokens
+            OutputTokens = finished.OutputTokens,
+            CachedInputTokens = finished.CachedInputTokens
         };
 
         if (finished.Status != FamiliarChatProviderStatus.Completed)

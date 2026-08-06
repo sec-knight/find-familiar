@@ -941,3 +941,37 @@ h2 {
 .familiar-compose-send {
   margin-top: 0.625rem;
 }
+
+/* The by-model usage breakdown. Scrolls inside itself on a phone rather than widening the page. */
+.familiar-usage-table {
+  width: 100%;
+  margin-top: 1rem;
+  border-collapse: collapse;
+  font-size: 0.9375rem;
+}
+
+.familiar-usage-table caption {
+  margin-bottom: 0.5rem;
+  color: var(--text-secondary);
+  text-align: left;
+}
+
+.familiar-usage-table th,
+.familiar-usage-table td {
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  white-space: nowrap;
+}
+
+.familiar-usage-table th {
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
+@media (max-width: 48rem) {
+  .familiar-usage-table {
+    display: block;
+    overflow-x: auto;
+  }
+}

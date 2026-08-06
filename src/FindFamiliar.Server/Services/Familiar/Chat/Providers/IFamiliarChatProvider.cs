@@ -10,15 +10,25 @@ public sealed record FamiliarChatHistoryTurn(string UserText, string Output);
 /// <summary>
 /// Everything sent, and nothing else.
 ///
-/// Ordered stable to volatile by construction: the system prompt is a constant, history is
-/// append-only, and only <see cref="UserMessage"/> changes per call — so a provider's prefix cache
-/// covers the stable head. Slice 3 inserts the standing brief between the two, which is why the
-/// ordering is fixed here rather than assembled at the call site.
+/// Ordered stable to volatile by construction, so a provider's prefix cache covers the head that does
+/// not change between turns:
+///
+/// 1. <see cref="SystemPrompt"/> — a compile-time constant, identical on every request ever made;
+/// 2. <see cref="StandingBrief"/> — changes only when project state does, so it is stable across a
+///    sitting even though it is not stable across a week;
+/// 3. <see cref="History"/> — append-only, so each turn extends the previous prefix rather than
+///    rewriting it;
+/// 4. <see cref="UserMessage"/> — different every time, and therefore last.
+///
+/// The brief is a separate segment rather than appended to the system prompt on purpose: it changes,
+/// and folding it into the constant would mean every project edit invalidated the cache entry for the
+/// part that never changes at all.
 /// </summary>
 public sealed record FamiliarChatRequest(
     string SystemPrompt,
     IReadOnlyList<FamiliarChatHistoryTurn> History,
-    string UserMessage);
+    string UserMessage,
+    string? StandingBrief = null);
 
 /// <summary>
 /// How a stream ended. Every member maps to exactly one code and one sentence in
@@ -81,7 +91,8 @@ public abstract record FamiliarChatStreamEvent
         FamiliarChatProviderStatus Status,
         string? Model = null,
         int? InputTokens = null,
-        int? OutputTokens = null) : FamiliarChatStreamEvent;
+        int? OutputTokens = null,
+        int? CachedInputTokens = null) : FamiliarChatStreamEvent;
 }
 
 /// <summary>

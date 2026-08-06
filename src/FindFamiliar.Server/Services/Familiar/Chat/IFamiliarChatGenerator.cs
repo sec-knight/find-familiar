@@ -46,7 +46,8 @@ public sealed record FamiliarChatGenerationMetadata(
     string? ProviderName = null,
     string? ProviderModel = null,
     int? InputTokens = null,
-    int? OutputTokens = null);
+    int? OutputTokens = null,
+    int? CachedInputTokens = null);
 
 /// <summary>
 /// How a generation ended.

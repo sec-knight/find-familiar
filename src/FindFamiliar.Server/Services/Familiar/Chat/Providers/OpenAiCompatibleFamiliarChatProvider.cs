@@ -304,7 +304,14 @@ public sealed class OpenAiCompatibleFamiliarChatProvider(
     private static ChatRequest BuildRequest(FamiliarChatOptions settings, FamiliarChatRequest request)
     {
         // Stable to volatile, so the provider's prefix cache covers the head that does not change.
+        // The brief is its own system turn rather than concatenated onto the first: the first is a
+        // constant and should stay cacheable on its own even on the turn after a project changed.
         var messages = new List<ChatMessage> { new("system", request.SystemPrompt) };
+
+        if (request.StandingBrief is { Length: > 0 } brief)
+        {
+            messages.Add(new ChatMessage("system", brief));
+        }
 
         foreach (var turn in request.History)
         {
@@ -392,5 +399,14 @@ public sealed class OpenAiCompatibleFamiliarChatProvider(
 
     private sealed record StreamUsage(
         [property: JsonPropertyName("prompt_tokens")] int? InputTokens,
-        [property: JsonPropertyName("completion_tokens")] int? OutputTokens);
+        [property: JsonPropertyName("completion_tokens")] int? OutputTokens,
+        [property: JsonPropertyName("prompt_tokens_details")] StreamUsageDetails? Details);
+
+    /// <summary>
+    /// The cached portion of the input. Optional in the de-facto standard, so its absence means "not
+    /// reported" rather than "nothing was cached" — the column stays null and the dashboard says
+    /// unknown instead of claiming a zero it did not observe.
+    /// </summary>
+    private sealed record StreamUsageDetails(
+        [property: JsonPropertyName("cached_tokens")] int? CachedTokens);
 }

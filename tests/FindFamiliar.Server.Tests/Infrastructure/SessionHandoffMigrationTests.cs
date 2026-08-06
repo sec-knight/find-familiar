@@ -31,20 +31,23 @@ public sealed class SessionHandoffMigrationTests
 
         await using (var before = await database.CreateContextAtMigrationAsync(PreviousMigration))
         {
-            var project = new FamiliarProject
-            {
-                Id = Guid.NewGuid(),
-                Name = $"Migration project {Guid.NewGuid():N}",
-                Purpose = "Seeded for SessionHandoffMigrationTests.",
-                Status = ProjectStatus.Active,
-                CreatedUtc = DateTime.UtcNow,
-                UpdatedUtc = DateTime.UtcNow
-            };
+            // Inserted with explicit SQL, not through EF: this database is migrated only as
+            // far as PreviousMigration, and the current model describes columns that schema
+            // does not have.
+            var seededProjectId = Guid.NewGuid();
+            await LegacyRowSeeder.InsertProjectAsync(
+                before,
+                seededProjectId,
+                $"Migration project {Guid.NewGuid():N}",
+                "Seeded for SessionHandoffMigrationTests.",
+                ProjectStatus.Active,
+                contextRevision: 0,
+                DateTime.UtcNow);
 
             var task = new FamiliarTask
             {
                 Id = Guid.NewGuid(),
-                ProjectId = project.Id,
+                ProjectId = seededProjectId,
                 Title = "Migration task",
                 RequestedOutcome = "Seeded for SessionHandoffMigrationTests.",
                 Status = TaskStatus.Ready,
@@ -57,10 +60,10 @@ public sealed class SessionHandoffMigrationTests
             var loser = NewStartedSession(task.Id, AgentSessionRole.Planner, DateTime.UtcNow.AddHours(-2));
             var survivor = NewStartedSession(task.Id, AgentSessionRole.Implementer, DateTime.UtcNow.AddHours(-1));
 
-            before.AddRange(project, task, loser, survivor);
+            before.AddRange(task, loser, survivor);
             await before.SaveChangesAsync();
 
-            projectId = project.Id;
+            projectId = seededProjectId;
             taskId = task.Id;
             survivorId = survivor.Id;
             loserId = loser.Id;
@@ -144,20 +147,23 @@ public sealed class SessionHandoffMigrationTests
 
         await using (var before = await database.CreateContextAtMigrationAsync(PreviousMigration))
         {
-            var project = new FamiliarProject
-            {
-                Id = Guid.NewGuid(),
-                Name = $"Clean project {Guid.NewGuid():N}",
-                Purpose = "Seeded for SessionHandoffMigrationTests.",
-                Status = ProjectStatus.Active,
-                CreatedUtc = DateTime.UtcNow,
-                UpdatedUtc = DateTime.UtcNow
-            };
+            // Inserted with explicit SQL, not through EF: this database is migrated only as
+            // far as PreviousMigration, and the current model describes columns that schema
+            // does not have.
+            var seededProjectId = Guid.NewGuid();
+            await LegacyRowSeeder.InsertProjectAsync(
+                before,
+                seededProjectId,
+                $"Clean project {Guid.NewGuid():N}",
+                "Seeded for SessionHandoffMigrationTests.",
+                ProjectStatus.Active,
+                contextRevision: 0,
+                DateTime.UtcNow);
 
             var task = new FamiliarTask
             {
                 Id = Guid.NewGuid(),
-                ProjectId = project.Id,
+                ProjectId = seededProjectId,
                 Title = "Clean task",
                 RequestedOutcome = "Seeded for SessionHandoffMigrationTests.",
                 Status = TaskStatus.Ready,
@@ -171,12 +177,12 @@ public sealed class SessionHandoffMigrationTests
 
             var started = NewStartedSession(task.Id, AgentSessionRole.Implementer, DateTime.UtcNow.AddHours(-1));
 
-            before.AddRange(project, task, completed, started);
+            before.AddRange(task, completed, started);
             await before.SaveChangesAsync();
 
             taskId = task.Id;
             startedId = started.Id;
-            revisionBefore = project.ContextRevision;
+            revisionBefore = 0;
         }
 
         await using var after = await database.CreateContextAsync();

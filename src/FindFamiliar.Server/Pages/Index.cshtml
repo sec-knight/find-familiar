@@ -1,4 +1,5 @@
 @page
+@model FindFamiliar.Server.Pages.IndexModel
 @{
     ViewData["Title"] = "Dashboard";
 }
@@ -17,9 +18,12 @@
     </article>
 
     <article class="overview-card">
-        <p class="card-label">Version</p>
-        <p class="version-value">0.1.0</p>
-        <p class="card-description">Initial dashboard milestone.</p>
+        <p class="card-label">Familiar</p>
+        <p class="status-value">@Model.Usage.Conversations</p>
+        <p class="card-description">
+            @(Model.Usage.Conversations == 1 ? "conversation" : "conversations") ·
+            <a asp-page="/FamiliarChats">open the Familiar</a>
+        </p>
     </article>
 </section>
 
@@ -29,25 +33,136 @@
             <p class="eyebrow">Workspace</p>
             <h2 id="statistics-title">System overview</h2>
         </div>
-        <p>Placeholder values will become live data in future milestones.</p>
+        <p>Counted from this system's records on every render.</p>
     </div>
 
     <dl class="statistics-grid">
         <div class="statistic-card statistic-card--link">
             <dt><a asp-page="/Projects/Index">Projects</a></dt>
-            <dd>0</dd>
+            <dd>@Model.Projects</dd>
+        </div>
+        <div class="statistic-card statistic-card--link">
+            <dt><a asp-page="/Work">Tasks</a></dt>
+            <dd>@Model.Tasks</dd>
+        </div>
+        <div class="statistic-card statistic-card--link">
+            <dt><a asp-page="/Workers">Workers</a></dt>
+            <dd>@Model.Workers</dd>
         </div>
         <div class="statistic-card">
-            <dt>Tasks</dt>
-            <dd>0</dd>
-        </div>
-        <div class="statistic-card">
-            <dt>Workers</dt>
-            <dd>0</dd>
-        </div>
-        <div class="statistic-card">
-            <dt>Memory Entries</dt>
-            <dd>0</dd>
+            <dt>Context entries</dt>
+            <dd>@Model.ContextEntries</dd>
         </div>
     </dl>
+
+    @if (Model.SensitiveProjects > 0)
+    {
+        @* Shown so the boundary is visible without opening a database. It reports that projects are
+           withheld, never which — the count is the disclosure, the names are the thing protected. *@
+        <p class="familiar-note" role="status">
+            @Model.SensitiveProjects of these @(Model.SensitiveProjects == 1 ? "project is" : "projects are")
+            marked sensitive. Nothing about @(Model.SensitiveProjects == 1 ? "it" : "them") is ever sent
+            to a conversational provider.
+        </p>
+    }
+</section>
+
+@* --------------------------------------------------------------------------- Familiar usage *@
+<section class="statistics-section" aria-labelledby="usage-title">
+    <div class="section-heading">
+        <div>
+            <p class="eyebrow">Talk lane</p>
+            <h2 id="usage-title">What the Familiar has used</h2>
+        </div>
+    </div>
+
+    @if (!Model.Usage.HasAnything)
+    {
+        <p>Nothing has been asked yet.</p>
+    }
+    else
+    {
+        <dl class="statistics-grid">
+            <div class="statistic-card">
+                <dt>Exchanges</dt>
+                <dd>@Model.Usage.Turns</dd>
+            </div>
+            <div class="statistic-card">
+                <dt>Input tokens</dt>
+                <dd>@Model.Usage.TotalInputTokens.ToString("N0")</dd>
+            </div>
+            <div class="statistic-card">
+                <dt>Output tokens</dt>
+                <dd>@Model.Usage.TotalOutputTokens.ToString("N0")</dd>
+            </div>
+            <div class="statistic-card">
+                @* The number that says whether the prompt's stable head is still being cached. If it
+                   collapses, every turn silently costs several times more and nothing else changes. *@
+                <dt>Input served from cache</dt>
+                <dd>@FindFamiliar.Server.Pages.IndexModel.CacheHitRateLabel(Model.Usage.CacheHitRate)</dd>
+            </div>
+        </dl>
+
+        @if (Model.Usage.ByModel.Count > 0)
+        {
+            <table class="familiar-usage-table">
+                <caption>By model</caption>
+                <thead>
+                    <tr>
+                        <th scope="col">Provider</th>
+                        <th scope="col">Model</th>
+                        <th scope="col">Exchanges</th>
+                        <th scope="col">In</th>
+                        <th scope="col">Out</th>
+                        <th scope="col">Cached</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @* Named "row", not "model": Razor parses @model.Anything as the @model
+                       directive, so a loop variable called model breaks the page at compile time. *@
+                    @foreach (var row in Model.Usage.ByModel)
+                    {
+                        <tr>
+                            <td>@row.ProviderName</td>
+                            <td>@row.ProviderModel</td>
+                            <td>@row.Turns</td>
+                            <td>@row.InputTokens.ToString("N0")</td>
+                            <td>@row.OutputTokens.ToString("N0")</td>
+                            <td>@FindFamiliar.Server.Pages.IndexModel.CacheHitRateLabel(row.CacheHitRate)</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        }
+
+        @* Always rendered, never behind a disclosure control — the same rule the Familiar page holds
+           for its limitations. A caveat somebody has to click to read is one they do not know about. *@
+        <div class="familiar-limitations">
+            <h3 id="usage-limits-title">What these numbers are not</h3>
+            <ul class="familiar-detail-list" aria-labelledby="usage-limits-title">
+                <li>
+                    They are this server's record of what providers reported, not a bill. A request
+                    rejected before it answered contributes nothing here and may still have been
+                    charged for.
+                </li>
+                @if (Model.Usage.FailedTurns > 0)
+                {
+                    <li>
+                        @Model.Usage.FailedTurns of @Model.Usage.Turns
+                        @(Model.Usage.FailedTurns == 1 ? "exchange" : "exchanges") failed and produced
+                        no reply.
+                    </li>
+                }
+                @if (Model.Usage.TurnsWithoutMetadata > 0)
+                {
+                    <li>
+                        @Model.Usage.TurnsWithoutMetadata
+                        @(Model.Usage.TurnsWithoutMetadata == 1 ? "exchange carries" : "exchanges carry")
+                        no provider attribution and are not counted in the totals above.
+                    </li>
+                }
+                <li>Your provider's own usage page is the authority on what anything cost.</li>
+            </ul>
+        </div>
+    }
 </section>

@@ -100,6 +100,16 @@ public sealed class FamiliarChatTurn
 
     public int? OutputTokens { get; set; }
 
+    /// <summary>
+    /// How much of the input was served from the provider's prefix cache, when it says.
+    ///
+    /// Recorded because it is the measurement that tells whether the stable-to-volatile prompt
+    /// ordering is actually working. A standing brief that stopped being cached would cost several
+    /// times more per turn and change nothing else observable, so without this column the regression
+    /// would be invisible until a bill arrived.
+    /// </summary>
+    public int? CachedInputTokens { get; set; }
+
     public DateTime CreatedUtc { get; set; }
 
     /// <summary>When a generator took the turn. Null while Pending.</summary>

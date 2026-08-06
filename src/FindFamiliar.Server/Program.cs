@@ -7,6 +7,7 @@ using FindFamiliar.Server.Services;
 using FindFamiliar.Server.Services.Demiplane;
 using FindFamiliar.Server.Services.Familiar;
 using FindFamiliar.Server.Services.Familiar.Chat;
+using FindFamiliar.Server.Services.Familiar.Chat.Brief;
 using FindFamiliar.Server.Services.Familiar.Chat.Providers;
 using FindFamiliar.Server.Services.Familiar.Reasoning;
 using FindFamiliar.Server.Services.Providers;
@@ -61,6 +62,11 @@ builder.Services.AddScoped<IFamiliarConversationService, FamiliarConversationSer
 // the handoff between the two, and it holds a scheduling hint only — the durable record is the row.
 builder.Services.AddSingleton<FamiliarChatGenerationQueue>();
 builder.Services.AddScoped<IFamiliarChatService, FamiliarChatService>();
+
+// The system-wide projection the Familiar answers from, and this server's own record of what it has
+// sent. Both are read-only and neither needs a credential.
+builder.Services.AddScoped<IFamiliarStandingBriefService, FamiliarStandingBriefService>();
+builder.Services.AddScoped<IFamiliarChatUsageService, FamiliarChatUsageService>();
 builder.Services.AddHostedService<FamiliarChatGenerationHost>();
 
 builder.Services.Configure<FamiliarChatOptions>(

@@ -1,6 +1,7 @@
 using FindFamiliar.Server.Data;
 using FindFamiliar.Server.Domain;
 using FindFamiliar.Server.Services.Familiar.Chat;
+using FindFamiliar.Server.Services.Familiar.Chat.Brief;
 using FindFamiliar.Server.Services.Familiar.Chat.Providers;
 using FindFamiliar.Server.Tests.Infrastructure;
 using Microsoft.EntityFrameworkCore;
@@ -188,11 +189,36 @@ public sealed class ProviderFamiliarChatGeneratorTests
         await NewGenerator(dbContext, provider).GenerateAsync(Request(), new RecordingSink());
 
         var sent = provider.LastRequest!;
-        var everything = sent.SystemPrompt + sent.UserMessage
+        var everything = sent.SystemPrompt + sent.UserMessage + (sent.StandingBrief ?? string.Empty)
             + string.Concat(sent.History.Select(turn => turn.UserText + turn.Output));
 
+        // With an empty brief, no project reaches the wire at all. Which project state a *populated*
+        // brief may carry — and which it must never — is asserted in FamiliarStandingBriefTests.
         Assert.DoesNotContain("Sasquatch", everything, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("distinctive purpose", everything, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// The brief travels as its own segment rather than folded into the constant system prompt, so a
+    /// project edit cannot invalidate the cache entry for the part that never changes.
+    /// </summary>
+    [Fact]
+    public async Task The_standing_brief_is_a_separate_segment_from_the_system_prompt()
+    {
+        using var database = new TemporarySqliteDatabase();
+        await using var dbContext = await database.CreateContextAsync();
+
+        var provider = new ScriptedChatProvider();
+        provider.Emit("ok");
+        provider.Finish(FamiliarChatProviderStatus.Completed);
+
+        await NewGenerator(dbContext, provider).GenerateAsync(Request(), new RecordingSink());
+
+        var sent = provider.LastRequest!;
+
+        Assert.Equal(FamiliarChatSystemPrompt.Text, sent.SystemPrompt);
+        Assert.NotNull(sent.StandingBrief);
+        Assert.DoesNotContain(sent.StandingBrief!, sent.SystemPrompt, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -283,8 +309,22 @@ public sealed class ProviderFamiliarChatGeneratorTests
 
     private static ProviderFamiliarChatGenerator NewGenerator(
         FamiliarDbContext dbContext,
-        IFamiliarChatProvider provider) =>
-        new(dbContext, provider);
+        IFamiliarChatProvider provider,
+        IFamiliarStandingBriefService? briefs = null) =>
+        new(dbContext, provider, briefs ?? new EmptyStandingBriefService());
+
+    /// <summary>
+    /// A brief with nothing in it, so these tests stay about the generator rather than about what the
+    /// brief happens to contain. The brief's own behaviour is asserted in
+    /// <c>FamiliarStandingBriefTests</c>.
+    /// </summary>
+    private sealed class EmptyStandingBriefService : IFamiliarStandingBriefService
+    {
+        public Task<FamiliarStandingBrief> GetBriefAsync(
+            Guid? focusProjectId = null,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(new FamiliarStandingBrief([], 0, 0, 0, [], DateTimeOffset.UnixEpoch));
+    }
 
     private static FamiliarChatGenerationRequest Request(string message = "a question") =>
         new(Guid.NewGuid(), Guid.NewGuid(), 1, message, null);

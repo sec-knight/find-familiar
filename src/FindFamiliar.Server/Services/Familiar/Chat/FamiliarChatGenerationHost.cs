@@ -199,6 +199,7 @@ public sealed class FamiliarChatGenerationHost(
                 turn.ProviderModel = Truncate(metadata.ProviderModel, FamiliarChatTurn.MaxProviderModelLength);
                 turn.InputTokens = metadata.InputTokens;
                 turn.OutputTokens = metadata.OutputTokens;
+                turn.CachedInputTokens = metadata.CachedInputTokens;
             }
 
             if (outcome.Succeeded)
