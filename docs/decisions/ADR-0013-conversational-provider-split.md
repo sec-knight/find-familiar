@@ -52,8 +52,13 @@ feature that stores conversation state server-side is used.
 
 xAI Grok, via the OpenAI-compatible endpoint.
 
-Model: `grok-4.20-0309-non-reasoning`, 1M context, which allows slices 1-3 to proceed
+Model: `grok-4.20-non-reasoning-latest`, 1M context, which allows slices 1-3 to proceed
 without a retrieval layer.
+
+An alias rather than a dated id. A dated id ages out — that is exactly what happened below
+— and the usual objection to aliases, not knowing what actually answered, does not apply
+here: every turn records the model the endpoint resolved, so the transcript says what
+replied even when the alias moves underneath it.
 
 Non-reasoning deliberately. A reasoning model bills its thinking as completion tokens and
 delays the first visible one; both are the opposite of what a conversation wants, and the
@@ -62,6 +67,10 @@ reasoning variant costs the same, so there is no trade being made.
 Cached input is priced ~6x below fresh input. That is what the stable-to-volatile prompt
 ordering in the sprint plan earns, and it turns a structural tidiness argument into a
 recurring cost saving.
+
+Confirmed in practice at six requests: the provider reported 256 cached prompt tokens
+against a system prompt of roughly that size, so the stable head is being served from cache
+before there is anything large in it. Slice 3's standing brief lands in that same head.
 
 **`grok-4.1-fast`, this ADR's original choice, no longer exists.** It was retired between
 writing this and shipping slice 2, and the endpoint answers a request naming it with an
