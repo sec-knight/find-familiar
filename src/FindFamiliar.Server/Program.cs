@@ -9,6 +9,7 @@ using FindFamiliar.Server.Services.Familiar.Reasoning;
 using FindFamiliar.Server.Services.Providers;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 using SQLitePCL;
 
 ConfigureSqliteProvider();
@@ -57,12 +58,51 @@ builder.Services.AddScoped<IFamiliarActionService, FamiliarActionService>();
 builder.Services.Configure<FamiliarReasoningOptions>(
     builder.Configuration.GetSection(FamiliarReasoningOptions.SectionName));
 
-// The honest default, exactly as UnknownProviderCapacityReader is for provider capacity (ADR-0011):
-// with nothing configured the application starts, the Familiar page renders, the deterministic
-// summary is complete, and a message sent on a stock build is durably saved and answered with the
-// one sentence that is true. No credential is required to run this application, and none is read
-// from configuration — a provider that needs a key reads it from the environment only.
-builder.Services.AddScoped<IFamiliarReasoningProvider, UnconfiguredFamiliarReasoningProvider>();
+builder.Services.Configure<OpenAiCompatibleReasoningOptions>(
+    builder.Configuration.GetSection(OpenAiCompatibleReasoningOptions.SectionName));
+
+// Which reasoning provider answers, chosen by configuration and nothing else.
+//
+// The default is the honest one, exactly as UnknownProviderCapacityReader is for provider capacity
+// (ADR-0011): with nothing configured the application starts, the Familiar page renders, the
+// deterministic summary is complete, and a sent message is durably saved and answered with the one
+// sentence that is true. No credential is required to run this application at all.
+//
+// Selecting a real provider is a configuration change, never a code change — that is the whole point
+// of the abstraction, and it is what lets one build serve a model on the operator's own machine and
+// a hosted endpoint alike.
+var reasoningProvider = builder.Configuration["Familiar:Reasoning:Provider"];
+
+if (string.Equals(reasoningProvider, "OpenAiCompatible", StringComparison.OrdinalIgnoreCase))
+{
+    // A named client so the timeout, base address and credential are configured once, at startup,
+    // rather than per request. The key is read from the environment here and never from
+    // configuration, so it cannot be committed or printed by a configuration dump.
+    builder.Services.AddHttpClient<IFamiliarReasoningProvider, OpenAiCompatibleFamiliarReasoningProvider>(
+        (services, client) =>
+        {
+            var settings = services.GetRequiredService<IOptions<OpenAiCompatibleReasoningOptions>>().Value;
+
+            // A trailing slash matters: without it the last path segment is replaced rather than
+            // appended, and "/v1" silently becomes "/chat/completions".
+            var baseAddress = settings.BaseAddress.EndsWith('/')
+                ? settings.BaseAddress
+                : settings.BaseAddress + "/";
+
+            client.BaseAddress = new Uri(baseAddress);
+            client.Timeout = TimeSpan.FromSeconds(settings.TimeoutSeconds);
+
+            if (settings.ReadApiKey() is { } apiKey)
+            {
+                client.DefaultRequestHeaders.Authorization =
+                    new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", apiKey);
+            }
+        });
+}
+else
+{
+    builder.Services.AddScoped<IFamiliarReasoningProvider, UnconfiguredFamiliarReasoningProvider>();
+}
 
 builder.Services.AddScoped<IProviderCapacityService, ProviderCapacityService>();
 
