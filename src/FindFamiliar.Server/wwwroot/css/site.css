@@ -846,6 +846,15 @@ h2 {
   border-left: 4px solid var(--warning);
 }
 
+/* A turn that has not finished. Marked so a reply still arriving is never mistaken for a complete
+   one — the same reason a Degraded delivery is styled apart from a Delivered one. */
+.familiar-message.is-pending .conversation-block,
+.familiar-message.is-pending [role="status"] {
+  padding: 0.75rem 1rem;
+  border-left: 4px solid var(--text-secondary);
+  color: var(--text-secondary);
+}
+
 .familiar-evidence {
   margin: 0.375rem 0 0;
   color: var(--text-secondary);

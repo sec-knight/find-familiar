@@ -1,10 +1,12 @@
 using System.Text.Json.Serialization;
+using FindFamiliar.Server.Api.Familiar;
 using FindFamiliar.Server.Api.Runner;
 using FindFamiliar.Server.Data;
 using FindFamiliar.Server.Domain;
 using FindFamiliar.Server.Services;
 using FindFamiliar.Server.Services.Demiplane;
 using FindFamiliar.Server.Services.Familiar;
+using FindFamiliar.Server.Services.Familiar.Chat;
 using FindFamiliar.Server.Services.Familiar.Reasoning;
 using FindFamiliar.Server.Services.Providers;
 using Microsoft.AspNetCore.DataProtection;
@@ -50,6 +52,21 @@ builder.Services.AddScoped<IDemiplaneProjectionService, DemiplaneProjectionServi
 builder.Services.AddScoped<IProjectSnapshotService, ProjectSnapshotService>();
 
 builder.Services.AddScoped<IFamiliarConversationService, FamiliarConversationService>();
+
+// ---- The talk lane (ADR-0013), independent of the Runner and of the per-project conversation ----
+//
+// A send commits a Pending turn and returns; the hosted service below generates it out of band, so a
+// reply survives the connection that asked for it going away. The queue is a singleton because it is
+// the handoff between the two, and it holds a scheduling hint only — the durable record is the row.
+builder.Services.AddSingleton<FamiliarChatGenerationQueue>();
+builder.Services.AddScoped<IFamiliarChatService, FamiliarChatService>();
+builder.Services.AddHostedService<FamiliarChatGenerationHost>();
+
+// No conversational provider is registered, exactly as none is for reasoning: with nothing
+// configured the application starts, /Familiar renders, a conversation is durable, generation runs
+// end to end, and the one sentence that is true is what appears. Slice 2 selects a real one by
+// configuration, never by a code change.
+builder.Services.AddScoped<IFamiliarChatGenerator, UnconfiguredFamiliarChatGenerator>();
 
 // The only bridge from a proposal to persisted work. Effects go through IWorkflowDispatchService,
 // so work confirmed from a conversation is indistinguishable from work created by hand.
@@ -196,6 +213,8 @@ app.MapGet("/tasks/{taskId:guid}/sessions/{sessionId:guid}/assignment.md", async
     var markdown = SessionAssignmentMarkdownRenderer.RenderAssignment(document, session);
     return Results.Text(markdown, "text/markdown; charset=utf-8");
 });
+
+app.MapFamiliarChatEndpoints();
 
 app.MapRunnerEndpoints();
 

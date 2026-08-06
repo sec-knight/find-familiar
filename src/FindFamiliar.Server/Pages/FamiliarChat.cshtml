@@ -1,0 +1,145 @@
+@page "/Familiar/Chat/{chatId:guid}"
+@using FindFamiliar.Server.Domain
+@model FindFamiliar.Server.Pages.FamiliarChatModel
+@{
+    ViewData["Title"] = Model.Chat is null ? "Familiar" : $"Familiar — {Model.Chat.Title}";
+}
+
+@section Head {
+    @* Only while a reply is actually arriving, as the Demiplane refreshes only while work is
+       running. A page at rest is never re-requested, so a conversation somebody is reading does not
+       move under them. Slice 2 replaces this with a stream resumed from the cursor below. *@
+    @if (Model.HasTurnInFlight)
+    {
+        <meta http-equiv="refresh" content="@FindFamiliar.Server.Pages.FamiliarChatModel.InFlightRefreshSeconds" />
+    }
+}
+
+@if (TempData["StatusMessage"] is string statusMessage)
+{
+    <p role="status" class="demiplane-flash">@statusMessage</p>
+}
+
+@if (Model.Chat is not { } chat)
+{
+    <section class="dashboard-intro" aria-labelledby="familiar-chat-title">
+        <p class="eyebrow">Familiar</p>
+        <h1 id="familiar-chat-title">This conversation could not be read</h1>
+    </section>
+}
+else
+{
+    <section class="dashboard-intro" aria-labelledby="familiar-chat-title">
+        <p class="eyebrow">Familiar</p>
+        <h1 id="familiar-chat-title">@chat.Title</h1>
+        <p>
+            <a asp-page="/FamiliarChats">All conversations</a>
+            @if (chat.FocusProjectId is { } focusProjectId)
+            {
+                <span> · focus <a asp-page="/Demiplane" asp-route-id="@focusProjectId">@chat.FocusProjectName</a></span>
+            }
+            else
+            {
+                <span> · no project focus — this conversation can see everything</span>
+            }
+        </p>
+    </section>
+
+    @* ----------------------------------------------------------------------------- Transcript *@
+    <section class="familiar-conversation" aria-labelledby="transcript-title">
+        <div class="section-heading">
+            <div>
+                <p class="eyebrow">Conversation · through sequence @Model.Cursor</p>
+                <h2 id="transcript-title">What has been asked</h2>
+            </div>
+        </div>
+
+        @if (chat.Turns.Count == 0)
+        {
+            <p>Nothing asked yet.</p>
+        }
+        else
+        {
+            @* Oldest first, in Sequence order as the service returned them — never by timestamp,
+               which cannot order two turns written in the same tick. *@
+            <ol class="familiar-messages">
+                @foreach (var turn in chat.Turns)
+                {
+                    <li class="familiar-message is-human" data-sequence="@turn.Sequence">
+                        <p class="familiar-message-meta">
+                            <span class="familiar-message-author">You</span>
+                            <span> · <time datetime="@turn.CreatedUtc.ToString("O")">@turn.CreatedUtc.ToString("dd MMM yyyy, HH:mm") UTC</time></span>
+                        </p>
+
+                        @* Encoded by Razor, and nothing here interprets it: no Html.Raw, no markdown
+                           rendering, no autolinking. Line breaks come from CSS white-space: pre-wrap
+                           on .conversation-block. *@
+                        <p class="conversation-block">@turn.UserText</p>
+                    </li>
+
+                    <li class="familiar-message @FindFamiliar.Server.Pages.FamiliarChatModel.StateCss(turn.State)"
+                        data-sequence="@turn.Sequence">
+                        <p class="familiar-message-meta">
+                            <span class="familiar-message-author">@FindFamiliar.Server.Pages.FamiliarChatModel.StateLabel(turn.State)</span>
+                            @if (turn.State == FamiliarChatTurnState.Failed)
+                            {
+                                <span> · <strong>Failed</strong></span>
+                            }
+                            @if (turn.CompletedUtc is { } completedUtc)
+                            {
+                                <span> · <time datetime="@completedUtc.ToString("O")">@completedUtc.ToString("HH:mm") UTC</time></span>
+                            }
+                        </p>
+
+                        @if (turn.Output.Length > 0)
+                        {
+                            <p class="conversation-block">@turn.Output</p>
+                        }
+                        else if (turn.IsInFlight)
+                        {
+                            <p role="status">
+                                Working on this. It is being generated on the server, so you can close
+                                this page — the reply will be here when you come back.
+                            </p>
+                        }
+                    </li>
+                }
+            </ol>
+        }
+    </section>
+
+    @* --------------------------------------------------------------------------------- Input *@
+    <section class="familiar-compose" aria-labelledby="compose-title">
+        <div class="section-heading">
+            <div>
+                <p class="eyebrow">Ask</p>
+                <h2 id="compose-title">Say something</h2>
+            </div>
+        </div>
+
+        <form method="post" asp-page-handler="Send" asp-route-chatId="@chat.ChatId">
+            <label class="familiar-compose-label" for="familiar-chat-message">Your message</label>
+
+            @if (Model.SendValidationMessage is { } validationMessage)
+            {
+                <p class="familiar-compose-error" role="alert" id="familiar-chat-message-error">@validationMessage</p>
+            }
+
+            @* Not disabled while a reply is in flight. The server refuses a second turn and says so,
+               and a disabled control is a hint to a browser rather than a rule — the rule is the
+               filtered unique index on the turn table. *@
+            <textarea id="familiar-chat-message" name="Message" class="familiar-compose-input" rows="3"
+                      maxlength="@FamiliarChatTurn.MaxUserTextLength"
+                      placeholder="Ask about anything that is recorded…"
+                      aria-describedby="familiar-chat-message-hint@(Model.SendValidationMessage is null ? "" : " familiar-chat-message-error")"
+                      required>@Model.Message</textarea>
+
+            <p class="familiar-compose-hint" id="familiar-chat-message-hint">
+                Up to @FamiliarChatTurn.MaxUserTextLength.ToString("N0") characters.
+                One reply at a time — the Familiar answers from what is recorded, and cannot change anything.
+            </p>
+
+            <button type="submit" class="familiar-compose-send">Send</button>
+        </form>
+    </section>
+}

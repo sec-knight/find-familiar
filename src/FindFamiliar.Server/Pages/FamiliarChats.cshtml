@@ -1,0 +1,97 @@
+@page "/Familiar"
+@using FindFamiliar.Server.Domain
+@model FindFamiliar.Server.Pages.FamiliarChatsModel
+@{
+    ViewData["Title"] = "Familiar";
+}
+
+@if (TempData["StatusMessage"] is string statusMessage)
+{
+    <p role="status" class="demiplane-flash">@statusMessage</p>
+}
+
+<section class="dashboard-intro" aria-labelledby="familiar-chats-title">
+    <p class="eyebrow">Familiar</p>
+    <h1 id="familiar-chats-title">Conversations</h1>
+    <p class="intro-copy">
+        One continuous conversation across every device, about every project at once. The Familiar
+        reads what is recorded and changes nothing.
+    </p>
+</section>
+
+@* ------------------------------------------------------------------------------- Start one *@
+<section class="familiar-compose" aria-labelledby="start-title">
+    <div class="section-heading">
+        <div>
+            <p class="eyebrow">Ask</p>
+            <h2 id="start-title">Start a conversation</h2>
+        </div>
+    </div>
+
+    @* No JavaScript. Slice 1 has no stream to attach to, so a browser that runs no script behaves
+       exactly like one that does; the character bound is enforced server-side and stated in text. *@
+    <form method="post" asp-page-handler="Start">
+        <label class="familiar-compose-label" for="familiar-chat-message">Your message</label>
+
+        @if (Model.SendValidationMessage is { } validationMessage)
+        {
+            <p class="familiar-compose-error" role="alert" id="familiar-chat-message-error">@validationMessage</p>
+        }
+
+        <textarea id="familiar-chat-message" name="Message" class="familiar-compose-input" rows="3"
+                  maxlength="@FamiliarChatTurn.MaxUserTextLength"
+                  placeholder="Ask about anything that is recorded…"
+                  aria-describedby="familiar-chat-message-hint@(Model.SendValidationMessage is null ? "" : " familiar-chat-message-error")"
+                  required>@Model.Message</textarea>
+
+        <p class="familiar-compose-hint" id="familiar-chat-message-hint">
+            Up to @FamiliarChatTurn.MaxUserTextLength.ToString("N0") characters.
+            The Familiar answers from what is recorded, and cannot change anything.
+        </p>
+
+        <button type="submit" class="familiar-compose-send">Start</button>
+    </form>
+</section>
+
+@* ------------------------------------------------------------------------ Every conversation *@
+<section class="familiar-conversation" aria-labelledby="chat-list-title">
+    <div class="section-heading">
+        <div>
+            <p class="eyebrow">Server-side · the same on every device</p>
+            <h2 id="chat-list-title">Conversations so far</h2>
+        </div>
+    </div>
+
+    @if (Model.Chats.Count == 0)
+    {
+        <p>Nothing asked yet.</p>
+    }
+    else
+    {
+        <ol class="familiar-messages">
+            @foreach (var chat in Model.Chats)
+            {
+                <li class="familiar-message">
+                    <p class="familiar-message-meta">
+                        <span class="familiar-message-author">
+                            <a asp-page="/FamiliarChat" asp-route-chatId="@chat.ChatId">@chat.Title</a>
+                        </span>
+                        <span> · @chat.TurnCount @(chat.TurnCount == 1 ? "exchange" : "exchanges")</span>
+                        @if (chat.FocusProjectName is { } focusName)
+                        {
+                            <span> · focus <strong>@focusName</strong></span>
+                        }
+                        <span> · <time datetime="@chat.UpdatedUtc.ToString("O")">@chat.UpdatedUtc.ToString("dd MMM yyyy, HH:mm") UTC</time></span>
+                        @if (chat.HasTurnInFlight)
+                        {
+                            @* True wherever the send came from. Generation is detached from the
+                               connection that asked for it, so a reply started on another device is
+                               visible as in flight here. *@
+                            <span> · <strong>replying now</strong></span>
+                        }
+                    </p>
+                </li>
+            }
+        </ol>
+    }
+</section>

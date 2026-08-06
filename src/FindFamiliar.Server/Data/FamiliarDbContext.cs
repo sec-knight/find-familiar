@@ -31,6 +31,10 @@ public sealed class FamiliarDbContext(DbContextOptions<FamiliarDbContext> option
 
     public DbSet<FamiliarActionProposal> FamiliarActionProposals => Set<FamiliarActionProposal>();
 
+    public DbSet<FamiliarChat> FamiliarChats => Set<FamiliarChat>();
+
+    public DbSet<FamiliarChatTurn> FamiliarChatTurns => Set<FamiliarChatTurn>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.Entity<FamiliarProject>(entity =>
@@ -357,6 +361,66 @@ public sealed class FamiliarDbContext(DbContextOptions<FamiliarDbContext> option
                 .WithMany()
                 .HasForeignKey(proposal => proposal.CreatedSessionId)
                 .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<FamiliarChat>(entity =>
+        {
+            entity.ToTable("FamiliarChats");
+            entity.HasKey(chat => chat.Id);
+            entity.Property(chat => chat.Title).HasMaxLength(FamiliarChat.MaxTitleLength).IsRequired();
+
+            // The conversation list is ordered by recent activity, and it is the only list read on
+            // every page load of /Familiar.
+            entity.HasIndex(chat => chat.UpdatedUtc);
+
+            // SetNull, not Cascade: a conversation is not about its focus project, it merely leans
+            // towards it. Deleting the project must lose the lean, never the conversation.
+            entity.HasOne(chat => chat.FocusProject)
+                .WithMany()
+                .HasForeignKey(chat => chat.FocusProjectId)
+                .OnDelete(DeleteBehavior.SetNull);
+
+            entity.HasMany(chat => chat.Turns)
+                .WithOne(turn => turn.Chat)
+                .HasForeignKey(turn => turn.ChatId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<FamiliarChatTurn>(entity =>
+        {
+            entity.ToTable("FamiliarChatTurns");
+            entity.HasKey(turn => turn.Id);
+            entity.Property(turn => turn.State).HasConversion<string>().HasMaxLength(32);
+            entity.Property(turn => turn.UserText)
+                .HasMaxLength(FamiliarChatTurn.MaxUserTextLength)
+                .IsRequired();
+            entity.Property(turn => turn.Output)
+                .HasMaxLength(FamiliarChatTurn.MaxOutputLength)
+                .IsRequired();
+            entity.Property(turn => turn.FailureCode).HasMaxLength(FamiliarChatTurn.MaxFailureCodeLength);
+            entity.Ignore(turn => turn.IsInFlight);
+
+            // Unique, so two racing sends can never produce an ambiguous display order — and so the
+            // resume read "everything after sequence N" can never skip or duplicate a turn.
+            entity.HasIndex(turn => new { turn.ChatId, turn.Sequence }).IsUnique();
+
+            // At most one turn in flight per conversation, enforced by the database rather than by a
+            // check a caller might not run. Same shape and rationale as
+            // IX_FamiliarActionProposals_ConversationId_Pending and the single-started-session
+            // invariant: contenders can only ever race for one row, so a second sender attaching to
+            // the turn already running is the only outcome the schema permits.
+            //
+            // The filter matches the stored TEXT because State uses HasConversion<string>() above.
+            // If that conversion is ever removed the filter silently stops matching and the
+            // invariant silently disappears — FamiliarChatInFlightUniqueIndexTests goes red instead.
+            entity.HasIndex(turn => turn.ChatId)
+                .IsUnique()
+                .HasFilter("\"State\" IN ('Pending', 'Generating')")
+                .HasDatabaseName("IX_FamiliarChatTurns_ChatId_InFlight");
+
+            // FocusProjectIdAtTime carries no foreign key on purpose. It records what the focus was
+            // when the turn was accepted; deleting that project must not rewrite the record of a
+            // conversation that already happened.
         });
 
         modelBuilder.Entity<ContextEntry>(entity =>
