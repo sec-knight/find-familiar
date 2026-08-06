@@ -189,3 +189,135 @@ network; the LAN address was verified to refuse connections.
 A local model was evaluated and rejected **for this host only**: prompt processing measured 3.6
 tokens/sec on a 2010 Xeon with no AVX support, roughly half an hour per question. The requirement is
 AVX2, and it is documented rather than discovered.
+
+---
+
+## Sprint 12 — The Familiar Speaks
+
+**Accepted:** 2026-08-06 · **ADR:** [ADR-0013](decisions/ADR-0013-conversational-provider-split.md)
+
+### What this sprint established
+
+A human can open `/Familiar` on a phone across Tailscale, hold a streaming conversation about the
+whole system rather than one project, close the tab mid-reply, reopen it on another device, and find
+the reply either still arriving or already complete. The conversation is durable server-side state;
+the browser is a view of it, never its owner.
+
+The sprint's central separation is ADR-0013's: **the lane that talks and the lane that does work are
+different seams with different providers.** `IFamiliarChatProvider` streams text and declares no
+tools — the request type has no member for them — so there is no execution surface regardless of what
+a reply says. It holds no `DbContext`, no `HttpContext`, and no reference to `IWorkflowDispatchService`.
+The Runner and the Claude Code adapter were not touched by this sprint at all.
+
+### Accepted commit chain
+
+| Commit | Slice |
+|---|---|
+| `f6f3326` | Sprint 12 plan and ADR-0013 |
+| `b3e85af` | Durable system-wide conversation |
+| `e9b7cff` | Streaming conversational provider |
+| `15aa72b` | Follow the model alias rather than a dated id |
+| `d4c6856` | Standing brief, sensitivity boundary, usage panel |
+| `f353e93` | Date the brief so it stops claiming the present |
+| `0c20b82` | Rank open work above finished work |
+| `a3b3125` | Capture the cached-input count |
+
+History is linear; no merge commits.
+
+### Verification
+
+`dotnet test` — 907 passed, 0 failed, with the server and worker stopped, database backed up first.
+`dotnet build` — 0 warnings, 0 errors. `dotnet ef migrations has-pending-model-changes` — clean.
+
+No test in this repository opens a network connection. Cost isolation is **structural, not
+conventional**, and was proven by exporting the real `XAI_API_KEY` into the test process and
+observing that no test could reach a provider — `FamiliarChatCostIsolationTests`.
+
+### Durability proven against real interruption, not simulated
+
+Three invariants hold in the database rather than in code that means well:
+
+- **One reply in flight per conversation**, held by a filtered unique index over
+  `"State" IN ('Pending','Generating')`. A second send while one is arriving is `Attached` — the
+  message stays in the composer, and nothing typed is lost.
+- **A killed server does not strand a turn.** `RecoverAsync` sweeps at startup: `Generating` becomes
+  `Failed` with `generation-interrupted`, `Pending` is re-enqueued. Verified by killing the server
+  mid-reply with `-9`.
+- **Resume is one cursor contract**, shared by the JSON read, the SSE stream, and the client, and it
+  stops before a turn still arriving so a reload cannot skip a half-written reply.
+
+Partial replies are kept. A stream that fails after emitting half an answer leaves the half that
+arrived, with a note appended saying it stopped — the person is entitled to what was already said.
+
+### Five provider states, each with its own wording
+
+Not configured, unreachable, rate limited, malformed, unauthenticated — every one maps to exactly one
+code and one authored sentence, and adding a status without wording fails a test. **No response body,
+exception message, or header is ever read, logged, or persisted**; an error body routinely echoes the
+request and can name a host, a path, or part of a key. The columns for prompts, raw payloads and
+hidden reasoning do not exist.
+
+### Two defects found by running it for real
+
+**The Familiar described Sprint 11 as the present.** Asked for the state of the project, it gave a
+fluent, confident, months-stale answer. Two separate causes, and only one was missing data:
+
+- a genuine defect — the brief carried no time dimension at all, so a model shown state with no
+  indication of its age described it in the present tense, correctly reasoning from what it was
+  given. Fixed with `NewestRecordedActivityUtc`, an explicit limitation that records ending is
+  evidence about recording and not about work, and a system-prompt rule against present-tense state
+  claims;
+- a data gap — Sprint 12 itself was unrecorded, since this project's work is mostly done in git and
+  only sometimes tracked as a task. Backfilled as completed work.
+
+**A burst of finished work hid everything outstanding.** Ordering fell through to recency, so a
+sprint's worth of freshly-completed tasks pushed the one Ready and the one Blocked task out of the
+capped list — "what is the state of things?" answered with four done things and nothing open. Recency
+is a poor proxy for relevance exactly when a burst has just landed, which is exactly when someone
+asks. Fixed in `0c20b82` by ranking open work above finished work.
+
+**A third, found while closing the sprint:** the usage frame's cached-token field was parsed into a
+record nothing read, so the dashboard said "not reported" against an endpoint that was sending the
+number. It survived because no test fed the parser a byte of wire format. Fixed in `a3b3125`.
+
+### The refusal, verified
+
+Asked to mark a demonstrably-finished task complete, the Familiar declined and told the operator to
+do it by hand. It wrote nothing: the project's context revision was unchanged at 46 afterwards. That
+refusal is correct for Sprint 12 and is the specification for Sprint 13.
+
+### Deliberate deviations from the plan
+
+- **`FamiliarChat` / `FamiliarChatTurn`, not `FamiliarConversation` / `FamiliarTurn`.** Those names
+  were already taken by Sprint 11's per-project Familiar. The two coexist rather than one being
+  renamed into the other.
+- **Token columns are `InputTokens` / `OutputTokens`**, not `Prompt*` / `Completion*`.
+  `FamiliarConversationModelTests` rejects any column whose name contains "Prompt", to keep prompt
+  text out of the database by construction. The guard was kept and the columns renamed, rather than
+  the guard weakened.
+- **Retrieval was not built.** `search_context` was sketched in the plan as a model-driven tool. It
+  is deferred to Sprint 13 and reshaped as server-side deterministic retrieval, for reasons recorded
+  in ADR-0014.
+
+### Known follow-ups (not blockers)
+
+- **The Familiar cannot read context entries or decisions.** The brief carries projects and tasks
+  only, so results harvested since Sprint 9 — and the ADRs describing why this system is shaped the
+  way it is — are invisible to it. The loop this project exists to close has been open the whole
+  time. This is Sprint 13 slice 1 and the sharpest finding of this sprint.
+- The cached-input percentage is honest but thin: only turns recorded after `a3b3125` carry the
+  figure, so the dashboard's ratio understates caching until the older turns age out.
+- `grok-4.1-fast` was retired mid-sprint. The configuration follows an alias now, and a retired model
+  surfaces as a visible `chat-malformed` rather than a dead stream — xAI returns 400 for a bad
+  credential, not 401, so that code names both causes and claims neither.
+
+### Operational baseline
+
+`XAI_API_KEY` lives in `/srv/familiar/secrets/familiar.secrets.env`, mode 0600, single underscores.
+The name matters: a double underscore is ASP.NET's section separator and would bind the secret into
+`IConfiguration`, where a configuration dump would print it. Configuration names the variable; the
+value is read from the environment and never through configuration.
+
+Zero Data Retention is enabled on the account. It costs this architecture nothing, because the server
+owns all conversation state and no stateful provider feature is used — no Responses API, no Files, no
+Collections, no Batch.
