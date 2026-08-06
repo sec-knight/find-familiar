@@ -331,6 +331,147 @@ public sealed class FamiliarChatPageTests(FindFamiliarWebApplicationFactory fact
         Assert.Contains("unsupported reference", html, StringComparison.Ordinal);
     }
 
+    // ---------------------------------------------------------------- plans on the page
+
+    /// <summary>
+    /// A drafted plan renders inline in the transcript, is durable, and reads identically on a second
+    /// device with its own cookie jar — the acceptance criterion for slice 3.
+    ///
+    /// It also states what approving would do before there is anything to press. That disclosure is
+    /// what makes an approval an act of reading rather than of trust, so it is asserted now rather
+    /// than added beside the button later.
+    /// </summary>
+    [Fact]
+    public async Task A_drafted_plan_renders_in_the_transcript_and_on_a_second_device()
+    {
+        var project = await SeedProjectAsync();
+        var chatId = await StartConversationAsync("plan the next sprint");
+
+        await DraftPlanAsync(chatId, project.Id);
+
+        using var client = factory.CreateClient();
+        var html = await client.GetStringAsync($"/Familiar/Chat/{chatId}");
+
+        Assert.Contains("Drafted plan", html, StringComparison.Ordinal);
+        Assert.Contains("Re-specify the anchor task", html, StringComparison.Ordinal);
+        Assert.Contains("starts a Planner session", html, StringComparison.Ordinal);
+        Assert.Contains("records the work, starts nothing", html, StringComparison.Ordinal);
+
+        // The disclosure: how many tasks, and that exactly one session starts (ADR-0014 §4).
+        Assert.Contains("would create 2 task(s)", html, StringComparison.Ordinal);
+        Assert.Contains("start one Planner session", html, StringComparison.Ordinal);
+        Assert.Contains("Nothing has been created yet", html, StringComparison.Ordinal);
+
+        // A second device, sharing nothing with the first but the server.
+        using var secondDevice = factory.CreateClient();
+        var onPhone = await secondDevice.GetStringAsync($"/Familiar/Chat/{chatId}");
+
+        Assert.Contains("Re-specify the anchor task", onPhone, StringComparison.Ordinal);
+        Assert.Contains("would create 2 task(s)", onPhone, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The plan travels on the turn in the JSON read too, so a client that resumed over the stream
+    /// builds the same card rather than having to reload to see it.
+    /// </summary>
+    [Fact]
+    public async Task A_drafted_plan_travels_with_the_turn_over_the_resume_read()
+    {
+        var project = await SeedProjectAsync();
+        var chatId = await StartConversationAsync("plan the next sprint");
+
+        await DraftPlanAsync(chatId, project.Id);
+
+        using var client = factory.CreateClient();
+        var json = await client.GetStringAsync($"/api/familiar/chats/{chatId}/turns?after=0");
+
+        using var document = JsonDocument.Parse(json);
+        var plan = document.RootElement.GetProperty("turns")[0].GetProperty("plan");
+
+        Assert.Equal("Pending", plan.GetProperty("status").GetString());
+        Assert.Equal(2, plan.GetProperty("items").GetArrayLength());
+        Assert.Equal("Planner", plan.GetProperty("items")[0].GetProperty("role").GetString());
+        Assert.Equal(JsonValueKind.Null, plan.GetProperty("items")[1].GetProperty("role").ValueKind);
+    }
+
+    /// <summary>
+    /// A plan proposes and creates nothing. Asserted from outside the service that wrote it, because
+    /// this is the property a reader of the page is being promised.
+    /// </summary>
+    [Fact]
+    public async Task A_drafted_plan_has_created_no_task()
+    {
+        var project = await SeedProjectAsync();
+        var chatId = await StartConversationAsync("plan the next sprint");
+
+        await DraftPlanAsync(chatId, project.Id);
+
+        using var scope = factory.Services.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<FamiliarDbContext>();
+
+        Assert.Empty(await dbContext.Tasks.AsNoTracking().Where(task => task.ProjectId == project.Id).ToListAsync());
+        Assert.All(
+            await dbContext.FamiliarPlanItems.AsNoTracking().ToListAsync(),
+            item => Assert.Null(item.CreatedTaskId));
+    }
+
+    /// <summary>
+    /// Writes a plan directly, standing in for the drafting service so these tests stay about
+    /// rendering and durability rather than about a provider.
+    /// </summary>
+    private async Task DraftPlanAsync(Guid chatId, Guid projectId)
+    {
+        using var scope = factory.Services.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<FamiliarDbContext>();
+
+        var turn = await dbContext.FamiliarChatTurns
+            .Where(candidate => candidate.ChatId == chatId)
+            .OrderByDescending(candidate => candidate.Sequence)
+            .FirstAsync();
+
+        turn.State = FamiliarChatTurnState.Completed;
+        turn.Output = "Here is what I would do next.";
+        turn.RequestedPlan = true;
+        turn.CompletedUtc = DateTime.UtcNow;
+
+        dbContext.FamiliarPlanProposals.Add(new FamiliarPlanProposal
+        {
+            Id = Guid.NewGuid(),
+            ChatId = chatId,
+            TurnId = turn.Id,
+            ProjectId = projectId,
+            Status = FamiliarPlanStatus.Pending,
+            ConcurrencyToken = Guid.NewGuid(),
+            ObservedContextRevision = 0,
+            Summary = "Close the anchor-navigation task.",
+            CreatedUtc = DateTime.UtcNow,
+            UpdatedUtc = DateTime.UtcNow,
+            Items =
+            [
+                new FamiliarPlanItem
+                {
+                    Id = Guid.NewGuid(),
+                    Position = 0,
+                    Title = "Re-specify the anchor task",
+                    RequestedOutcome = "The constraint reflects that the application now ships JavaScript.",
+                    Role = AgentSessionRole.Planner,
+                    IsIncluded = true
+                },
+                new FamiliarPlanItem
+                {
+                    Id = Guid.NewGuid(),
+                    Position = 1,
+                    Title = "Record the superseded boundary",
+                    RequestedOutcome = "The no-JavaScript constraint is marked superseded.",
+                    Role = null,
+                    IsIncluded = true
+                }
+            ]
+        });
+
+        await dbContext.SaveChangesAsync();
+    }
+
     private async Task<Guid> SeedEntryAsync(Guid projectId, string title)
     {
         using var scope = factory.Services.CreateScope();

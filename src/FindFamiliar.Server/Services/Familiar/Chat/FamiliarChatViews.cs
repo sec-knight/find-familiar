@@ -33,6 +33,47 @@ public sealed record FamiliarChatCitationView(
     ContextEntryKind Kind,
     string Title);
 
+/// <summary>One proposed item of a drafted plan, as a client renders it.</summary>
+public sealed record FamiliarPlanItemView(
+    Guid ItemId,
+    int Position,
+    string Title,
+    string RequestedOutcome,
+    AgentSessionRole? Role,
+    IReadOnlyList<FamiliarChatCitationView> Evidence,
+    bool IsIncluded);
+
+/// <summary>
+/// A plan drafted in this conversation, rendered inline in the transcript.
+///
+/// Carries no approve or decline affordance in slice 3 — the plan is durable and readable, and
+/// nothing can act on it yet. What it does carry is the disclosure that makes an approval honest when
+/// slice 4 adds one: how many tasks would be created, and which single session would start.
+/// </summary>
+public sealed record FamiliarPlanView(
+    Guid PlanId,
+    Guid TurnId,
+    Guid ProjectId,
+    string ProjectName,
+    FamiliarPlanStatus Status,
+    string Summary,
+    IReadOnlyList<FamiliarPlanItemView> Items,
+    DateTime CreatedUtc)
+{
+    public bool IsPending => Status == FamiliarPlanStatus.Pending;
+
+    public IReadOnlyList<FamiliarPlanItemView> Included =>
+        Items.Where(item => item.IsIncluded).ToList();
+
+    /// <summary>
+    /// The first included item that names a session. One session starts on approval, not one per item
+    /// (ADR-0014 §4) — a plan written before any of it ran is a guess, and the first result is the
+    /// best evidence about whether the second step is still right.
+    /// </summary>
+    public FamiliarPlanItemView? FirstSessionItem =>
+        Included.FirstOrDefault(item => item.Role is not null);
+}
+
 /// <summary>
 /// One exchange, as a client renders it.
 ///
@@ -43,6 +84,10 @@ public sealed record FamiliarChatCitationView(
 /// <param name="Citations">
 /// The entries this turn was answered from, in the order they were offered. An id in the reply that
 /// is not here was never in the pack, and the renderers mark it rather than showing it as a source.
+/// </param>
+/// <param name="Plan">
+/// The plan this turn drafted, when it drafted one. Travels with the turn rather than beside the
+/// conversation so it renders in place, at the point in the transcript where it was proposed.
 /// </param>
 public sealed record FamiliarChatTurnView(
     Guid TurnId,
@@ -55,7 +100,8 @@ public sealed record FamiliarChatTurnView(
     DateTime? CompletedUtc,
     string? ProviderName = null,
     string? ProviderModel = null,
-    IReadOnlyList<FamiliarChatCitationView>? Citations = null)
+    IReadOnlyList<FamiliarChatCitationView>? Citations = null,
+    FamiliarPlanView? Plan = null)
 {
     public bool IsInFlight => State is FamiliarChatTurnState.Pending or FamiliarChatTurnState.Generating;
 

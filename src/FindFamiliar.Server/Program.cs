@@ -9,6 +9,7 @@ using FindFamiliar.Server.Services.Familiar;
 using FindFamiliar.Server.Services.Familiar.Chat;
 using FindFamiliar.Server.Services.Familiar.Chat.Brief;
 using FindFamiliar.Server.Services.Familiar.Chat.Providers;
+using FindFamiliar.Server.Services.Familiar.Chat.Planning;
 using FindFamiliar.Server.Services.Familiar.Chat.Retrieval;
 using FindFamiliar.Server.Services.Familiar.Reasoning;
 using FindFamiliar.Server.Services.Providers;
@@ -116,6 +117,11 @@ if (chatOptions?.IsConfigured() == true)
                     new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", apiKey);
             }
         });
+
+    // Drafts a plan from a turn that asked for one, through the same provider. Writes a proposal and
+    // nothing else — no task, no session, no context entry (ADR-0014). Registered here rather than
+    // unconditionally because it needs a provider, and with none configured nothing can draft.
+    builder.Services.AddScoped<IFamiliarPlanDraftingService, FamiliarPlanDraftingService>();
 
     builder.Services.AddScoped<IFamiliarChatGenerator, ProviderFamiliarChatGenerator>();
 }

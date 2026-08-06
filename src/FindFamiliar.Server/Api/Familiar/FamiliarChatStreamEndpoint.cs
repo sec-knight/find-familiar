@@ -193,7 +193,11 @@ public static class FamiliarChatStreamEndpoint
             // could check a citation against.
             if (before.State != now.State
                 || before.Output.Length != now.Output.Length
-                || before.Cited.Count != now.Cited.Count)
+                || before.Cited.Count != now.Cited.Count
+                // A plan is drafted after the reply is complete, so without this the frame carrying
+                // it would never be sent and the plan would appear only on the next reload.
+                || (before.Plan is null) != (now.Plan is null)
+                || before.Plan?.Status != now.Plan?.Status)
             {
                 return true;
             }

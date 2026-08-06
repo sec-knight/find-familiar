@@ -132,6 +132,62 @@ else
                                     }
                                 }</p>
 
+                            @* The plan, in the transcript at the point it was proposed. Slice 3 renders
+                               it and nothing more: there is no approve control yet, and nothing in the
+                               system can act on it. *@
+                            @if (turn.Plan is { } plan)
+                            {
+                                <section class="familiar-plan" data-plan aria-label="Drafted plan">
+                                    <p class="familiar-plan-meta">
+                                        <strong>Drafted plan</strong>
+                                        <span> · @plan.ProjectName</span>
+                                        <span> · @plan.Status.ToString().ToLowerInvariant()</span>
+                                    </p>
+
+                                    <p class="familiar-plan-summary">@plan.Summary</p>
+
+                                    <ol class="familiar-plan-items">
+                                        @foreach (var item in plan.Items)
+                                        {
+                                            <li class="familiar-plan-item">
+                                                <p class="familiar-plan-item-title">@item.Title</p>
+                                                <p class="familiar-plan-item-outcome">@item.RequestedOutcome</p>
+                                                <p class="familiar-plan-item-meta">
+                                                    @if (item.Role is { } role)
+                                                    {
+                                                        <span class="familiar-plan-role">starts a @role session</span>
+                                                    }
+                                                    else
+                                                    {
+                                                        <span class="familiar-plan-role is-quiet">records the work, starts nothing</span>
+                                                    }
+
+                                                    @foreach (var evidence in item.Evidence)
+                                                    {
+                                                        <a class="familiar-citation" asp-page="/Demiplane" asp-route-id="@evidence.ProjectId"
+                                                           title="@evidence.Kind — @evidence.Title">@evidence.Kind.ToString().ToLowerInvariant(): @evidence.Title</a>
+                                                    }
+                                                </p>
+                                            </li>
+                                        }
+                                    </ol>
+
+                                    @* Stated before there is anything to press. The disclosure is what makes
+                                       an approval an act of reading rather than of trust, so it is written
+                                       and tested now rather than added beside the button later. *@
+                                    <p class="familiar-plan-consequence">
+                                        Approving this would create @plan.Included.Count task(s) in @plan.ProjectName@(plan.FirstSessionItem is { } first
+                                            ? $" and start one {first.Role} session, on “{first.Title}”." : " and start no sessions.")
+                                        Nothing has been created yet.
+                                    </p>
+
+                                    <p class="familiar-plan-note">
+                                        Approving a plan in the conversation is not built yet. This is a record of what was
+                                        proposed.
+                                    </p>
+                                </section>
+                            }
+
                             <p role="status" data-pending hidden="@(!(turn.IsInFlight && turn.Output.Length == 0))">
                                 Working on this. It is being generated on the server, so you can close
                                 this page — the reply will be here when you come back.
@@ -174,7 +230,13 @@ else
                 One reply at a time — the Familiar answers from what is recorded, and cannot change anything.
             </p>
 
-            <button type="submit" class="familiar-compose-send">Send</button>
+            @* Two buttons, one form. "Plan this" is a different request, not a different page: the
+               conversation stays the control surface, and the person declares which they want rather
+               than the server guessing it from their words. *@
+            <div class="familiar-compose-actions">
+                <button type="submit" class="familiar-compose-send" name="RequestPlan" value="false">Send</button>
+                <button type="submit" class="familiar-compose-plan" name="RequestPlan" value="true">Plan this</button>
+            </div>
         </form>
     </section>
 }

@@ -114,6 +114,7 @@ public sealed class FamiliarChatService(
         Guid? chatId,
         string message,
         Guid? focusProjectId = null,
+        bool requestPlan = false,
         CancellationToken cancellationToken = default)
     {
         var trimmed = (message ?? string.Empty).Trim();
@@ -133,7 +134,7 @@ public sealed class FamiliarChatService(
 
         try
         {
-            appended = await AppendTurnAsync(chatId, trimmed, focusProjectId, cancellationToken);
+            appended = await AppendTurnAsync(chatId, trimmed, focusProjectId, requestPlan, cancellationToken);
         }
         catch (Exception exception) when (IsUniqueConstraintViolation(exception))
         {
@@ -189,6 +190,7 @@ public sealed class FamiliarChatService(
         Guid? chatId,
         string message,
         Guid? focusProjectId,
+        bool requestPlan,
         CancellationToken cancellationToken)
     {
         var nowUtc = timeProvider.GetUtcNow().UtcDateTime;
@@ -261,6 +263,7 @@ public sealed class FamiliarChatService(
             State = FamiliarChatTurnState.Pending,
             UserText = message,
             FocusProjectIdAtTime = chat.FocusProjectId,
+            RequestedPlan = requestPlan,
             Output = string.Empty,
             CreatedUtc = nowUtc
         };
@@ -302,8 +305,16 @@ public sealed class FamiliarChatService(
             row => row.Id,
             row => FamiliarChatCitations.ParseEvidence(row.EvidenceEntryIds));
 
+        var plans = await ReadPlansAsync(rows.Select(row => row.Id).ToList(), cancellationToken);
+
+        // One citation lookup for the whole page, covering both what the replies cited and what the
+        // plan items cited, so a transcript of twenty turns is still two queries rather than forty.
         var resolved = await ResolveCitationsAsync(
-            evidence.Values.SelectMany(ids => ids).Distinct().ToList(),
+            evidence.Values
+                .SelectMany(ids => ids)
+                .Concat(plans.Values.SelectMany(plan => plan.Items).SelectMany(item => item.Evidence))
+                .Distinct()
+                .ToList(),
             cancellationToken);
 
         return rows
@@ -321,9 +332,117 @@ public sealed class FamiliarChatService(
                 evidence[row.Id]
                     .Where(resolved.ContainsKey)
                     .Select(id => resolved[id])
-                    .ToList()))
+                    .ToList(),
+                plans.TryGetValue(row.Id, out var plan) ? Compose(plan, resolved) : null))
             .ToList();
     }
+
+    /// <summary>A plan as stored, before its evidence ids are resolved into something displayable.</summary>
+    private sealed record PlanRow(
+        Guid PlanId,
+        Guid TurnId,
+        Guid ProjectId,
+        string ProjectName,
+        FamiliarPlanStatus Status,
+        string Summary,
+        DateTime CreatedUtc,
+        IReadOnlyList<PlanItemRow> Items);
+
+    private sealed record PlanItemRow(
+        Guid ItemId,
+        int Position,
+        string Title,
+        string RequestedOutcome,
+        AgentSessionRole? Role,
+        bool IsIncluded,
+        IReadOnlyList<Guid> Evidence);
+
+    /// <summary>
+    /// The plans drafted by any of these turns, keyed by turn.
+    ///
+    /// Every status, not only Pending: a decided plan stays in the transcript where it was proposed,
+    /// because a conversation that quietly dropped what was approved last week would be a worse record
+    /// than no record.
+    /// </summary>
+    private async Task<Dictionary<Guid, PlanRow>> ReadPlansAsync(
+        IReadOnlyCollection<Guid> turnIds,
+        CancellationToken cancellationToken)
+    {
+        if (turnIds.Count == 0)
+        {
+            return [];
+        }
+
+        var plans = await dbContext.FamiliarPlanProposals
+            .AsNoTracking()
+            .Where(plan => turnIds.Contains(plan.TurnId))
+            .Select(plan => new
+            {
+                plan.Id,
+                plan.TurnId,
+                plan.ProjectId,
+                ProjectName = plan.Project.Name,
+                plan.Status,
+                plan.Summary,
+                plan.CreatedUtc,
+                Items = plan.Items
+                    .OrderBy(item => item.Position)
+                    .Select(item => new
+                    {
+                        item.Id,
+                        item.Position,
+                        item.Title,
+                        item.RequestedOutcome,
+                        item.Role,
+                        item.IsIncluded,
+                        item.EvidenceEntryIds
+                    })
+                    .ToList()
+            })
+            .ToListAsync(cancellationToken);
+
+        return plans.ToDictionary(
+            plan => plan.TurnId,
+            plan => new PlanRow(
+                plan.Id,
+                plan.TurnId,
+                plan.ProjectId,
+                plan.ProjectName,
+                plan.Status,
+                plan.Summary,
+                plan.CreatedUtc,
+                plan.Items
+                    .Select(item => new PlanItemRow(
+                        item.Id,
+                        item.Position,
+                        item.Title,
+                        item.RequestedOutcome,
+                        item.Role,
+                        item.IsIncluded,
+                        FamiliarChatCitations.ParseEvidence(item.EvidenceEntryIds)))
+                    .ToList()));
+    }
+
+    private static FamiliarPlanView Compose(PlanRow plan, Dictionary<Guid, FamiliarChatCitationView> resolved) =>
+        new(plan.PlanId,
+            plan.TurnId,
+            plan.ProjectId,
+            plan.ProjectName,
+            plan.Status,
+            plan.Summary,
+            plan.Items
+                .Select(item => new FamiliarPlanItemView(
+                    item.ItemId,
+                    item.Position,
+                    item.Title,
+                    item.RequestedOutcome,
+                    item.Role,
+                    // Same read-time sensitivity filter the prose citations get: an entry withheld
+                    // today stops being shown as an item's source, without the item changing.
+                    item.Evidence.Where(resolved.ContainsKey).Select(id => resolved[id]).ToList(),
+                    item.IsIncluded))
+                .ToList(),
+            plan.CreatedUtc);
 
     /// <summary>
     /// Turns offered ids into something displayable, re-applying the sensitivity filter as it goes.

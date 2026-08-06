@@ -6,12 +6,17 @@ namespace FindFamiliar.Server.Services.Familiar.Chat;
 /// Deliberately not the entity. A generator reads no rows and writes none: the host owns the turn's
 /// lifecycle, so a generator cannot leave a turn in a state nothing will finish.
 /// </summary>
+/// <param name="RequestedPlan">
+/// True when the person asked for a plan. The generator answers as usual and then drafts one, so the
+/// conversational reply is never held back waiting for the structured pass.
+/// </param>
 public sealed record FamiliarChatGenerationRequest(
     Guid ChatId,
     Guid TurnId,
     int Sequence,
     string UserText,
-    Guid? FocusProjectId);
+    Guid? FocusProjectId,
+    bool RequestedPlan = false);
 
 /// <summary>
 /// Where output goes as it is produced.

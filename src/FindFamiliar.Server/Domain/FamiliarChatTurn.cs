@@ -134,6 +134,16 @@ public sealed class FamiliarChatTurn
     /// </summary>
     public string? EvidenceEntryIds { get; set; }
 
+    /// <summary>
+    /// True when the person asked for a plan rather than an answer.
+    ///
+    /// Declared by the human, never inferred from their words. Guessing intent from phrasing would
+    /// mean a question that happened to contain "plan" sometimes drafted work and sometimes did not,
+    /// with no way for a person to tell which they were about to get — and the one turn that costs a
+    /// second model call would be the one nobody chose to pay for.
+    /// </summary>
+    public bool RequestedPlan { get; set; }
+
     public DateTime CreatedUtc { get; set; }
 
     /// <summary>When a generator took the turn. Null while Pending.</summary>

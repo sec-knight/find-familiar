@@ -161,7 +161,8 @@ public sealed class FamiliarChatGenerationHost(
             turn.Id,
             turn.Sequence,
             turn.UserText,
-            turn.FocusProjectIdAtTime);
+            turn.FocusProjectIdAtTime,
+            turn.RequestedPlan);
 
         var sink = new FamiliarChatTurnOutputSink(dbContext, turn, timeProvider);
 

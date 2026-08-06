@@ -39,7 +39,7 @@ public sealed class FamiliarChatsModel(IFamiliarChatService chats) : PageModel
     /// </summary>
     public async Task<IActionResult> OnPostStartAsync(CancellationToken cancellationToken)
     {
-        var result = await chats.SendAsync(null, Message ?? string.Empty, null, cancellationToken);
+        var result = await chats.SendAsync(null, Message ?? string.Empty, null, false, cancellationToken);
 
         switch (result.Status)
         {

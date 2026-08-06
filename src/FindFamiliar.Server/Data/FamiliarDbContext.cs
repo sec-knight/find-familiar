@@ -35,6 +35,10 @@ public sealed class FamiliarDbContext(DbContextOptions<FamiliarDbContext> option
 
     public DbSet<FamiliarChatTurn> FamiliarChatTurns => Set<FamiliarChatTurn>();
 
+    public DbSet<FamiliarPlanProposal> FamiliarPlanProposals => Set<FamiliarPlanProposal>();
+
+    public DbSet<FamiliarPlanItem> FamiliarPlanItems => Set<FamiliarPlanItem>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.Entity<FamiliarProject>(entity =>
@@ -424,6 +428,74 @@ public sealed class FamiliarDbContext(DbContextOptions<FamiliarDbContext> option
             // FocusProjectIdAtTime carries no foreign key on purpose. It records what the focus was
             // when the turn was accepted; deleting that project must not rewrite the record of a
             // conversation that already happened.
+        });
+
+        modelBuilder.Entity<FamiliarPlanProposal>(entity =>
+        {
+            entity.ToTable("FamiliarPlanProposals");
+            entity.HasKey(plan => plan.Id);
+            entity.Property(plan => plan.Status).HasConversion<string>().HasMaxLength(32);
+            entity.Property(plan => plan.Summary)
+                .HasMaxLength(FamiliarPlanProposal.MaxSummaryLength)
+                .IsRequired();
+            entity.Ignore(plan => plan.IsPending);
+
+            entity.HasOne(plan => plan.Chat)
+                .WithMany()
+                .HasForeignKey(plan => plan.ChatId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne(plan => plan.Turn)
+                .WithMany()
+                .HasForeignKey(plan => plan.TurnId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            // Restrict, not Cascade: deleting a project must not quietly remove the record of what was
+            // proposed for it. The delete fails loudly instead, which is the honest outcome.
+            entity.HasOne(plan => plan.Project)
+                .WithMany()
+                .HasForeignKey(plan => plan.ProjectId)
+                .OnDelete(DeleteBehavior.Restrict);
+
+            // At most one undecided plan per conversation. Same shape and rationale as
+            // IX_FamiliarActionProposals_ConversationId_Pending and IX_FamiliarChatTurns_ChatId_InFlight:
+            // contenders race for one row, a human decides once, and a half-approved plan cannot exist.
+            //
+            // The filter matches the stored TEXT because Status uses HasConversion<string>() above. If
+            // that conversion is ever removed the filter silently stops matching and the invariant
+            // silently disappears — FamiliarPlanPendingUniqueIndexTests goes red instead.
+            entity.HasIndex(plan => plan.ChatId)
+                .IsUnique()
+                .HasFilter("\"Status\" = 'Pending'")
+                .HasDatabaseName("IX_FamiliarPlanProposals_ChatId_Pending");
+        });
+
+        modelBuilder.Entity<FamiliarPlanItem>(entity =>
+        {
+            entity.ToTable("FamiliarPlanItems");
+            entity.HasKey(item => item.Id);
+            entity.Property(item => item.Title).HasMaxLength(FamiliarPlanItem.MaxTitleLength).IsRequired();
+            entity.Property(item => item.RequestedOutcome)
+                .HasMaxLength(FamiliarPlanItem.MaxRequestedOutcomeLength)
+                .IsRequired();
+            entity.Property(item => item.Role).HasConversion<string>().HasMaxLength(32);
+            entity.Property(item => item.EvidenceEntryIds).HasMaxLength(FamiliarPlanItem.MaxEvidenceLength);
+
+            entity.HasOne(item => item.Plan)
+                .WithMany(plan => plan.Items)
+                .HasForeignKey(item => item.PlanId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            // Stable display order, and unique so two items cannot occupy the same position and make
+            // the plan read differently on two devices.
+            entity.HasIndex(item => new { item.PlanId, item.Position }).IsUnique();
+
+            // One created task belongs to at most one item, so a replayed approval cannot let two
+            // items claim the same task. Filtered, because every unapproved item holds NULL.
+            entity.HasIndex(item => item.CreatedTaskId)
+                .IsUnique()
+                .HasFilter("\"CreatedTaskId\" IS NOT NULL")
+                .HasDatabaseName("IX_FamiliarPlanItems_CreatedTaskId");
         });
 
         modelBuilder.Entity<ContextEntry>(entity =>

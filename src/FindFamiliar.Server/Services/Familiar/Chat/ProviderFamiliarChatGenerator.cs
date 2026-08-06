@@ -1,6 +1,7 @@
 using FindFamiliar.Server.Data;
 using FindFamiliar.Server.Domain;
 using FindFamiliar.Server.Services.Familiar.Chat.Brief;
+using FindFamiliar.Server.Services.Familiar.Chat.Planning;
 using FindFamiliar.Server.Services.Familiar.Chat.Providers;
 using FindFamiliar.Server.Services.Familiar.Chat.Retrieval;
 using Microsoft.EntityFrameworkCore;
@@ -29,7 +30,8 @@ public sealed class ProviderFamiliarChatGenerator(
     FamiliarDbContext dbContext,
     IFamiliarChatProvider provider,
     IFamiliarStandingBriefService briefs,
-    IFamiliarContextRetrievalService retrieval) : IFamiliarChatGenerator
+    IFamiliarContextRetrievalService retrieval,
+    IFamiliarPlanDraftingService planning) : IFamiliarChatGenerator
 {
     /// <summary>
     /// Prior exchanges sent back with a new message. A count, not a size — Sprint 12 caps working
@@ -70,6 +72,11 @@ public sealed class ProviderFamiliarChatGenerator(
             FamiliarRetrievalWriter.Write(found));
 
         var emitted = 0;
+
+        // Kept only when a plan was asked for. The drafting pass needs the reply as context, and
+        // holding a second copy of every ordinary reply in memory would buy nothing.
+        var reply = request.RequestedPlan ? new System.Text.StringBuilder() : null;
+
         var metadata = new FamiliarChatGenerationMetadata(provider.Name, provider.Model);
         FamiliarChatStreamEvent.Finished? finished = null;
 
@@ -81,6 +88,7 @@ public sealed class ProviderFamiliarChatGenerator(
                     // Straight into the persisted turn. Nobody has to be listening for this to be
                     // kept, which is the property the whole lane is built around.
                     await sink.AppendAsync(delta.Text, cancellationToken);
+                    reply?.Append(delta.Text);
                     emitted += delta.Text.Length;
                     break;
 
@@ -118,6 +126,24 @@ public sealed class ProviderFamiliarChatGenerator(
             // a silent bubble on the page and call it an answer.
             var note = FamiliarChatFailureWording.For(FamiliarChatProviderStatus.Completed);
             return FamiliarChatGenerationOutcome.Failed(note.Code, note.Sentence, metadata);
+        }
+
+        if (request.RequestedPlan)
+        {
+            // After the reply is complete and durable, never before. A structured second pass must not
+            // delay a word of what the person is already reading, and a plan that fails to draft must
+            // not retract an answer that succeeded.
+            await planning.DraftAsync(
+                new FamiliarPlanDraftRequest(
+                    request.ChatId,
+                    request.TurnId,
+                    request.FocusProjectId,
+                    request.UserText,
+                    reply!.ToString(),
+                    prompt.StandingBrief,
+                    prompt.RecordedContext,
+                    found.Entries.Select(entry => entry.EntryId).ToList()),
+                cancellationToken);
         }
 
         return FamiliarChatGenerationOutcome.Answered(metadata);

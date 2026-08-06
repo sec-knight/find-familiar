@@ -2,6 +2,7 @@ using FindFamiliar.Server.Data;
 using FindFamiliar.Server.Domain;
 using FindFamiliar.Server.Services.Familiar.Chat;
 using FindFamiliar.Server.Services.Familiar.Chat.Brief;
+using FindFamiliar.Server.Services.Familiar.Chat.Planning;
 using FindFamiliar.Server.Services.Familiar.Chat.Providers;
 using FindFamiliar.Server.Services.Familiar.Chat.Retrieval;
 using FindFamiliar.Server.Tests.Infrastructure;
@@ -374,11 +375,13 @@ public sealed class ProviderFamiliarChatGeneratorTests
         FamiliarDbContext dbContext,
         IFamiliarChatProvider provider,
         IFamiliarStandingBriefService? briefs = null,
-        IFamiliarContextRetrievalService? retrieval = null) =>
+        IFamiliarContextRetrievalService? retrieval = null,
+        IFamiliarPlanDraftingService? planning = null) =>
         new(dbContext,
             provider,
             briefs ?? new EmptyStandingBriefService(),
-            retrieval ?? new FamiliarContextRetrievalService(dbContext));
+            retrieval ?? new FamiliarContextRetrievalService(dbContext),
+            planning ?? new RecordingPlanDraftingService());
 
     /// <summary>
     /// A brief with nothing in it, so these tests stay about the generator rather than about what the
@@ -465,6 +468,21 @@ public sealed class ProviderFamiliarChatGeneratorTests
             }
 
             Evidence.AddRange(entryIds);
+            return Task.CompletedTask;
+        }
+    }
+
+    /// <summary>
+    /// Records what drafting was asked to do without doing it. These tests are about the generator;
+    /// the drafting service's own behaviour is asserted in FamiliarPlanDraftingTests.
+    /// </summary>
+    private sealed class RecordingPlanDraftingService : IFamiliarPlanDraftingService
+    {
+        public List<FamiliarPlanDraftRequest> Requests { get; } = [];
+
+        public Task DraftAsync(FamiliarPlanDraftRequest request, CancellationToken cancellationToken = default)
+        {
+            Requests.Add(request);
             return Task.CompletedTask;
         }
     }

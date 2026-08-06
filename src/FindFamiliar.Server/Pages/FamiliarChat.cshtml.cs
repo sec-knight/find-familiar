@@ -59,9 +59,20 @@ public sealed class FamiliarChatModel(IFamiliarChatService chats) : PageModel
         return Chat is not null;
     }
 
+    /// <summary>
+    /// True when the person pressed "Plan this" rather than "Send".
+    ///
+    /// Two buttons on one form rather than intent guessed from the words. A question containing the
+    /// word "plan" must not sometimes draft work and sometimes not, with no way to tell in advance
+    /// which one is about to happen — and the turn that costs a second model call should be the one
+    /// somebody chose to pay for.
+    /// </summary>
+    [BindProperty]
+    public bool RequestPlan { get; set; }
+
     public async Task<IActionResult> OnPostSendAsync(Guid chatId, CancellationToken cancellationToken)
     {
-        var result = await chats.SendAsync(chatId, Message ?? string.Empty, null, cancellationToken);
+        var result = await chats.SendAsync(chatId, Message ?? string.Empty, null, RequestPlan, cancellationToken);
 
         switch (result.Status)
         {

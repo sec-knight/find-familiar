@@ -1014,3 +1014,106 @@ h2 {
     overflow-x: auto;
   }
 }
+
+/* A drafted plan, inline in the transcript at the point it was proposed. Bordered rather than
+   coloured: it is a proposal to read, not a state to react to, and an alarming card would push
+   towards approving it to make it go away. */
+.familiar-plan {
+  margin: 0.75rem 0 0;
+  padding: 1rem;
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--accent);
+  border-radius: 0.75rem;
+  background: var(--surface);
+}
+
+.familiar-plan-meta {
+  margin: 0 0 0.5rem;
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+}
+
+.familiar-plan-summary {
+  margin: 0 0 0.75rem;
+}
+
+.familiar-plan-items {
+  margin: 0 0 0.75rem;
+  padding-left: 1.25rem;
+  display: grid;
+  gap: 0.75rem;
+}
+
+.familiar-plan-item-title {
+  margin: 0;
+  font-weight: 650;
+}
+
+.familiar-plan-item-outcome,
+.familiar-plan-item-meta {
+  margin: 0.25rem 0 0;
+  color: var(--text-secondary);
+  font-size: 0.9375rem;
+}
+
+.familiar-plan-item-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.375rem;
+}
+
+/* An item that would start a session says so plainly, and is the only part of a plan that carries
+   weight before approval. An item that starts nothing is deliberately quieter. */
+.familiar-plan-role {
+  padding: 0.125rem 0.5rem;
+  border-radius: 999px;
+  background: var(--warning-background);
+  color: var(--warning);
+  font-size: 0.8125rem;
+  font-weight: 650;
+}
+
+.familiar-plan-role.is-quiet {
+  background: var(--surface-muted);
+  color: var(--text-secondary);
+  font-weight: 400;
+}
+
+/* What approving would do, stated before there is anything to press. */
+.familiar-plan-consequence {
+  margin: 0;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--border);
+  font-size: 0.9375rem;
+}
+
+.familiar-plan-note {
+  margin: 0.5rem 0 0;
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+}
+
+.familiar-compose-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+/* Secondary to Send, because it is the more consequential of the two and should not be the one a
+   thumb finds by default. */
+.familiar-compose-plan {
+  padding: 0.625rem 1rem;
+  border: 1px solid var(--accent);
+  border-radius: 0.5rem;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.familiar-compose-plan:hover,
+.familiar-compose-plan:focus-visible {
+  background: var(--surface-muted);
+}

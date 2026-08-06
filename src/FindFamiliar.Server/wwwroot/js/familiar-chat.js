@@ -83,6 +83,8 @@
         const failed = node.querySelector("[data-failed]");
         failed.hidden = turn.state !== "Failed";
 
+        renderPlan(node, turn.plan);
+
         if (!existing) {
             transcript.appendChild(node);
         }
@@ -147,6 +149,92 @@
         link.title = citation.kind + " — " + citation.title;
         link.textContent = String(citation.kind).toLowerCase() + ": " + citation.title;
         return link;
+    }
+
+    // The same card the Razor page renders, built the same way: elements for structure, textContent
+    // for every value. A plan arriving over the stream and one that came with a page render have to
+    // be the same thing on screen, or a person who reloads sees a different proposal than the one
+    // they were reading.
+    function renderPlan(node, plan) {
+        const reply = node.querySelector("[data-reply]");
+        const existing = reply.querySelector("[data-plan]");
+
+        if (!plan) {
+            if (existing) {
+                existing.remove();
+            }
+
+            return;
+        }
+
+        const section = existing || document.createElement("section");
+        section.className = "familiar-plan";
+        section.dataset.plan = "";
+        section.setAttribute("aria-label", "Drafted plan");
+        section.textContent = "";
+
+        section.appendChild(
+            line("p", "familiar-plan-meta", "Drafted plan · " + plan.projectName + " · " + String(plan.status).toLowerCase()));
+        section.appendChild(line("p", "familiar-plan-summary", plan.summary));
+
+        const list = document.createElement("ol");
+        list.className = "familiar-plan-items";
+
+        (plan.items || []).forEach(function (item) {
+            const entry = document.createElement("li");
+            entry.className = "familiar-plan-item";
+            entry.appendChild(line("p", "familiar-plan-item-title", item.title));
+            entry.appendChild(line("p", "familiar-plan-item-outcome", item.requestedOutcome));
+
+            const meta = document.createElement("p");
+            meta.className = "familiar-plan-item-meta";
+            meta.appendChild(item.role
+                ? line("span", "familiar-plan-role", "starts a " + item.role + " session")
+                : line("span", "familiar-plan-role is-quiet", "records the work, starts nothing"));
+
+            (item.evidence || []).forEach(function (citation) {
+                meta.appendChild(chip(citation));
+            });
+
+            entry.appendChild(meta);
+            list.appendChild(entry);
+        });
+
+        section.appendChild(list);
+
+        const included = (plan.items || []).filter(function (item) {
+            return item.isIncluded;
+        });
+        const firstSession = included.filter(function (item) {
+            return item.role;
+        })[0];
+
+        section.appendChild(line(
+            "p",
+            "familiar-plan-consequence",
+            "Approving this would create " + included.length + " task(s) in " + plan.projectName
+            + (firstSession
+                ? " and start one " + firstSession.role + " session, on “" + firstSession.title + "”."
+                : " and start no sessions.")
+            + " Nothing has been created yet."));
+
+        section.appendChild(line(
+            "p",
+            "familiar-plan-note",
+            "Approving a plan in the conversation is not built yet. This is a record of what was proposed."));
+
+        if (!existing) {
+            // Before the waiting note, which is where the server renders it. Appending would put the
+            // plan after it and give the two renderings a different DOM order.
+            reply.insertBefore(section, reply.querySelector("[data-pending]"));
+        }
+    }
+
+    function line(tag, className, text) {
+        const node = document.createElement(tag);
+        node.className = className;
+        node.textContent = text || "";
+        return node;
     }
 
     function stateCss(state) {

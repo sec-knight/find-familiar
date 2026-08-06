@@ -32,9 +32,15 @@ public interface IFamiliarChatService
     /// Returns as soon as the turn is committed. The reply is not awaited and is not this call's
     /// business.
     /// </summary>
+    /// <param name="requestPlan">
+    /// True when the person asked for a plan rather than an answer. Declared, never inferred from
+    /// their words: a question that happened to contain "plan" must not sometimes draft work, and the
+    /// turn that costs a second model call should be one somebody chose to pay for.
+    /// </param>
     Task<FamiliarChatSendResult> SendAsync(
         Guid? chatId,
         string message,
         Guid? focusProjectId = null,
+        bool requestPlan = false,
         CancellationToken cancellationToken = default);
 }
