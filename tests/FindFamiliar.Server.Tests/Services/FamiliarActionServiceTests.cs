@@ -425,7 +425,7 @@ public sealed class FamiliarActionServiceTests
             Task.Run(() => NewService(first).ConfirmAsync(project.Id, request)),
             Task.Run(() => NewService(second).ConfirmAsync(project.Id, request)));
 
-        Assert.Single(outcomes.Where(o => o.Status == FamiliarActionStatusOutcome.Confirmed));
+        Assert.Single(outcomes, o => o.Status == FamiliarActionStatusOutcome.Confirmed);
 
         seed.ChangeTracker.Clear();
         Assert.Single(await seed.AgentSessions.AsNoTracking().Where(s => s.TaskId == task.Id).ToListAsync());

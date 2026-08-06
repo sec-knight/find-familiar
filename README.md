@@ -109,6 +109,9 @@ The server owns durable project state and human decisions. Workers own machine-l
 - [x] Database-enforced single-started-session invariant
 - [x] Demiplane v1 project command surface
 - [x] Reproducible clean-database rebuild and accepted baseline
+- [x] Conversational Familiar v0: project-grounded conversation, evidence-cited answers, and
+      human-confirmed actions
+- [x] Portable reasoning provider — local models and hosted endpoints behind one configuration
 
 ### In progress
 
@@ -118,12 +121,26 @@ The server owns durable project state and human decisions. Workers own machine-l
   - preserve the full chain in the Demiplane;
   - verify the experience on mobile.
 
-### Planned: conversational Familiar
+### Delivered: conversational Familiar (Sprint 11, ADR-0012)
 
-- [ ] Project-aware conversation grounded in durable Familiar state
-- [ ] Ask “What should we work on?” and receive an evidence-backed recommendation
-- [ ] Continue planning without re-explaining repository and sprint history
-- [ ] Route broader architectural questions to external frontier models while preserving project context
+- [x] Project-aware conversation grounded in durable Familiar state
+- [x] Evidence-backed answers that cite the tasks and sessions they rest on, and drop invented citations
+- [x] Continue planning without re-explaining repository and sprint history
+- [x] Provider-neutral: a local model or a hosted endpoint is a configuration change, not a code change
+- [x] The Familiar may propose, but only a human confirmation creates work
+
+### Planned: the Familiar as the way in
+
+The Familiar today reads one project. The purpose of this project is a single Familiar that owns
+context across every project and session, so that planning done in one place is not lost when
+implementation starts in another.
+
+- [ ] A system-wide snapshot: projects, workers, sessions in flight, and environment health
+- [ ] One conversation not scoped to a single project
+- [ ] Record a decision from the conversation itself — the Familiar can create work, but cannot yet
+      write down what a conversation concluded
+- [ ] Bring context in from outside: hand it a planning transcript and have it propose what is worth keeping
+- [ ] Reduce the human to the cases where the Familiar needs help or cannot act
 
 ### Planned: connected resource catalogue
 
