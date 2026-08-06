@@ -289,7 +289,9 @@ public sealed class FamiliarChatService(
                 turn.Output,
                 turn.FailureCode,
                 turn.CreatedUtc,
-                turn.CompletedUtc))
+                turn.CompletedUtc,
+                turn.ProviderName,
+                turn.ProviderModel))
             .ToListAsync(cancellationToken);
 
     private async Task<int?> ReadInFlightSequenceAsync(Guid? chatId, CancellationToken cancellationToken)

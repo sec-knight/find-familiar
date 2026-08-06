@@ -37,15 +37,44 @@ public interface IFamiliarChatOutputSink
 /// <c>FamiliarFailureWording</c> holds for the per-project conversation, restated here because it is
 /// the rule most easily lost while wiring a provider up.
 /// </summary>
+/// <summary>
+/// Who answered and what it cost. Operational metadata, recorded as attribution and never rendered as
+/// content — so a later reader of a conversation knows which model said what, and so a turn can be
+/// re-run against a different one and compared.
+/// </summary>
+public sealed record FamiliarChatGenerationMetadata(
+    string? ProviderName = null,
+    string? ProviderModel = null,
+    int? InputTokens = null,
+    int? OutputTokens = null);
+
+/// <summary>
+/// How a generation ended.
+///
+/// A failure carries this application's own sentence, never a provider's error text — the same rule
+/// <c>FamiliarFailureWording</c> holds for the per-project conversation, restated here because it is
+/// the rule most easily lost while wiring a provider up.
+///
+/// <see cref="Sentence"/> is written only where no output was produced. A generation that failed part
+/// way through has already appended its own note through the sink, so the partial reply a person read
+/// is never overwritten by an explanation of why it stopped.
+/// </summary>
 public sealed record FamiliarChatGenerationOutcome(
     bool Succeeded,
     string? FailureCode = null,
-    string? Sentence = null)
+    string? Sentence = null,
+    FamiliarChatGenerationMetadata? Metadata = null)
 {
     public static readonly FamiliarChatGenerationOutcome Completed = new(true);
 
-    public static FamiliarChatGenerationOutcome Failed(string failureCode, string sentence) =>
-        new(false, failureCode, sentence);
+    public static FamiliarChatGenerationOutcome Answered(FamiliarChatGenerationMetadata metadata) =>
+        new(true, Metadata: metadata);
+
+    public static FamiliarChatGenerationOutcome Failed(
+        string failureCode,
+        string? sentence,
+        FamiliarChatGenerationMetadata? metadata = null) =>
+        new(false, failureCode, sentence, metadata);
 }
 
 /// <summary>

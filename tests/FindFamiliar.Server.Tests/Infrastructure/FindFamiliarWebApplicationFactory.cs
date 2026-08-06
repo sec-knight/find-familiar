@@ -14,6 +14,19 @@ public sealed class FindFamiliarWebApplicationFactory : WebApplicationFactory<Pr
     private const string RunnerBridgeTokenVariable = "RunnerBridge__Token";
 
     /// <summary>
+    /// Blanked for every test run, so no test can ever reach a paid conversational endpoint.
+    ///
+    /// Not a precaution against a test that tries — none does — but against the ambient environment.
+    /// The talk lane is selected by configuration, and configuration comes partly from environment
+    /// variables, so a suite run from a shell that had sourced the deployment's EnvironmentFile would
+    /// otherwise inherit a real provider and a real key and spend real money on assertions. Blanking
+    /// it here means the answer does not depend on who ran the tests or from where.
+    /// </summary>
+    private const string ChatProviderVariable = "Familiar__Chat__Provider";
+
+    private const string ChatApiKeyVariable = "Familiar__Chat__ApiKeyVariable";
+
+    /// <summary>
     /// Obviously-fake configured runner bridge credential, used only by tests. Never a real
     /// secret; deliberately labeled so it cannot be mistaken for one.
     /// </summary>
@@ -22,6 +35,8 @@ public sealed class FindFamiliarWebApplicationFactory : WebApplicationFactory<Pr
     private readonly string? _previousDataDirectory;
     private readonly string? _previousConnectionString;
     private readonly string? _previousRunnerBridgeToken;
+    private readonly string? _previousChatProvider;
+    private readonly string? _previousChatApiKeyVariable;
 
     public string TempDirectory { get; }
 
@@ -41,12 +56,20 @@ public sealed class FindFamiliarWebApplicationFactory : WebApplicationFactory<Pr
         _previousDataDirectory = Environment.GetEnvironmentVariable(DataDirectoryVariable);
         _previousConnectionString = Environment.GetEnvironmentVariable(ConnectionStringVariable);
         _previousRunnerBridgeToken = Environment.GetEnvironmentVariable(RunnerBridgeTokenVariable);
+        _previousChatProvider = Environment.GetEnvironmentVariable(ChatProviderVariable);
+        _previousChatApiKeyVariable = Environment.GetEnvironmentVariable(ChatApiKeyVariable);
 
         Environment.SetEnvironmentVariable(DataDirectoryVariable, TempDirectory);
         Environment.SetEnvironmentVariable(
             ConnectionStringVariable,
             $"Data Source={Path.Combine(TempDirectory, "find-familiar-test.db")}");
         Environment.SetEnvironmentVariable(RunnerBridgeTokenVariable, RunnerBridgeTestToken);
+
+        // Both, not just the provider: IsConfigured() needs a selected provider *and* a resolvable
+        // key, so clearing either is sufficient — and clearing both means a future change to that
+        // rule cannot quietly re-open the door.
+        Environment.SetEnvironmentVariable(ChatProviderVariable, string.Empty);
+        Environment.SetEnvironmentVariable(ChatApiKeyVariable, string.Empty);
 
         // Force the host (and Program.cs's top-level statements, including SQLitePCL
         // provider selection and the real startup migration) to run now, before any
@@ -66,6 +89,8 @@ public sealed class FindFamiliarWebApplicationFactory : WebApplicationFactory<Pr
         Environment.SetEnvironmentVariable(DataDirectoryVariable, _previousDataDirectory);
         Environment.SetEnvironmentVariable(ConnectionStringVariable, _previousConnectionString);
         Environment.SetEnvironmentVariable(RunnerBridgeTokenVariable, _previousRunnerBridgeToken);
+        Environment.SetEnvironmentVariable(ChatProviderVariable, _previousChatProvider);
+        Environment.SetEnvironmentVariable(ChatApiKeyVariable, _previousChatApiKeyVariable);
 
         // base.Dispose above tears down the host (and with it the DbContext pool); the shared
         // helper then releases SQLite's pooled handles before deleting, so a Windows teardown

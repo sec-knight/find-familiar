@@ -33,6 +33,10 @@ public sealed class FamiliarChatTurn
 
     public const int MaxFailureCodeLength = 64;
 
+    public const int MaxProviderNameLength = 120;
+
+    public const int MaxProviderModelLength = 120;
+
     public Guid Id { get; set; }
 
     public Guid ChatId { get; set; }
@@ -67,6 +71,34 @@ public sealed class FamiliarChatTurn
     /// and paths have no route into this column because nothing composes it from them.
     /// </summary>
     public string? FailureCode { get; set; }
+
+    /// <summary>
+    /// The provider that produced this reply, and the model it actually used. Null while pending, and
+    /// null for a turn that failed before anything answered.
+    ///
+    /// The model is recorded as the endpoint resolved it, not as configuration asked for it: a proxy
+    /// may resolve an alias, and a transcript should say what really replied. Storing it is what makes
+    /// "AI providers are replaceable" testable — a turn can be re-run against another model and the
+    /// two compared.
+    /// </summary>
+    public string? ProviderName { get; set; }
+
+    public string? ProviderModel { get; set; }
+
+    /// <summary>
+    /// Token counts as the provider reported them. Operational metadata, never shown as content.
+    ///
+    /// Named Input/Output rather than Prompt/Completion on purpose. <c>FamiliarConversationModelTests</c>
+    /// scans every column in the model and in the migrated database for names suggesting forbidden
+    /// storage, and "Prompt" is one of the fragments it rejects. A count is not a prompt, so this is a
+    /// false positive — but the guard's bluntness is exactly its value, and carving an exception into it
+    /// is how a genuine <c>PromptText</c> column would later slip past. Renaming the count is the cheaper
+    /// side of that trade. The wire names stay <c>prompt_tokens</c> and <c>completion_tokens</c>, because
+    /// those belong to the provider's schema rather than to this one.
+    /// </summary>
+    public int? InputTokens { get; set; }
+
+    public int? OutputTokens { get; set; }
 
     public DateTime CreatedUtc { get; set; }
 

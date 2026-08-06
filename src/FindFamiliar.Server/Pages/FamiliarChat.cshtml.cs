@@ -37,8 +37,15 @@ public sealed class FamiliarChatModel(IFamiliarChatService chats) : PageModel
 
     public string? SendValidationMessage { get; private set; }
 
-    /// <summary>The highest sequence this render contains — what a client resumes from.</summary>
+    /// <summary>The highest sequence this render contains.</summary>
     public int Cursor => Chat?.LatestSequence ?? 0;
+
+    /// <summary>
+    /// What the client resumes from, which stops before a turn still arriving so the stream does not
+    /// skip a half-written reply. Computed by the view, not here, so the page and the stream cannot
+    /// disagree about it.
+    /// </summary>
+    public int ResumeCursor => Chat?.ResumeCursor ?? 0;
 
     /// <summary>True when a reply is being generated, on this device or any other.</summary>
     public bool HasTurnInFlight => Chat?.InFlightTurn is not null;

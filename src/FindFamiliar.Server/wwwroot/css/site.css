@@ -846,6 +846,39 @@ h2 {
   border-left: 4px solid var(--warning);
 }
 
+/* One exchange: what was asked, and what came back. The pair is the list item, so a turn updates in
+   place while it streams rather than being torn out and rebuilt under someone reading it. */
+.familiar-turn {
+  margin-bottom: 1.25rem;
+}
+
+.familiar-turn .familiar-message:last-child {
+  margin-bottom: 0;
+}
+
+/* On a phone the composer stays put and the transcript scrolls under it. Safe-area inset so the send
+   button is not behind the home indicator on an iPhone — the plan called this out as the least
+   architectural and most likely place this fails. */
+@media (max-width: 48rem) {
+  .familiar-conversation[data-familiar-chat] {
+    padding-bottom: 1rem;
+  }
+
+  .familiar-compose {
+    position: sticky;
+    bottom: 0;
+    z-index: 1;
+    padding-bottom: calc(0.75rem + env(safe-area-inset-bottom, 0px));
+    background: var(--surface);
+    border-top: 1px solid var(--border);
+  }
+
+  /* 16px or larger, or iOS Safari zooms the whole page on focus and leaves it zoomed. */
+  .familiar-compose-input {
+    font-size: 1rem;
+  }
+}
+
 /* A turn that has not finished. Marked so a reply still arriving is never mistaken for a complete
    one — the same reason a Degraded delivery is styled apart from a Delivered one. */
 .familiar-message.is-pending .conversation-block,

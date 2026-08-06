@@ -163,7 +163,7 @@ public sealed class FamiliarChatGenerationHost(
             turn.UserText,
             turn.FocusProjectIdAtTime);
 
-        var sink = new FamiliarChatTurnOutputSink(dbContext, turn);
+        var sink = new FamiliarChatTurnOutputSink(dbContext, turn, timeProvider);
 
         FamiliarChatGenerationOutcome outcome;
 
@@ -189,6 +189,18 @@ public sealed class FamiliarChatGenerationHost(
 
         try
         {
+            // Unconditionally, before the terminal state: the last characters of a reply must not be
+            // the ones the throttle left behind.
+            await sink.FlushAsync(cancellationToken);
+
+            if (outcome.Metadata is { } metadata)
+            {
+                turn.ProviderName = Truncate(metadata.ProviderName, FamiliarChatTurn.MaxProviderNameLength);
+                turn.ProviderModel = Truncate(metadata.ProviderModel, FamiliarChatTurn.MaxProviderModelLength);
+                turn.InputTokens = metadata.InputTokens;
+                turn.OutputTokens = metadata.OutputTokens;
+            }
+
             if (outcome.Succeeded)
             {
                 turn.State = FamiliarChatTurnState.Completed;
@@ -223,19 +235,43 @@ public sealed class FamiliarChatGenerationHost(
         value.Length <= FamiliarChatTurn.MaxOutputLength
             ? value
             : value[..FamiliarChatTurn.MaxOutputLength];
+
+    /// <summary>
+    /// Trims metadata to its column. A provider that returns an unexpectedly long model name must not
+    /// fail the write that records an otherwise good reply.
+    /// </summary>
+    private static string? Truncate(string? value, int maxLength) =>
+        value is null || value.Length <= maxLength ? value : value[..maxLength];
 }
 
 /// <summary>
-/// Accumulates a generator's output into the persisted turn.
+/// Accumulates a generator's output into the persisted turn, committing periodically rather than per
+/// fragment.
 ///
-/// Writes per fragment, which is honest and slow, and correct for slice 1 where a generator produces
-/// one. A streaming provider will need this throttled — a write per token would be one SQLite commit
-/// per token — and that belongs in slice 2 with the provider that makes it matter, not speculatively
-/// here.
+/// A streaming provider emits a fragment per token, and a commit per token would be thousands of
+/// SQLite writes for one reply — enough to make the database the bottleneck in a lane whose whole
+/// point is latency. So the in-memory turn is updated on every fragment and the transaction is
+/// committed on a bound: whichever of <see cref="FlushCharacters"/> or <see cref="FlushInterval"/>
+/// comes first.
+///
+/// The cost of that choice is bounded and stated: a process that dies mid-reply loses at most the
+/// text written since the last flush, and the next process's sweep marks the turn interrupted with
+/// the partial output that did land. Readers never see a torn write — they see a slightly older one.
 /// </summary>
-internal sealed class FamiliarChatTurnOutputSink(FamiliarDbContext dbContext, FamiliarChatTurn turn)
-    : IFamiliarChatOutputSink
+internal sealed class FamiliarChatTurnOutputSink(
+    FamiliarDbContext dbContext,
+    FamiliarChatTurn turn,
+    TimeProvider timeProvider) : IFamiliarChatOutputSink
 {
+    /// <summary>Roughly a sentence. Small enough that a reader sees text move, large enough to batch.</summary>
+    public const int FlushCharacters = 180;
+
+    /// <summary>So a slow stream still reaches the page promptly rather than waiting for volume.</summary>
+    public static readonly TimeSpan FlushInterval = TimeSpan.FromMilliseconds(200);
+
+    private long _lastFlushTimestamp = timeProvider.GetTimestamp();
+    private int _unflushedCharacters;
+
     public async Task AppendAsync(string fragment, CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrEmpty(fragment))
@@ -252,7 +288,31 @@ internal sealed class FamiliarChatTurnOutputSink(FamiliarDbContext dbContext, Fa
             return;
         }
 
-        turn.Output += fragment.Length <= remaining ? fragment : fragment[..remaining];
+        var accepted = fragment.Length <= remaining ? fragment : fragment[..remaining];
+        turn.Output += accepted;
+        _unflushedCharacters += accepted.Length;
+
+        if (_unflushedCharacters >= FlushCharacters
+            || timeProvider.GetElapsedTime(_lastFlushTimestamp) >= FlushInterval)
+        {
+            await FlushAsync(cancellationToken);
+        }
+    }
+
+    /// <summary>
+    /// Commits whatever is buffered. Called on the bounds above and unconditionally by the host
+    /// before it writes a terminal state, so the last few characters of a reply are never the ones
+    /// left behind.
+    /// </summary>
+    public async Task FlushAsync(CancellationToken cancellationToken = default)
+    {
+        if (_unflushedCharacters == 0)
+        {
+            return;
+        }
+
         await dbContext.SaveChangesAsync(cancellationToken);
+        _unflushedCharacters = 0;
+        _lastFlushTimestamp = timeProvider.GetTimestamp();
     }
 }

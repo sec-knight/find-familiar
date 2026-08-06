@@ -50,11 +50,25 @@ feature that stores conversation state server-side is used.
 
 ### Initial provider
 
-xAI Grok, model `grok-4.1-fast`, via the OpenAI-compatible endpoint.
+xAI Grok, via the OpenAI-compatible endpoint.
 
-- Rates at time of writing: $0.20 / $1M input, $0.50 / $1M output.
-- 2M context window, which allows slices 1-3 to proceed without a retrieval layer.
-- Estimated ~$0.003 per grounded turn at ~12k input / ~600 output.
+Model: `grok-4.20-0309-non-reasoning`, 1M context, which allows slices 1-3 to proceed
+without a retrieval layer.
+
+Non-reasoning deliberately. A reasoning model bills its thinking as completion tokens and
+delays the first visible one; both are the opposite of what a conversation wants, and the
+reasoning variant costs the same, so there is no trade being made.
+
+Cached input is priced ~6x below fresh input. That is what the stable-to-volatile prompt
+ordering in the sprint plan earns, and it turns a structural tidiness argument into a
+recurring cost saving.
+
+**`grok-4.1-fast`, this ADR's original choice, no longer exists.** It was retired between
+writing this and shipping slice 2, and the endpoint answers a request naming it with an
+error. That is not a footnote — it is the first prediction in this document to be tested,
+and the mechanism it argued for is what caught it: the model id was configuration, the
+failure surfaced as a classified error on the page with provider attribution recorded, and
+the fix was one line in an EnvironmentFile with no code change and no redeploy.
 
 ### Account posture
 
@@ -71,14 +85,24 @@ Provider, model, and account identity travel as one unit so a provider swap cann
 silently inherit the wrong credential:
 
 ```
-Familiar__Chat__Provider = xai
-Familiar__Chat__Model    = grok-4.1-fast
-Familiar__Chat__Team     = familiar-prod    # label only, for operator clarity
-XAI__ApiKey              = <secret, via EnvironmentFile, 0600, never in the repo>
+Familiar__Chat__Provider        = xai
+Familiar__Chat__BaseAddress     = https://api.x.ai/v1
+Familiar__Chat__Model           = grok-4.20-0309-non-reasoning
+Familiar__Chat__Team            = FindFamiliar-Prod   # label only, never sent
+Familiar__Chat__ApiKeyVariable  = XAI_API_KEY         # the NAME of the variable
+XAI_API_KEY                     = <secret, via EnvironmentFile, 0600, never in the repo>
 ```
 
-Model IDs are configuration, never compile-time constants. Provider model rosters
-churn; a retired model must surface as a visible error in the UI, not a dead stream.
+**The credential is `XAI_API_KEY`, not `XAI__ApiKey` as first written here.** A double
+underscore is ASP.NET's configuration separator, so that spelling would have bound the
+secret into `IConfiguration`, where a configuration dump can print it. Configuration holds
+the *name* of the environment variable; the value is read from the environment directly and
+never travels through configuration at all. This matches what `Familiar:Reasoning`
+already does, and the consistency is the point — one rule about secrets, not two.
+
+Model IDs are configuration, never compile-time constants. Provider model rosters churn; a
+retired model must surface as a visible error in the UI, not a dead stream. This was
+vindicated within days: see the note on `grok-4.1-fast` above.
 
 ## Consequences
 
@@ -95,6 +119,13 @@ churn; a retired model must surface as a visible error in the UI, not a dead str
 - Two provider seams to maintain rather than one.
 - The talk lane's tool-calling reliability is provider-dependent and not yet proven
   on the chosen model.
+- Status classification is coarser than hoped. xAI answers a rejected credential with
+  HTTP 400 rather than 401, so a bad key and a retired model land on the same status. The
+  response body would distinguish them and is deliberately never read, because error bodies
+  echo the request and can name a host, an account or part of a key. The wording therefore
+  names both causes and claims neither — an earlier version guessed the likelier one and
+  was wrong the first time it mattered, on a surface whose entire premise is not doing
+  that.
 
 ### Neutral
 

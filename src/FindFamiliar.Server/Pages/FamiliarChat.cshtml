@@ -6,13 +6,17 @@
 }
 
 @section Head {
-    @* Only while a reply is actually arriving, as the Demiplane refreshes only while work is
-       running. A page at rest is never re-requested, so a conversation somebody is reading does not
-       move under them. Slice 2 replaces this with a stream resumed from the cursor below. *@
+    @* The no-script fallback, and only while a reply is actually arriving. familiar-chat.js removes
+       this tag as soon as it runs, because a refresh would tear down a stream mid-sentence. A browser
+       with scripting disabled keeps it and still sees the reply arrive, just in whole-page steps. *@
     @if (Model.HasTurnInFlight)
     {
         <meta http-equiv="refresh" content="@FindFamiliar.Server.Pages.FamiliarChatModel.InFlightRefreshSeconds" />
     }
+}
+
+@section Scripts {
+    <script src="~/js/familiar-chat.js" asp-append-version="true"></script>
 }
 
 @if (TempData["StatusMessage"] is string statusMessage)
@@ -46,13 +50,21 @@ else
     </section>
 
     @* ----------------------------------------------------------------------------- Transcript *@
-    <section class="familiar-conversation" aria-labelledby="transcript-title">
+    @* data-cursor is the client's whole durable state: the sequence it has rendered through. Every
+       reconnection, wake-up and network handoff resumes from it, so a device four hours behind takes
+       the same path as one four seconds behind. *@
+    <section class="familiar-conversation" aria-labelledby="transcript-title"
+             data-familiar-chat data-chat-id="@chat.ChatId" data-cursor="@Model.ResumeCursor">
         <div class="section-heading">
             <div>
                 <p class="eyebrow">Conversation · through sequence @Model.Cursor</p>
                 <h2 id="transcript-title">What has been asked</h2>
             </div>
         </div>
+
+        @* Written only by the script, and only when the connection is not healthy. Silence means
+           connected: a permanent "live" badge would be a claim the page cannot keep. *@
+        <p role="status" class="familiar-note" data-stream-status hidden></p>
 
         @if (chat.Turns.Count == 0)
         {
@@ -62,46 +74,47 @@ else
         {
             @* Oldest first, in Sequence order as the service returned them — never by timestamp,
                which cannot order two turns written in the same tick. *@
-            <ol class="familiar-messages">
+            @* One list item per exchange, keyed by sequence, so the script updates a turn in place
+               rather than rebuilding a transcript somebody is reading. The server-rendered markup and
+               the script-built markup are the same shape on purpose: the page must look identical
+               whether it arrived by render or by stream. *@
+            <ol class="familiar-messages" data-transcript>
                 @foreach (var turn in chat.Turns)
                 {
-                    <li class="familiar-message is-human" data-sequence="@turn.Sequence">
-                        <p class="familiar-message-meta">
-                            <span class="familiar-message-author">You</span>
-                            <span> · <time datetime="@turn.CreatedUtc.ToString("O")">@turn.CreatedUtc.ToString("dd MMM yyyy, HH:mm") UTC</time></span>
-                        </p>
+                    <li class="familiar-turn" data-turn-sequence="@turn.Sequence">
+                        <div class="familiar-message is-human">
+                            <p class="familiar-message-meta">
+                                <span class="familiar-message-author">You</span>
+                                <span> · <time datetime="@turn.CreatedUtc.ToString("O")">@turn.CreatedUtc.ToString("dd MMM yyyy, HH:mm") UTC</time></span>
+                            </p>
 
-                        @* Encoded by Razor, and nothing here interprets it: no Html.Raw, no markdown
-                           rendering, no autolinking. Line breaks come from CSS white-space: pre-wrap
-                           on .conversation-block. *@
-                        <p class="conversation-block">@turn.UserText</p>
-                    </li>
+                            @* Encoded by Razor, and nothing here interprets it: no Html.Raw, no
+                               markdown rendering, no autolinking. The script uses textContent for the
+                               same reason. Line breaks come from CSS white-space: pre-wrap. *@
+                            <p class="conversation-block" data-user-text>@turn.UserText</p>
+                        </div>
 
-                    <li class="familiar-message @FindFamiliar.Server.Pages.FamiliarChatModel.StateCss(turn.State)"
-                        data-sequence="@turn.Sequence">
-                        <p class="familiar-message-meta">
-                            <span class="familiar-message-author">@FindFamiliar.Server.Pages.FamiliarChatModel.StateLabel(turn.State)</span>
-                            @if (turn.State == FamiliarChatTurnState.Failed)
-                            {
-                                <span> · <strong>Failed</strong></span>
-                            }
-                            @if (turn.CompletedUtc is { } completedUtc)
-                            {
-                                <span> · <time datetime="@completedUtc.ToString("O")">@completedUtc.ToString("HH:mm") UTC</time></span>
-                            }
-                        </p>
+                        <div class="familiar-message @FindFamiliar.Server.Pages.FamiliarChatModel.StateCss(turn.State)" data-reply>
+                            <p class="familiar-message-meta">
+                                <span class="familiar-message-author" data-reply-author>@FindFamiliar.Server.Pages.FamiliarChatModel.StateLabel(turn.State)</span>
+                                <span data-failed hidden="@(turn.State != FamiliarChatTurnState.Failed)"> · <strong>Failed</strong></span>
+                                @if (turn.ProviderName is { Length: > 0 } providerName)
+                                {
+                                    <span> · @providerName</span>
+                                    @if (turn.ProviderModel is { Length: > 0 } providerModel)
+                                    {
+                                        <span> (@providerModel)</span>
+                                    }
+                                }
+                            </p>
 
-                        @if (turn.Output.Length > 0)
-                        {
-                            <p class="conversation-block">@turn.Output</p>
-                        }
-                        else if (turn.IsInFlight)
-                        {
-                            <p role="status">
+                            <p class="conversation-block" data-output hidden="@(turn.Output.Length == 0)">@turn.Output</p>
+
+                            <p role="status" data-pending hidden="@(!(turn.IsInFlight && turn.Output.Length == 0))">
                                 Working on this. It is being generated on the server, so you can close
                                 this page — the reply will be here when you come back.
                             </p>
-                        }
+                        </div>
                     </li>
                 }
             </ol>

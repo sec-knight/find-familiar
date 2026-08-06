@@ -7,6 +7,7 @@ using FindFamiliar.Server.Services;
 using FindFamiliar.Server.Services.Demiplane;
 using FindFamiliar.Server.Services.Familiar;
 using FindFamiliar.Server.Services.Familiar.Chat;
+using FindFamiliar.Server.Services.Familiar.Chat.Providers;
 using FindFamiliar.Server.Services.Familiar.Reasoning;
 using FindFamiliar.Server.Services.Providers;
 using Microsoft.AspNetCore.DataProtection;
@@ -62,11 +63,58 @@ builder.Services.AddSingleton<FamiliarChatGenerationQueue>();
 builder.Services.AddScoped<IFamiliarChatService, FamiliarChatService>();
 builder.Services.AddHostedService<FamiliarChatGenerationHost>();
 
-// No conversational provider is registered, exactly as none is for reasoning: with nothing
-// configured the application starts, /Familiar renders, a conversation is durable, generation runs
-// end to end, and the one sentence that is true is what appears. Slice 2 selects a real one by
-// configuration, never by a code change.
-builder.Services.AddScoped<IFamiliarChatGenerator, UnconfiguredFamiliarChatGenerator>();
+builder.Services.Configure<FamiliarChatOptions>(
+    builder.Configuration.GetSection(FamiliarChatOptions.SectionName));
+
+// Which conversational provider answers, chosen by configuration and nothing else.
+//
+// The default is the honest one, exactly as it is for reasoning (ADR-0012) and for provider capacity
+// (ADR-0011): with nothing configured the application starts, /Familiar renders, a conversation is
+// durable, generation runs end to end, and the one sentence that is true is what appears. No
+// credential is required to run this application at all.
+//
+// Both the provider name *and* a present key are required. A configured provider with no key would
+// otherwise produce a stream that dies on every turn — a dead stream where an honest sentence
+// belongs.
+var chatOptions = builder.Configuration.GetSection(FamiliarChatOptions.SectionName).Get<FamiliarChatOptions>();
+
+if (chatOptions?.IsConfigured() == true)
+{
+    // A named client so the timeout, base address and credential are configured once, at startup,
+    // rather than per request. The key is read from the environment here and never from
+    // configuration, so it cannot be committed or printed by a configuration dump.
+    builder.Services.AddHttpClient<IFamiliarChatProvider, OpenAiCompatibleFamiliarChatProvider>(
+        (services, client) =>
+        {
+            var settings = services.GetRequiredService<IOptions<FamiliarChatOptions>>().Value;
+
+            // A trailing slash matters: without it the last path segment is replaced rather than
+            // appended, and "/v1" silently becomes "/chat/completions".
+            var baseAddress = settings.BaseAddress.EndsWith('/')
+                ? settings.BaseAddress
+                : settings.BaseAddress + "/";
+
+            client.BaseAddress = new Uri(baseAddress);
+
+            // Infinite, deliberately: HttpClient's own timeout would abort a *streamed* response that
+            // is arriving perfectly well but taking its time. The bound that matters is the linked
+            // token inside the provider, which distinguishes our timeout from the caller's
+            // cancellation. A timeout here could not.
+            client.Timeout = Timeout.InfiniteTimeSpan;
+
+            if (settings.ReadApiKey() is { } apiKey)
+            {
+                client.DefaultRequestHeaders.Authorization =
+                    new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", apiKey);
+            }
+        });
+
+    builder.Services.AddScoped<IFamiliarChatGenerator, ProviderFamiliarChatGenerator>();
+}
+else
+{
+    builder.Services.AddScoped<IFamiliarChatGenerator, UnconfiguredFamiliarChatGenerator>();
+}
 
 // The only bridge from a proposal to persisted work. Effects go through IWorkflowDispatchService,
 // so work confirmed from a conversation is indistinguishable from work created by hand.
@@ -215,6 +263,7 @@ app.MapGet("/tasks/{taskId:guid}/sessions/{sessionId:guid}/assignment.md", async
 });
 
 app.MapFamiliarChatEndpoints();
+app.MapFamiliarChatStreamEndpoint();
 
 app.MapRunnerEndpoints();
 
