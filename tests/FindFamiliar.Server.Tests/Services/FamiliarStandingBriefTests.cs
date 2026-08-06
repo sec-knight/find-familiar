@@ -199,6 +199,39 @@ public sealed class FamiliarStandingBriefTests
         Assert.Contains("4 more task(s) in this project are not listed", text, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// Open work survives the cap; finished work is what gets dropped.
+    ///
+    /// Found in use, not in design: recording a sprint's worth of completed tasks pushed the only
+    /// Ready task and the only Blocked task out of a capped list, so "what is the state of things?"
+    /// was answered entirely with work that was already done. Recency is a poor proxy for relevance
+    /// exactly when a burst of work has just landed — which is when the question gets asked.
+    /// </summary>
+    [Fact]
+    public async Task Unfinished_work_outranks_recently_finished_work()
+    {
+        using var database = new TemporarySqliteDatabase();
+        await using var dbContext = await database.CreateContextAsync();
+
+        var projectId = await SeedProjectAsync(dbContext, "Busy Project", "A purpose.");
+
+        // One thing still to do, buried under a pile of freshly-finished work.
+        await SeedTaskAsync(dbContext, projectId, "The one thing still open", TaskStatus.Ready);
+
+        for (var index = 0; index < FamiliarStandingBrief.MaxTasksPerProject + 3; index++)
+        {
+            await SeedTaskAsync(dbContext, projectId, $"Finished work {index}", TaskStatus.Completed);
+        }
+
+        var brief = await NewService(dbContext).GetBriefAsync();
+        var project = Assert.Single(brief.Projects);
+
+        Assert.Contains(project.Tasks, task => task.Title == "The one thing still open");
+
+        var text = FamiliarStandingBriefWriter.Write(brief);
+        Assert.Contains("The one thing still open", text, StringComparison.Ordinal);
+    }
+
     [Fact]
     public async Task The_brief_stays_within_its_character_bound()
     {
@@ -375,7 +408,11 @@ public sealed class FamiliarStandingBriefTests
         return project.Id;
     }
 
-    private static async Task SeedTaskAsync(FamiliarDbContext dbContext, Guid projectId, string title)
+    private static async Task SeedTaskAsync(
+        FamiliarDbContext dbContext,
+        Guid projectId,
+        string title,
+        TaskStatus status = TaskStatus.Ready)
     {
         dbContext.Tasks.Add(new FamiliarTask
         {
@@ -383,7 +420,7 @@ public sealed class FamiliarStandingBriefTests
             ProjectId = projectId,
             Title = title,
             RequestedOutcome = "Seeded for FamiliarStandingBriefTests.",
-            Status = TaskStatus.Ready,
+            Status = status,
             CreatedUtc = Now.UtcDateTime,
             UpdatedUtc = Now.UtcDateTime
         });

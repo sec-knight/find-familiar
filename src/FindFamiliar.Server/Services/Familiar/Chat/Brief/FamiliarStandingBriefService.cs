@@ -176,12 +176,19 @@ public sealed class FamiliarStandingBriefService(
     /// </summary>
     private static BriefProject Compose(DemiplaneProjection projection, DateTime? lastActivityUtc)
     {
-        // Most useful first: anything asking for a human, then anything running, then the rest by
-        // recency. A cap that kept the ten oldest untouched tasks would answer "what's blocked?" with
-        // the least relevant half of the project.
+        // Most useful first: anything asking for a human, then anything running, then anything still
+        // open, and only then finished work by recency.
+        //
+        // The "still open" rank is load-bearing and was learned the hard way. Without it, ordering
+        // fell through to recency, and a sprint's worth of freshly-completed tasks pushed the one
+        // Ready task and the one Blocked task out of a capped list — so "what is the state of things?"
+        // was answered with four things that were done and nothing that was outstanding. Recency is a
+        // poor proxy for relevance precisely when a burst of work has just landed, which is exactly
+        // when someone asks.
         var ordered = projection.Tasks
             .OrderByDescending(task => task.NeedsHumanAttention)
             .ThenByDescending(task => task.DisplayState == TaskDisplayState.Running)
+            .ThenByDescending(task => task.DisplayState is not (TaskDisplayState.Succeeded or TaskDisplayState.Failed))
             .ThenByDescending(task => task.UpdatedUtc)
             .ToList();
 
