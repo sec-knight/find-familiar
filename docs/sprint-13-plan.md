@@ -1,154 +1,168 @@
-# Sprint 13 — The Familiar Plans
+# Sprint 13 — The Familiar Runs the Work
 
-Baseline: `main` @ `0c20b82` (Sprint 12 slices 1–3 shipped, 894 tests at last full run)
+Baseline: `main` @ `5052759` (Sprint 12 slices 1–3 shipped, 894 tests at last full run)
 
 ## Goal
 
 One acceptance question:
 
-> Can I ask the Familiar what needs doing, work with it to shape the next sprint, approve the plan it
-> drafts, and watch that become real tasks — without typing any of them myself?
+> Can I ask the Familiar about a project, plan the next sprint with it, approve that plan **in the
+> conversation**, and have it create the tasks, run the sessions, and fold the results back into what
+> it knows — without me opening a task page?
 
-When that works, the Familiar can be used to build the rest of what it needs, and every sprint after
-this one is coordinated through the thing itself rather than around it.
+When that works, the Familiar can be used to build the rest of what it needs.
 
-## What Sprint 12 proved, and what it exposed
+## The correction this sprint is built on
 
-Sprint 12 ended with a Familiar that can hold a grounded conversation across devices and refuses to
-act. Using it for one afternoon produced this sprint's specification more accurately than design
-would have:
+An earlier draft of this plan had the human approving a plan on the Tasks page. That is backwards.
 
-- **It cannot read the reasoning it is meant to preserve.** The standing brief carries projects and
-  tasks. Context entries — including the eight Decision records describing why Sprint 12 is shaped
-  the way it is — are not in it. The system built to preserve context cannot read its own context.
-- **It cites ids nothing validates.** It emits raw task guids in prose. They happened to be correct.
-  Nothing checked them.
-- **It knows what should happen and cannot say so usefully.** Asked to close a completed task, it
-  correctly refused and told the human to go do it by hand. That is right for a read-only lane and is
-  a dead end for a person who wanted the work done.
-- **Caps bite before retrieval does.** Eleven tasks against a cap of eight dropped the outstanding
-  work until ranking was fixed. Ranking is a patch; retrieval is the fix.
+**The conversation is the control surface.** Every decision a person needs to make — approve a plan,
+approve a handoff, accept a result, unblock something — is made in conversation with the Familiar.
+The Projects, Tasks and Work pages remain, and become what they should always have been: places to
+inspect and audit what happened, not the place work is driven from.
+
+The Familiar owns the mechanics. Creating tasks, choosing roles, starting Planner, Implementer and
+Reviewer sessions, giving each the context it needs, and harvesting what comes back — that is its job,
+not the operator's.
+
+## What already exists, and what is actually missing
+
+Most of the machinery is built. The gap is narrower than it looks:
+
+| Capability | State |
+| --- | --- |
+| Tasks, sessions, roles, handoffs | Built (Sprints 9–11) |
+| Sessions receive assembled context | Built — assignment packets, ADR-0004 |
+| Session results become context entries | Built — `SessionResultCaptureService`, ADR-0003 |
+| Human-gated role handoffs | Built — ADR-0010, but approved on a task page |
+| Proposals rendered inline in chat, confirmed there | Built for the per-project Familiar — ADR-0012 |
+| Provider-neutral execution | Built — Runner, Claude Code adapter |
+| **Familiar can read context entries and decisions** | **Missing** |
+| **Talk lane can propose anything at all** | **Missing** |
+| **Approval and handoff decisions in conversation** | **Missing** |
+
+So this sprint is mostly connecting things that exist, plus the one genuinely absent piece: the
+Familiar cannot read the reasoning it exists to preserve.
 
 ## Non-goals
 
-Explicitly deferred, and not to be pulled forward opportunistically:
-
-- **The Familiar still never writes to project state.** Not once, not for a small change, not because
-  a plan was approved. Every effect goes through a human confirmation and `FamiliarActionService`
-  re-checking its gates inside the executing transaction. Sprint 13 approaches this invariant on
-  purpose; it does not weaken it.
-- **Approval creates tasks. It does not start work.** Starting a session spawns a real process
-  against a real repository. That stays a separate, per-task confirmation using the machinery that
-  already exists.
-- No repository awareness — commits, diffs, build state. It is the Familiar's largest real gap and it
-  is a sprint of its own.
-- No plan spanning multiple projects. One plan, one project.
-- No model-authored edits to an approved plan.
-- No new provider seams; no second `IFamiliarChatProvider` implementation.
+- No autonomy. The Familiar proposes; a human approves; nothing runs unapproved. It is not given a
+  standing mandate to create work.
+- The talk lane still never writes to project state directly. Effects go through
+  `FamiliarActionService`, which re-checks every gate inside the transaction that applies them. This
+  sprint approaches that invariant deliberately and does not weaken it.
+- No repository awareness — commits, diffs, build state. Still a sprint of its own.
+- No plan spanning multiple projects.
+- No new provider seams.
 
 ## Three properties that are structural from commit one
 
-### 1. A plan is one proposal with many items
+### 1. Every human gate is answerable in conversation
 
-Not many proposals. `IX_FamiliarActionProposals_ConversationId_Pending` already guarantees at most
-one undecided proposal per conversation, and that is exactly the shape a plan wants: contenders race
-for one row, a human decides once, and there is never a half-approved sprint sitting in the database.
+Not only plan approval. Pending handoffs, finished sessions awaiting acceptance, and blocked tasks all
+surface in the conversation and are decided there. A gate that can only be cleared on a task page is a
+gate that breaks the model this sprint is built on.
 
-### 2. Every claim carries evidence, and the evidence is checked
+The task pages keep their controls. Two doors to the same decision is fine; the conversation being
+the one that always works is what matters.
 
-A plan is an argument about what should happen next. An argument built on invented task ids is worse
-than no plan, because it is persuasive. Citations are validated against the pack that produced them,
-and an unsupported marker is styled as unsupported or dropped — never silently rendered as fact.
+### 2. A plan is one proposal with many items, and approval is itemised
 
-### 3. Approval is itemised, and the world is re-checked at the moment of approval
+`IX_FamiliarActionProposals_ConversationId_Pending` already guarantees at most one undecided proposal
+per conversation, and that is the right shape for a plan: contenders race for one row, a human decides
+once, and a half-approved sprint cannot exist.
 
-A plan creates many rows at once, which is a far larger blast radius than Sprint 11's single action.
-So: each item can be excluded, each title and outcome is editable, and the transaction that applies
-the plan re-validates every gate — project still active, context revision unmoved, no task already
-running — exactly as a single confirmation does today. A plan approved against a world that has since
-changed is refused, with the specific reason.
+Approval is itemised because the blast radius is real. Each item can be excluded, each title and
+outcome edited, and the card states plainly what will happen — how many tasks, which sessions start
+immediately — before anything is clicked. The human's edits are what get created, not the model's
+wording.
+
+### 3. The loop closes through context, and the Familiar can see it
+
+A session finishes, its result becomes a context entry, and that entry is retrievable by the Familiar
+on the next turn. That is the whole point of the system, and until slice 1 it does not work: results
+have been harvested since Sprint 9 into a store the Familiar cannot read.
 
 ## Slices
 
 ### Slice 1 — The Familiar can read its own context
 
-Retrieval over context entries and decisions, merged into the pack. This is the slice that makes
-every later one possible: without it a plan is drafted from task titles and nothing else.
+Retrieval over context entries and decisions, merged into the pack. Server-side and deterministic
+rather than a model-driven tool call (ADR-0014).
 
-Deterministic, server-side retrieval rather than model-driven tool calls — see ADR-0014. The server
-searches from the person's message and the conversation's focus, and what it finds enters the pack.
-
-**Tool failure is surfaced, never swallowed.** A search that errors or returns nothing enters the
-prompt as an explicit statement of that fact. The `--tools ""` lesson made structural: something that
+Retrieval that finds nothing enters the prompt as an explicit statement of that fact. Something that
 cannot see will invent, and it invents most confidently when it does not know it is blind.
 
 **Accept:** ask "why is the talk lane separate from the Runner?" and get an answer drawn from
-ADR-0013's Decision entry, not from a task title.
+ADR-0013's Decision entry rather than from a task title.
 
 ### Slice 2 — Citations that are checked
 
-Inline markers (`[[task:203]]`, `[[decision:…]]`) streamed in prose, rendered as tappable chips.
-Post-stream validation against the pack: a marker naming an id that was never sent is unsupported.
+Inline markers streamed in prose, rendered as tappable chips, validated post-stream against the pack.
+A marker naming an id that was never sent is unsupported and is styled so or dropped.
 
-**Accept:** a reply citing a real task links to it; a reply citing an id that was not in the pack
-shows visibly as unsupported.
-
-*Slices 1–2 are the foundation. Everything below is worthless without them.*
+A plan is an argument about what to do next. An argument built on invented ids is worse than no plan,
+because it is persuasive.
 
 ### Slice 3 — The Familiar drafts a plan
 
-A durable `FamiliarPlanProposal`: several proposed tasks, each with a title, a requested outcome, and
-the evidence it was drawn from. Drafted in conversation, persisted, and rendered for review. Nothing
-is created.
+A durable multi-item plan proposal: several proposed tasks, each with a title, a requested outcome,
+the role that should start, and the evidence it was drawn from. Drafted in conversation, persisted,
+survives a reload. Nothing is created.
 
-**Accept:** "help me plan the next sprint" produces a durable plan of several tasks that survives a
-reload and appears on the phone.
+**Accept:** "help me plan the next sprint" produces a durable plan that appears identically on the
+phone.
 
-### Slice 4 — The human approves it, and it becomes real
+### Slice 4 — Approve it in the conversation
 
-Itemised review: exclude an item, edit a title or an outcome, approve the rest. Approval runs through
-`FamiliarActionService`, re-checking every gate inside the transaction that applies it.
+The plan renders inline in the transcript with per-item controls, exactly as the per-project Familiar
+renders a proposal today. Approving creates the tasks and starts the sessions the plan named, through
+`FamiliarActionService`, with every gate re-checked inside the applying transaction.
 
-**Accept:** approving a drafted plan creates exactly the tasks approved, with the human's edits, and
-nothing else. Declining creates nothing.
+**Accept:** approving a drafted plan in the chat creates exactly the approved items with the human's
+edits, starts exactly the sessions the card described, and nothing else. Declining creates nothing.
+No task page is opened at any point.
 
-*Slices 1–4 are the sprint. Ship them and the acceptance question is answered.*
+*Slices 1–4 are the sprint.*
 
-### Slice 5 — Carry it out
+### Slice 5 — The loop closes in conversation
 
-Start the first session on an approved task, using the existing per-task confirmation and the
-existing Runner. The Familiar's involvement ends at the proposal; the DO lane is untouched.
+Pending handoffs and finished sessions surface in the conversation. Approving a Planner → Implementer
+handoff there starts the next session. Accepting a result captures it, and slice 1 makes it
+retrievable on the next turn.
+
+**Accept:** a task goes from proposed to planned to implemented to reviewed, and every human decision
+along the way is made in the conversation.
 
 ### Slice 6 — Warm open
 
-A new conversation opens with the Familiar speaking first: where things stand, what it would suggest,
+A new conversation opens with the Familiar speaking first: where things stand, what needs a decision,
 what has been sitting untouched.
 
 ## The action kinds question
 
-`CreateTask` and `StartPlanner` cannot express "this is already done" — the one thing actually asked
-for on the day Sprint 12 shipped. A third kind, closing or completing a task, is the smallest addition
-that removes the most common dead end.
+`CreateTask` and `StartPlanner` cannot express a plan that starts an Implementer, nor "this is already
+done" — the thing actually asked for the day Sprint 12 shipped.
 
-`FamiliarConversationModelTests` asserts there are exactly two kinds, deliberately, so that a third
-cannot appear by accident. Adding one is a decision to make in the open: update that test in the same
-commit as the kind, or not at all.
+`FamiliarConversationModelTests` asserts there are exactly two kinds, deliberately, so a third cannot
+appear by accident. The kinds this sprint needs change in the same commit as that test, with the
+reasoning recorded, or they do not change at all.
 
 ## Risks
 
-**Retrieval quality is the whole sprint.** If the Familiar cannot find the right decision, the plan it
-drafts is confident and wrong, and a human will approve it because it reads well. Watch for plans that
-cite nothing, or cite the same two entries every time.
-
 **A plan is persuasive in a way a single action is not.** Six well-written tasks invite a glance and a
-click. The itemised review exists to make approving without reading harder than reading.
+click, and approving now starts real sessions against a real repository. The itemised card and its
+plain statement of consequences are deliberate friction against approving without reading. Friction
+reduces this risk; it does not remove it.
+
+**Retrieval quality is the whole sprint.** If the Familiar cannot find the right decision, the plan it
+drafts is confident and wrong, and it will read well enough to be approved. Watch for plans that cite
+nothing, or cite the same two entries every time.
 
 **Grounding may cost conversational quality.** Sprint 12 already saw the Familiar go terse under
-strong honesty rules. More evidence and citation requirements push further that way. If replies become
-stiff and list-shaped, that is a prompt-shape problem before it is a model problem.
+honesty rules alone. More evidence and citation requirements push further that way.
 
 ## What to watch
 
-Which plans a human approves unchanged, and which they edit heavily. Heavy editing in one direction is
-a specification for the next sprint. Approving unchanged every time is a warning that nobody is
-reading.
+Which plans get approved unchanged and which get edited heavily. Heavy editing in one direction is the
+next sprint's specification. Approving unchanged every time is a warning that nobody is reading.
