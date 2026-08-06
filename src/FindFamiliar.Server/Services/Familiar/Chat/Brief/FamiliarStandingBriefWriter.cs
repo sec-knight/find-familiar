@@ -29,6 +29,17 @@ public static class FamiliarStandingBriefWriter
         builder.AppendLine("<standing_brief>");
         builder.AppendLine(
             "What follows is everything you can see. It is generated from this system's own records.");
+
+        if (brief.NewestRecordedActivityUtc is { } newest)
+        {
+            // A date, not a timestamp: day granularity is all an answer needs, and it keeps the brief
+            // identical across a day's worth of turns so the prefix cache still covers it.
+            builder
+                .Append("The newest record in this system is dated ")
+                .Append(newest.ToString("yyyy-MM-dd"))
+                .AppendLine(". Nothing here is evidence about anything after that date.");
+        }
+
         builder.AppendLine();
 
         if (brief.Projects.Count == 0)
@@ -79,6 +90,13 @@ public static class FamiliarStandingBriefWriter
             .Append("tasks: ").Append(project.TotalTasks)
             .Append(" total, ").Append(project.RunningCount).Append(" running, ")
             .Append(project.NeedsAttentionCount).AppendLine(" needing a human decision");
+
+        if (project.LastRecordedActivityUtc is { } lastActivity)
+        {
+            builder
+                .Append("newest record for this project: ")
+                .AppendLine(lastActivity.ToString("yyyy-MM-dd"));
+        }
 
         foreach (var task in project.Tasks)
         {

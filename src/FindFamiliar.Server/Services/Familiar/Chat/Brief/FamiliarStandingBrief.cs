@@ -18,6 +18,11 @@ public sealed record BriefTask(
     bool NeedsHumanAttention);
 
 /// <summary>One project's shape at a glance, plus whichever of its tasks matter most right now.</summary>
+/// <param name="LastRecordedActivityUtc">
+/// The newest thing recorded about this project, or null when nothing has been. Data-derived, never
+/// read from a clock, so it changes when the project changes and not otherwise — which keeps the
+/// brief cacheable.
+/// </param>
 public sealed record BriefProject(
     Guid ProjectId,
     string Name,
@@ -26,7 +31,8 @@ public sealed record BriefProject(
     int NeedsAttentionCount,
     int RunningCount,
     IReadOnlyList<BriefTask> Tasks,
-    int TasksOmitted);
+    int TasksOmitted,
+    DateTime? LastRecordedActivityUtc);
 
 /// <summary>
 /// The whole system as a model is shown it: every project, its health, what is running, and what is
@@ -42,13 +48,26 @@ public sealed record BriefProject(
 /// not see, in the same spirit as the Familiar page's "What I can't see", so a model reading this is
 /// told the edges of its own knowledge rather than left to assume it has everything.
 /// </summary>
+/// <param name="NewestRecordedActivityUtc">
+/// When the most recent record in the whole system was written, or null when there is none.
+///
+/// This exists because a brief without it is silently a claim about the present. A model shown a
+/// system's state and no indication of its age will describe it in the present tense — and it will be
+/// wrong every time work happens outside these records, which for this project is most of the time,
+/// because sprints are built in git and only sometimes tracked as tasks. Saying when the evidence
+/// ends is what turns "the project is in Sprint 11" back into "the newest record is from Sprint 11".
+///
+/// Derived from data, not from a clock, so it does not vary per turn and does not break the prefix
+/// cache. <see cref="ObservedAt"/> is the clock, and it is deliberately never serialised.
+/// </param>
 public sealed record FamiliarStandingBrief(
     IReadOnlyList<BriefProject> Projects,
     int TotalProjects,
     int ProjectsOmitted,
     int SensitiveProjectsWithheld,
     IReadOnlyList<string> Limitations,
-    DateTimeOffset ObservedAt)
+    DateTimeOffset ObservedAt,
+    DateTime? NewestRecordedActivityUtc = null)
 {
     /// <summary>
     /// A bound on the whole brief, in characters rather than tokens.

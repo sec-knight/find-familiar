@@ -85,8 +85,14 @@ public sealed class FamiliarStandingBriefService(
                 continue;
             }
 
-            projects.Add(Compose(projection));
+            projects.Add(Compose(projection, await ReadLastActivityAsync(candidate.Id, cancellationToken)));
         }
+
+        var newestActivity = projects
+            .Select(project => project.LastRecordedActivityUtc)
+            .Where(activity => activity is not null)
+            .DefaultIfEmpty(null)
+            .Max();
 
         if (projectsOmitted > 0)
         {
@@ -112,13 +118,53 @@ public sealed class FamiliarStandingBriefService(
             "You cannot see repository contents, file changes, commits, session transcripts, or "
             + "anything outside these records.");
 
+        // The limitation that the Sprint 11 answer needed and did not have. Work on this project is
+        // routinely done in git without being tracked as a task here, so records ending on a date is
+        // evidence about the records and none at all about whether work stopped.
+        limitations.Add(
+            "These records are only what has been entered into Find Familiar. Work done outside it — "
+            + "commits, file edits, whole sprints run by hand — leaves no trace here. The date of the "
+            + "newest record tells you when recording stopped, not when work stopped.");
+
         return new FamiliarStandingBrief(
             projects,
             totalProjects,
             projectsOmitted,
             withheld,
             limitations,
-            timeProvider.GetUtcNow());
+            timeProvider.GetUtcNow(),
+            newestActivity);
+    }
+
+    /// <summary>
+    /// The newest thing recorded about one project: its own timestamp, its tasks', or its context
+    /// entries'.
+    ///
+    /// Sessions are covered transitively — a session that starts or finishes moves its task — so this
+    /// is three reads rather than four. Nulls are tolerated throughout: a project with nothing in it
+    /// has no activity date, and inventing one from its creation would claim work that never happened.
+    /// </summary>
+    private async Task<DateTime?> ReadLastActivityAsync(Guid projectId, CancellationToken cancellationToken)
+    {
+        var projectUpdated = await dbContext.Projects
+            .AsNoTracking()
+            .Where(project => project.Id == projectId)
+            .Select(project => (DateTime?)project.UpdatedUtc)
+            .SingleOrDefaultAsync(cancellationToken);
+
+        var taskUpdated = await dbContext.Tasks
+            .AsNoTracking()
+            .Where(task => task.ProjectId == projectId)
+            .Select(task => (DateTime?)task.UpdatedUtc)
+            .MaxAsync(cancellationToken);
+
+        var contextCreated = await dbContext.ContextEntries
+            .AsNoTracking()
+            .Where(entry => entry.ProjectId == projectId && !entry.IsSensitive)
+            .Select(entry => (DateTime?)entry.CreatedUtc)
+            .MaxAsync(cancellationToken);
+
+        return new[] { projectUpdated, taskUpdated, contextCreated }.Max();
     }
 
     /// <summary>
@@ -128,7 +174,7 @@ public sealed class FamiliarStandingBriefService(
     /// truncated list must never make a project look smaller or healthier than it is, which is the
     /// same rule <c>SnapshotHealth</c> holds for the per-project snapshot.
     /// </summary>
-    private static BriefProject Compose(DemiplaneProjection projection)
+    private static BriefProject Compose(DemiplaneProjection projection, DateTime? lastActivityUtc)
     {
         // Most useful first: anything asking for a human, then anything running, then the rest by
         // recency. A cap that kept the ten oldest untouched tasks would answer "what's blocked?" with
@@ -157,6 +203,7 @@ public sealed class FamiliarStandingBriefService(
             projection.NeedsAttention.Count,
             projection.Running.Count,
             carried,
-            ordered.Count - carried.Count);
+            ordered.Count - carried.Count,
+            lastActivityUtc);
     }
 }

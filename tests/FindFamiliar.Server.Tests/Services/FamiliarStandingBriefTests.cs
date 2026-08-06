@@ -225,6 +225,50 @@ public sealed class FamiliarStandingBriefTests
             $"The brief was {text.Length} characters, past its bound.");
     }
 
+    /// <summary>
+    /// The brief dates its own evidence, and says plainly that the date bounds what it knows.
+    ///
+    /// Without this the brief is silently a claim about the present, and a model will describe it in
+    /// the present tense — which is wrong every time work happens outside these records. It is the
+    /// defect that made the Familiar answer "the project is in the middle of Sprint 11" about a system
+    /// that had since shipped a whole sprint in git.
+    /// </summary>
+    [Fact]
+    public async Task The_brief_dates_its_newest_record_and_bounds_its_own_claims()
+    {
+        using var database = new TemporarySqliteDatabase();
+        await using var dbContext = await database.CreateContextAsync();
+
+        var projectId = await SeedProjectAsync(dbContext, "Dated Project", "A purpose.");
+        await SeedTaskAsync(dbContext, projectId, "A task");
+
+        var brief = await NewService(dbContext).GetBriefAsync();
+        var text = FamiliarStandingBriefWriter.Write(brief);
+
+        Assert.NotNull(brief.NewestRecordedActivityUtc);
+        Assert.Contains(Now.UtcDateTime.ToString("yyyy-MM-dd"), text, StringComparison.Ordinal);
+        Assert.Contains("Nothing here is evidence about anything after that date", text, StringComparison.Ordinal);
+
+        // And the limitation that says records are not the same thing as reality.
+        Assert.Contains("when recording stopped, not when work stopped", text, StringComparison.Ordinal);
+    }
+
+    /// <summary>An empty system has no activity date, and inventing one would claim work that never happened.</summary>
+    [Fact]
+    public async Task An_empty_system_has_no_activity_date()
+    {
+        using var database = new TemporarySqliteDatabase();
+        await using var dbContext = await database.CreateContextAsync();
+
+        var brief = await NewService(dbContext).GetBriefAsync();
+
+        Assert.Null(brief.NewestRecordedActivityUtc);
+        Assert.DoesNotContain(
+            "The newest record in this system is dated",
+            FamiliarStandingBriefWriter.Write(brief),
+            StringComparison.Ordinal);
+    }
+
     // ---------------------------------------------------------------- prompt caching
 
     /// <summary>
@@ -249,19 +293,39 @@ public sealed class FamiliarStandingBriefTests
         Assert.Equal(first, second);
     }
 
-    /// <summary>The observation time is deliberately not written, for the reason above.</summary>
+    /// <summary>
+    /// The passage of time alone changes nothing in the brief.
+    ///
+    /// This is the property that matters, asserted directly rather than through a proxy: the brief may
+    /// contain dates derived from <i>data</i> — the newest record's date is one, and it is load-bearing
+    /// — but nothing read from a clock, because a brief that varied per turn would break the prefix
+    /// cache and cost several times more for no benefit.
+    ///
+    /// An earlier version of this test asserted the current year appeared nowhere in the text. That
+    /// was a proxy, and it broke the moment a legitimate data-derived date carried the same year.
+    /// </summary>
     [Fact]
-    public async Task The_observation_time_is_not_serialised()
+    public async Task Moving_the_clock_alone_changes_nothing_in_the_brief()
     {
         using var database = new TemporarySqliteDatabase();
         await using var dbContext = await database.CreateContextAsync();
 
-        await SeedProjectAsync(dbContext, "Stable Project", "Stable purpose.");
+        var projectId = await SeedProjectAsync(dbContext, "Stable Project", "Stable purpose.");
+        await SeedTaskAsync(dbContext, projectId, "A task");
 
-        var brief = await NewService(dbContext).GetBriefAsync();
-        var text = FamiliarStandingBriefWriter.Write(brief);
+        var clock = new TestTimeProvider(Now);
+        var service = new FamiliarStandingBriefService(
+            dbContext,
+            new DemiplaneProjectionService(dbContext, new NoProviderCapacityService(), clock),
+            clock);
 
-        Assert.DoesNotContain(brief.ObservedAt.Year.ToString(), text, StringComparison.Ordinal);
+        var before = FamiliarStandingBriefWriter.Write(await service.GetBriefAsync());
+
+        // Days pass and nothing is recorded. The brief must be byte-identical: the records did not
+        // move, so neither does anything the provider caches.
+        clock.Advance(TimeSpan.FromDays(9));
+
+        Assert.Equal(before, FamiliarStandingBriefWriter.Write(await service.GetBriefAsync()));
     }
 
     // ---------------------------------------------------------------- helpers
