@@ -1,0 +1,25 @@
+[Unit]
+Description=Find Familiar runner worker
+Documentation=file:///srv/familiar/apps/FindFamiliar/docs/worker-runtime-guide.md
+After=familiar-server.service
+Wants=familiar-server.service
+
+[Service]
+Type=simple
+WorkingDirectory=/srv/familiar/apps/FindFamiliar/src/FindFamiliar.Runner
+
+EnvironmentFile=/srv/familiar/config/familiar-worker.env
+EnvironmentFile=/srv/familiar/secrets/familiar.secrets.env
+
+ExecStart=/srv/familiar/apps/FindFamiliar/src/FindFamiliar.Runner/bin/Debug/net10.0/FindFamiliar.Runner worker
+
+# The worker polls and retries on its own, so a transient server outage is not a
+# reason to stop; always restart, but slowly enough not to spin.
+Restart=always
+RestartSec=15
+
+StandardOutput=append:/srv/familiar/logs/familiar-worker.log
+StandardError=append:/srv/familiar/logs/familiar-worker.log
+
+[Install]
+WantedBy=default.target

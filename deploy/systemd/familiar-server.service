@@ -1,0 +1,29 @@
+[Unit]
+Description=Find Familiar server
+Documentation=file:///srv/familiar/apps/FindFamiliar/docs/familiar-reasoning-setup.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+
+# The content root: App_Data (the SQLite database and data-protection keys) is
+# resolved relative to this, so it is not optional.
+WorkingDirectory=/srv/familiar/apps/FindFamiliar/src/FindFamiliar.Server
+
+EnvironmentFile=/srv/familiar/config/familiar-server.env
+EnvironmentFile=/srv/familiar/secrets/familiar.secrets.env
+
+ExecStart=/srv/familiar/apps/FindFamiliar/src/FindFamiliar.Server/bin/Debug/net10.0/FindFamiliar.Server
+
+Restart=on-failure
+RestartSec=5
+
+# Give EF Core's startup migration room to finish before systemd gives up.
+TimeoutStartSec=120
+
+StandardOutput=append:/srv/familiar/logs/familiar-server.log
+StandardError=append:/srv/familiar/logs/familiar-server.log
+
+[Install]
+WantedBy=default.target
