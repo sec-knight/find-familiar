@@ -3,6 +3,7 @@ using FindFamiliar.Server.Domain;
 using FindFamiliar.Server.Services.Familiar.Chat;
 using FindFamiliar.Server.Services.Familiar.Chat.Brief;
 using FindFamiliar.Server.Services.Familiar.Chat.Providers;
+using FindFamiliar.Server.Services.Familiar.Chat.Retrieval;
 using FindFamiliar.Server.Tests.Infrastructure;
 using Microsoft.EntityFrameworkCore;
 
@@ -238,6 +239,61 @@ public sealed class ProviderFamiliarChatGeneratorTests
     }
 
     /// <summary>
+    /// Retrieval reaches the wire without the model asking for it. ADR-0014's reason for searching
+    /// server-side rather than through a tool call is that a tool can silently fail to fire; this
+    /// asserts the thing that replaced it actually fires.
+    /// </summary>
+    [Fact]
+    public async Task Recorded_context_is_searched_and_sent_without_the_model_asking()
+    {
+        using var database = new TemporarySqliteDatabase();
+        await using var dbContext = await database.CreateContextAsync();
+
+        var projectId = Guid.NewGuid();
+
+        dbContext.Projects.Add(new FamiliarProject
+        {
+            Id = projectId,
+            Name = "Find Familiar",
+            Purpose = "Preserve context.",
+            Status = ProjectStatus.Active,
+            CreatedUtc = Now.UtcDateTime,
+            UpdatedUtc = Now.UtcDateTime
+        });
+
+        dbContext.ContextEntries.Add(new ContextEntry
+        {
+            Id = Guid.NewGuid(),
+            ProjectId = projectId,
+            Kind = ContextEntryKind.Decision,
+            Title = "Separate the talk lane from the runner",
+            Content = "They are different seams with different providers.",
+            State = ContextEntryState.Active,
+            CreatedUtc = Now.UtcDateTime
+        });
+
+        await dbContext.SaveChangesAsync();
+        dbContext.ChangeTracker.Clear();
+
+        var provider = new ScriptedChatProvider();
+        provider.Emit("ok");
+        provider.Finish(FamiliarChatProviderStatus.Completed);
+
+        await NewGenerator(dbContext, provider)
+            .GenerateAsync(Request("why is the talk lane separate from the runner?"), new RecordingSink());
+
+        var recorded = provider.LastRequest!.RecordedContext;
+
+        Assert.NotNull(recorded);
+        Assert.Contains("different seams", recorded!, StringComparison.Ordinal);
+
+        // Its own segment, not folded into the constant head. This block changes every message, and
+        // putting it in the stable head would invalidate the prefix cache on every single turn.
+        Assert.DoesNotContain(recorded, provider.LastRequest.SystemPrompt, StringComparison.Ordinal);
+        Assert.DoesNotContain(recorded, provider.LastRequest.StandingBrief ?? string.Empty, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// Prior exchanges are sent so the conversation continues, oldest first, and bounded by a count
     /// rather than allowed to grow without limit.
     /// </summary>
@@ -310,8 +366,12 @@ public sealed class ProviderFamiliarChatGeneratorTests
     private static ProviderFamiliarChatGenerator NewGenerator(
         FamiliarDbContext dbContext,
         IFamiliarChatProvider provider,
-        IFamiliarStandingBriefService? briefs = null) =>
-        new(dbContext, provider, briefs ?? new EmptyStandingBriefService());
+        IFamiliarStandingBriefService? briefs = null,
+        IFamiliarContextRetrievalService? retrieval = null) =>
+        new(dbContext,
+            provider,
+            briefs ?? new EmptyStandingBriefService(),
+            retrieval ?? new FamiliarContextRetrievalService(dbContext));
 
     /// <summary>
     /// A brief with nothing in it, so these tests stay about the generator rather than about what the

@@ -9,6 +9,7 @@ using FindFamiliar.Server.Services.Familiar;
 using FindFamiliar.Server.Services.Familiar.Chat;
 using FindFamiliar.Server.Services.Familiar.Chat.Brief;
 using FindFamiliar.Server.Services.Familiar.Chat.Providers;
+using FindFamiliar.Server.Services.Familiar.Chat.Retrieval;
 using FindFamiliar.Server.Services.Familiar.Reasoning;
 using FindFamiliar.Server.Services.Providers;
 using Microsoft.AspNetCore.DataProtection;
@@ -66,6 +67,7 @@ builder.Services.AddScoped<IFamiliarChatService, FamiliarChatService>();
 // The system-wide projection the Familiar answers from, and this server's own record of what it has
 // sent. Both are read-only and neither needs a credential.
 builder.Services.AddScoped<IFamiliarStandingBriefService, FamiliarStandingBriefService>();
+builder.Services.AddScoped<IFamiliarContextRetrievalService, FamiliarContextRetrievalService>();
 builder.Services.AddScoped<IFamiliarChatUsageService, FamiliarChatUsageService>();
 builder.Services.AddHostedService<FamiliarChatGenerationHost>();
 

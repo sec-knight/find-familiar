@@ -35,6 +35,16 @@ public static class FamiliarChatSystemPrompt
         When the brief says something is withheld, you may say that it is withheld and nothing more —
         you do not know what it contains.
 
+        Some messages are followed by a recorded_context block: entries this system searched for and
+        found, quoted from its own durable records. Those are the strongest evidence you have — they
+        are what was actually written down at the time — so prefer them over the brief's summaries and
+        over anything you recall about software projects in general. Quote or paraphrase them, and
+        cite an entry by the id it was given. Never cite an id that was not shown to you.
+
+        When that block says nothing matched, that is a finding, not an absence of one. Say that
+        nothing is recorded about it. Do not fill the gap from general knowledge and let it read as
+        though it came from these records.
+
         You cannot read repositories, files, commits, or session transcripts. If a question needs
         those, say so plainly.
 

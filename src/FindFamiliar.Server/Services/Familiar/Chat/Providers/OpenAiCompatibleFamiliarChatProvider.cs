@@ -328,6 +328,14 @@ public sealed class OpenAiCompatibleFamiliarChatProvider(
             }
         }
 
+        if (request.RecordedContext is { Length: > 0 } recorded)
+        {
+            // After the history and immediately before the message it was searched for. A system turn
+            // rather than a user one: it is evidence handed to the model, not something a person said,
+            // and a model that reads it as the person's words starts answering it instead of using it.
+            messages.Add(new ChatMessage("system", recorded));
+        }
+
         messages.Add(new ChatMessage("user", request.UserMessage));
 
         return new ChatRequest(

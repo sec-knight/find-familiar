@@ -18,17 +18,24 @@ public sealed record FamiliarChatHistoryTurn(string UserText, string Output);
 ///    sitting even though it is not stable across a week;
 /// 3. <see cref="History"/> — append-only, so each turn extends the previous prefix rather than
 ///    rewriting it;
-/// 4. <see cref="UserMessage"/> — different every time, and therefore last.
+/// 4. <see cref="RecordedContext"/> — searched fresh for this message, so different every time;
+/// 5. <see cref="UserMessage"/> — different every time, and therefore last.
 ///
 /// The brief is a separate segment rather than appended to the system prompt on purpose: it changes,
 /// and folding it into the constant would mean every project edit invalidated the cache entry for the
 /// part that never changes at all.
 /// </summary>
+/// <param name="RecordedContext">
+/// What searching the recorded context turned up for this message, or null when nothing selective was
+/// asked. Placed after the history rather than beside the brief because it is the most volatile
+/// segment there is: it belongs at the tail, where changing it costs nothing that was cached.
+/// </param>
 public sealed record FamiliarChatRequest(
     string SystemPrompt,
     IReadOnlyList<FamiliarChatHistoryTurn> History,
     string UserMessage,
-    string? StandingBrief = null);
+    string? StandingBrief = null,
+    string? RecordedContext = null);
 
 /// <summary>
 /// How a stream ended. Every member maps to exactly one code and one sentence in

@@ -176,6 +176,71 @@ public sealed class OpenAiCompatibleFamiliarChatProviderStreamTests
         Assert.Single(await StreamAsync(lines), streamEvent => streamEvent is FamiliarChatStreamEvent.Finished);
     }
 
+    /// <summary>
+    /// Message order on the wire, stable to volatile: the constant system prompt, then the brief,
+    /// then the history, then the context searched for this message, then the message itself.
+    ///
+    /// This ordering is the prefix cache. Anything per-message placed above the history invalidates
+    /// everything below it on every turn, and cached input is roughly six times cheaper than fresh —
+    /// so getting this wrong is silently a six-fold cost increase rather than a visible bug.
+    /// </summary>
+    [Fact]
+    public async Task The_wire_orders_messages_stable_to_volatile()
+    {
+        var handler = new StubHandler("data: [DONE]\n\n");
+
+        using var httpClient = new HttpClient(handler) { BaseAddress = new Uri("https://stub.invalid/v1/") };
+
+        var provider = new OpenAiCompatibleFamiliarChatProvider(
+            httpClient,
+            Options.Create(new FamiliarChatOptions { Model = "test-model" }));
+
+        var request = new FamiliarChatRequest(
+            "SYSTEM-PROMPT",
+            [new FamiliarChatHistoryTurn("HISTORY-ASK", "HISTORY-ANSWER")],
+            "THE-MESSAGE",
+            "THE-BRIEF",
+            "THE-RECORDED-CONTEXT");
+
+        await foreach (var _ in provider.StreamAsync(request))
+        {
+        }
+
+        var body = handler.LastBody!;
+        int At(string marker) => body.IndexOf(marker, StringComparison.Ordinal);
+
+        Assert.True(At("SYSTEM-PROMPT") >= 0);
+        Assert.True(At("SYSTEM-PROMPT") < At("THE-BRIEF"));
+        Assert.True(At("THE-BRIEF") < At("HISTORY-ASK"));
+        Assert.True(At("HISTORY-ANSWER") < At("THE-RECORDED-CONTEXT"));
+        Assert.True(At("THE-RECORDED-CONTEXT") < At("THE-MESSAGE"));
+    }
+
+    /// <summary>
+    /// <b>No tools are declared, ever.</b> The request type has no member for them, so there is no
+    /// execution surface regardless of what a reply says — and this asserts it at the only place that
+    /// can be checked from outside: the bytes actually sent.
+    /// </summary>
+    [Fact]
+    public async Task No_tools_are_declared_on_the_wire()
+    {
+        var handler = new StubHandler("data: [DONE]\n\n");
+
+        using var httpClient = new HttpClient(handler) { BaseAddress = new Uri("https://stub.invalid/v1/") };
+
+        var provider = new OpenAiCompatibleFamiliarChatProvider(
+            httpClient,
+            Options.Create(new FamiliarChatOptions { Model = "test-model" }));
+
+        await foreach (var _ in provider.StreamAsync(new FamiliarChatRequest("system", [], "hello")))
+        {
+        }
+
+        Assert.DoesNotContain("\"tools\"", handler.LastBody!, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("tool_choice", handler.LastBody!, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("function", handler.LastBody!, StringComparison.OrdinalIgnoreCase);
+    }
+
     // ------------------------------------------------------------------------------- infrastructure
 
     /// <summary>
@@ -216,12 +281,22 @@ public sealed class OpenAiCompatibleFamiliarChatProviderStreamTests
 
     private sealed class StubHandler(string body) : HttpMessageHandler
     {
-        protected override Task<HttpResponseMessage> SendAsync(
+        /// <summary>The bytes actually sent, which is the only place a wire contract can be checked.</summary>
+        public string? LastBody { get; private set; }
+
+        protected override async Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
-            CancellationToken cancellationToken) =>
-            Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            CancellationToken cancellationToken)
+        {
+            if (request.Content is { } content)
+            {
+                LastBody = await content.ReadAsStringAsync(cancellationToken);
+            }
+
+            return new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new StringContent(body, Encoding.UTF8, "text/event-stream")
-            });
+            };
+        }
     }
 }

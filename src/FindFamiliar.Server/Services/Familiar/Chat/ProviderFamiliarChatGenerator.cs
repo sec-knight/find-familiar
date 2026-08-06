@@ -2,6 +2,7 @@ using FindFamiliar.Server.Data;
 using FindFamiliar.Server.Domain;
 using FindFamiliar.Server.Services.Familiar.Chat.Brief;
 using FindFamiliar.Server.Services.Familiar.Chat.Providers;
+using FindFamiliar.Server.Services.Familiar.Chat.Retrieval;
 using Microsoft.EntityFrameworkCore;
 
 namespace FindFamiliar.Server.Services.Familiar.Chat;
@@ -16,17 +17,19 @@ namespace FindFamiliar.Server.Services.Familiar.Chat;
 /// them apart is what lets the provider be replaced without touching context assembly, and context
 /// assembly to be tested without a network.
 ///
-/// It is also the chokepoint through which everything leaves this machine. Exactly four things reach a
+/// It is also the chokepoint through which everything leaves this machine. Exactly five things reach a
 /// provider: the constant system prompt, the standing brief, prior completed turns of this one
-/// conversation, and the person's message. The brief is built by
-/// <see cref="IFamiliarStandingBriefService"/>, which excludes anything marked sensitive at the query
-/// itself — so there is no point in this file at which flagged content is held in memory next to a
-/// request being assembled.
+/// conversation, the recorded context found for this message, and the person's message. The brief is built by
+/// <see cref="IFamiliarStandingBriefService"/> and the search by
+/// <see cref="IFamiliarContextRetrievalService"/>, both of which exclude anything marked sensitive at
+/// the query itself — so there is no point in this file at which flagged content is held in memory
+/// next to a request being assembled.
 /// </summary>
 public sealed class ProviderFamiliarChatGenerator(
     FamiliarDbContext dbContext,
     IFamiliarChatProvider provider,
-    IFamiliarStandingBriefService briefs) : IFamiliarChatGenerator
+    IFamiliarStandingBriefService briefs,
+    IFamiliarContextRetrievalService retrieval) : IFamiliarChatGenerator
 {
     /// <summary>
     /// Prior exchanges sent back with a new message. A count, not a size — Sprint 12 caps working
@@ -49,11 +52,16 @@ public sealed class ProviderFamiliarChatGenerator(
         // since moved — the exact failure this application exists to prevent.
         var brief = await briefs.GetBriefAsync(request.FocusProjectId, cancellationToken);
 
+        // The server searches; the model does not (ADR-0014). One retrieval per turn, from the
+        // person's own message, and it cannot silently fail to fire the way a tool call can.
+        var found = await retrieval.RetrieveAsync(request.UserText, request.FocusProjectId, cancellationToken);
+
         var prompt = new FamiliarChatRequest(
             FamiliarChatSystemPrompt.Text,
             history,
             request.UserText,
-            FamiliarStandingBriefWriter.Write(brief));
+            FamiliarStandingBriefWriter.Write(brief),
+            FamiliarRetrievalWriter.Write(found));
 
         var emitted = 0;
         var metadata = new FamiliarChatGenerationMetadata(provider.Name, provider.Model);
