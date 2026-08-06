@@ -532,10 +532,14 @@ public sealed class FamiliarConversationServiceTests
     }
 
     /// <summary>
-    /// This slice creates no proposals. A draft in the outcome is inert: no row, no dispatch, nothing.
+    /// The sprint's central invariant, at the point where provider text enters the database.
+    ///
+    /// A valid draft becomes a <b>Pending</b> proposal — a record of what a person will be shown —
+    /// and nothing else. No task, no session, no revision change. Only an explicit confirmation
+    /// through <c>IFamiliarActionService</c> can turn it into work.
     /// </summary>
     [Fact]
-    public async Task An_action_draft_creates_no_proposal_in_this_slice()
+    public async Task A_valid_draft_becomes_a_pending_proposal_and_creates_no_work()
     {
         using var database = new TemporarySqliteDatabase();
         await using var dbContext = await database.CreateContextAsync();
@@ -548,9 +552,71 @@ public sealed class FamiliarConversationServiceTests
 
         await NewService(dbContext, provider).SendAsync(project.Id, "make me a task");
 
-        Assert.Empty(await dbContext.FamiliarActionProposals.AsNoTracking().ToListAsync());
+        var proposal = Assert.Single(await dbContext.FamiliarActionProposals.AsNoTracking().ToListAsync());
+        Assert.Equal(FamiliarActionStatus.Pending, proposal.Status);
+        Assert.Equal(project.Id, proposal.ProjectId);
+        Assert.Null(proposal.CreatedTaskId);
+        Assert.Null(proposal.CreatedSessionId);
+        Assert.Null(proposal.DecidedUtc);
+
+        // Nothing was created, and the project did not move.
         Assert.Empty(await dbContext.Tasks.AsNoTracking().Where(t => t.ProjectId == project.Id).ToListAsync());
         Assert.Empty(await dbContext.AgentSessions.AsNoTracking().ToListAsync());
+        Assert.Equal(0, await dbContext.Projects.AsNoTracking()
+            .Where(p => p.Id == project.Id).Select(p => p.ContextRevision).SingleAsync());
+    }
+
+    /// <summary>A draft that does not validate produces no proposal, and no complaint.</summary>
+    [Fact]
+    public async Task An_invalid_draft_produces_no_proposal_and_no_complaint()
+    {
+        using var database = new TemporarySqliteDatabase();
+        await using var dbContext = await database.CreateContextAsync();
+        var project = await SeedProjectAsync(dbContext);
+
+        var provider = new ScriptedFamiliarReasoningProvider();
+        provider.EnqueueAnswer(
+            "I could do that.",
+            actions: [new ProposedActionDraft("DeleteEverything", "A task", "An outcome", null)]);
+
+        await NewService(dbContext, provider).SendAsync(project.Id, "delete everything");
+
+        Assert.Empty(await dbContext.FamiliarActionProposals.AsNoTracking().ToListAsync());
+
+        // The reply is still shown, and no System note reports the rejection.
+        var messages = await ReadMessagesAsync(dbContext, project.Id);
+        Assert.Equal(2, messages.Count);
+        Assert.Equal(FamiliarMessageAuthor.Familiar, messages[1].Author);
+        Assert.DoesNotContain(messages, m => m.Author == FamiliarMessageAuthor.System);
+    }
+
+    /// <summary>
+    /// One undecided proposal per conversation. A second reply proposing something else keeps its
+    /// text and drops the draft — the reply must never be lost to a proposal that cannot be stored.
+    /// </summary>
+    [Fact]
+    public async Task A_second_proposal_is_dropped_while_one_is_still_undecided()
+    {
+        using var database = new TemporarySqliteDatabase();
+        await using var dbContext = await database.CreateContextAsync();
+        var project = await SeedProjectAsync(dbContext);
+
+        var provider = new ScriptedFamiliarReasoningProvider();
+        provider
+            .EnqueueAnswer("First.", actions: [new ProposedActionDraft("CreateTask", "First", "One.", null)])
+            .EnqueueAnswer("Second.", actions: [new ProposedActionDraft("CreateTask", "Second", "Two.", null)]);
+
+        var service = NewService(dbContext, provider);
+        await service.SendAsync(project.Id, "one");
+        await service.SendAsync(project.Id, "two");
+
+        var proposal = Assert.Single(await dbContext.FamiliarActionProposals.AsNoTracking().ToListAsync());
+        Assert.Equal("First", proposal.Title);
+
+        // Both replies survive.
+        var messages = await ReadMessagesAsync(dbContext, project.Id);
+        Assert.Equal(4, messages.Count);
+        Assert.Equal("Second.", messages[3].Content);
     }
 
     // ---------------------------------------------------------------- sequencing

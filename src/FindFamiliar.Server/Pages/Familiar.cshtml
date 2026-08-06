@@ -192,46 +192,103 @@ else
 
             @foreach (var proposal in Model.Conversation.PendingProposals)
             {
+                var staleReason = Model.StaleReason(proposal);
+
                 <article class="familiar-proposal">
                     <h3>@FamiliarModel.ActionHeading(proposal.Kind)</h3>
 
-                    <dl class="familiar-proposal-detail">
-                        <dt>What would happen</dt>
-                        <dd>@FamiliarModel.ActionEffect(proposal.Kind)</dd>
+                    @* One form per proposal. Only the id and the token the page rendered are
+                       submitted, plus the human's edits to a CreateTask — everything else is read
+                       server-side from the row. *@
+                    <form method="post" asp-route-projectId="@snapshot.ProjectId">
+                        <input type="hidden" name="Decision.ProposalId" value="@proposal.ProposalId" />
+                        <input type="hidden" name="Decision.ExpectedConcurrencyToken" value="@proposal.ConcurrencyToken" />
 
-                        @if (proposal.Kind == FamiliarActionKind.CreateTask)
+                        <dl class="familiar-proposal-detail">
+                            <dt>What would happen</dt>
+                            <dd>@FamiliarModel.ActionEffect(proposal.Kind)</dd>
+
+                            <dt>Why you are seeing this</dt>
+                            <dd>The Familiar proposed it in its reply above. Nothing has been created.</dd>
+
+                            @if (proposal.Kind == FamiliarActionKind.CreateTask)
+                            {
+                                @* Editable: the human's version is what gets created, not the
+                                   provider's. Both are re-validated inside the confirming
+                                   transaction as the person's own input. *@
+                                <dt><label for="proposal-title-@proposal.ProposalId">Title</label></dt>
+                                <dd>
+                                    <input type="text" id="proposal-title-@proposal.ProposalId"
+                                           name="Decision.Title" class="familiar-compose-input"
+                                           maxlength="@FamiliarActionProposal.MaxTitleLength"
+                                           value="@proposal.Title" />
+                                </dd>
+
+                                <dt><label for="proposal-outcome-@proposal.ProposalId">Requested outcome</label></dt>
+                                <dd>
+                                    <textarea id="proposal-outcome-@proposal.ProposalId"
+                                              name="Decision.RequestedOutcome" class="familiar-compose-input" rows="3"
+                                              maxlength="@FamiliarActionProposal.MaxRequestedOutcomeLength">@proposal.RequestedOutcome</textarea>
+                                </dd>
+
+                                <dt>What will change</dt>
+                                <dd>
+                                    One new task in this project, status Ready. The project's context revision
+                                    moves from @snapshot.ContextRevision to @(snapshot.ContextRevision + 1).
+                                    No file is touched by this action.
+                                </dd>
+                            }
+                            else
+                            {
+                                @* Fixed and server-resolved. There is no free-text task id path. *@
+                                <dt>Target task</dt>
+                                <dd>
+                                    @if (proposal.TargetTaskId is { } targetTaskId)
+                                    {
+                                        <a asp-page="/Tasks/Details" asp-route-id="@targetTaskId">@(proposal.TargetTaskTitle ?? "This project's task")</a>
+                                    }
+                                    else
+                                    {
+                                        <span>Not recorded.</span>
+                                    }
+                                </dd>
+
+                                <dt>What will change</dt>
+                                <dd>
+                                    One new session row. The project's context revision moves from
+                                    @snapshot.ContextRevision to @(snapshot.ContextRevision + 1).
+                                    No file is touched by this action.
+                                </dd>
+                            }
+
+                            <dt>Proposed at context revision</dt>
+                            <dd>@proposal.ObservedContextRevision</dd>
+                        </dl>
+
+                        @if (Model.DecisionValidationMessage is { } decisionError
+                             && Model.Decision.ProposalId == proposal.ProposalId)
                         {
-                            <dt>Title</dt>
-                            <dd>@proposal.Title</dd>
-
-                            <dt>Requested outcome</dt>
-                            <dd class="conversation-block">@proposal.RequestedOutcome</dd>
-                        }
-                        else
-                        {
-                            <dt>Target task</dt>
-                            <dd>
-                                @if (proposal.TargetTaskId is { } targetTaskId)
-                                {
-                                    <a asp-page="/Tasks/Details" asp-route-id="@targetTaskId">@(proposal.TargetTaskTitle ?? "This project's task")</a>
-                                }
-                                else
-                                {
-                                    <span>Not recorded.</span>
-                                }
-                            </dd>
+                            <p class="familiar-compose-error" role="alert">@decisionError</p>
                         }
 
-                        <dt>Proposed at context revision</dt>
-                        <dd>@proposal.ObservedContextRevision</dd>
-                    </dl>
+                        <div class="decision-actions" role="group" aria-label="Confirm or dismiss this proposed action">
+                            @if (staleReason is null && !Model.IsArchived)
+                            {
+                                <button type="submit" asp-page-handler="Confirm" class="decision-approve">Confirm</button>
+                            }
+                            else
+                            {
+                                @* Confirm is replaced by the specific reason, derived at render time
+                                   from current state. A proposal does not rot on a clock; it becomes
+                                   invalid when the world it described changes. *@
+                                <p role="status" class="familiar-note">
+                                    @(staleReason ?? "This project is archived, so nothing can be created from here.")
+                                </p>
+                            }
 
-                    @* Deliberately no Confirm and no Dismiss in this slice. There is no handler on
-                       this page that could act on either, and a control that does nothing is worse
-                       than none. *@
-                    <p class="familiar-note">
-                        Nothing has been created. Confirming or dismissing a proposed action is not available yet.
-                    </p>
+                            <button type="submit" asp-page-handler="Dismiss" class="decision-decline">Dismiss</button>
+                        </div>
+                    </form>
                 </article>
             }
         </section>

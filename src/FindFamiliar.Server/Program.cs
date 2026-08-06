@@ -50,6 +50,10 @@ builder.Services.AddScoped<IProjectSnapshotService, ProjectSnapshotService>();
 
 builder.Services.AddScoped<IFamiliarConversationService, FamiliarConversationService>();
 
+// The only bridge from a proposal to persisted work. Effects go through IWorkflowDispatchService,
+// so work confirmed from a conversation is indistinguishable from work created by hand.
+builder.Services.AddScoped<IFamiliarActionService, FamiliarActionService>();
+
 builder.Services.Configure<FamiliarReasoningOptions>(
     builder.Configuration.GetSection(FamiliarReasoningOptions.SectionName));
 

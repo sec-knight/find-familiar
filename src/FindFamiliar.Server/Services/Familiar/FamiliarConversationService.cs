@@ -1,5 +1,6 @@
 using FindFamiliar.Server.Data;
 using FindFamiliar.Server.Domain;
+using FindFamiliar.Server.Services;
 using FindFamiliar.Server.Services.Familiar.Reasoning;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
@@ -20,9 +21,11 @@ namespace FindFamiliar.Server.Services.Familiar;
 /// timestamp: two messages written in the same tick must still have one correct order, and the
 /// sequence is the column that guarantees it.
 ///
-/// Nothing here executes an action. A provider's reply becomes one row of text plus server-resolved
-/// evidence, and <see cref="FamiliarReasoningOutcome.Actions"/> is not read at all in this slice —
-/// there is no proposal row, no validator and no dispatch reachable from this file.
+/// Nothing here executes an action. A provider's reply becomes one row of text, server-resolved
+/// evidence, and at most one <b>Pending</b> proposal — a record of what a person will be shown, never
+/// authority to act. <c>IWorkflowDispatchService</c> is not reachable from this file; only
+/// <see cref="FamiliarActionService"/> can turn a proposal into work, and only on an explicit human
+/// confirmation that re-validates every gate inside its own transaction.
 /// </summary>
 public sealed class FamiliarConversationService(
     FamiliarDbContext dbContext,
@@ -461,7 +464,57 @@ public sealed class FamiliarConversationService(
             dbContext.FamiliarEvidence.Add(evidence);
         }
 
+        // The reply is committed on its own, before any proposal is attempted. A draft that cannot
+        // be stored must never cost a person the answer they were given.
         await dbContext.SaveChangesAsync(cancellationToken);
+
+        // At most one proposal, and only if the draft validates against the snapshot that produced
+        // it. A rejected draft is not an error: the reply is still shown and the person simply gets
+        // no button, because reporting "the model proposed something invalid" would teach people to
+        // read model intent as system state.
+        //
+        // What is written here is a record of what a human will be shown. It is not authority to
+        // act: nothing executes until FamiliarActionService consumes this row on an explicit
+        // confirmation and re-validates every gate inside that transaction.
+        if (ProposedActionValidator.Validate(outcome.Actions, snapshot) is not { } validated)
+        {
+            return;
+        }
+
+        dbContext.FamiliarActionProposals.Add(new FamiliarActionProposal
+        {
+            Id = Guid.NewGuid(),
+            ConversationId = conversationId,
+            ProjectId = snapshot.ProjectId,
+            MessageId = message.Id,
+            Kind = validated.Kind,
+            Status = FamiliarActionStatus.Pending,
+            ConcurrencyToken = Guid.NewGuid(),
+            ObservedContextRevision = snapshot.ContextRevision,
+            Title = validated.Title,
+            RequestedOutcome = validated.RequestedOutcome,
+            TargetTaskId = validated.TargetTaskId,
+            CreatedUtc = nowUtc,
+            UpdatedUtc = nowUtc
+        });
+
+        try
+        {
+            await dbContext.SaveChangesAsync(cancellationToken);
+        }
+        catch (Exception exception) when (
+            SessionHandoffApprovalService.IsUniqueConstraintViolation(exception))
+        {
+            // IX_FamiliarActionProposals_ConversationId_Pending allows one undecided proposal per
+            // conversation, and two concurrent sends can both pass any prior check before either
+            // commits. The database picks the winner; the loser's draft is dropped exactly as any
+            // other draft that does not survive validation — silently, with the reply intact.
+            //
+            // Classified explicitly rather than left to the caller's catch, which would report a
+            // unique violation as a busy database. That would be a false claim about what happened,
+            // and this codebase reserves "busy" for conditions that are actually retryable.
+            dbContext.ChangeTracker.Clear();
+        }
     }
 
     /// <summary>

@@ -275,18 +275,24 @@ public sealed class FamiliarPageTests(FindFamiliarWebApplicationFactory factory)
         var transcript = html[messagesStart..messagesEnd];
         Assert.DoesNotContain($"Proposed title {marker}", transcript, StringComparison.Ordinal);
 
-        // No decision is offered in this slice, so no control pretends to offer one.
-        Assert.DoesNotContain("handler=Confirm", html, StringComparison.Ordinal);
-        Assert.DoesNotContain("handler=Dismiss", html, StringComparison.Ordinal);
+        // The decision controls live in the proposal region, never in the transcript.
+        var confirmAt = html.IndexOf("handler=Confirm", StringComparison.Ordinal);
+        var dismissAt = html.IndexOf("handler=Dismiss", StringComparison.Ordinal);
+
+        Assert.True(confirmAt > region, "Confirm must render inside the proposal region.");
+        Assert.True(dismissAt > region, "Dismiss must render inside the proposal region.");
+        Assert.DoesNotContain("handler=Confirm", transcript, StringComparison.Ordinal);
+
+        // Real submit buttons in a form, not links: nothing state-changing is reachable by GET.
+        Assert.Contains("<button type=\"submit\"", html, StringComparison.Ordinal);
     }
 
     /// <summary>
-    /// Send is the only write this page has. Confirm and Dismiss belong to Slice 5, and until they
-    /// exist there must be no handler that could decide a proposal — a control that appears before
-    /// the transaction behind it is how a proposal gets confirmed without its gates.
+    /// Exactly three writes exist on this page, and no more. A fourth handler is a fourth thing a
+    /// conversation could drive, which is the surface this feature is deliberately keeping small.
     /// </summary>
     [Fact]
-    public async Task Send_is_the_only_post_handler()
+    public async Task The_page_has_exactly_three_post_handlers()
     {
         var handlers = typeof(FamiliarModel)
             .GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly)
@@ -295,7 +301,7 @@ public sealed class FamiliarPageTests(FindFamiliarWebApplicationFactory factory)
             .OrderBy(name => name, StringComparer.Ordinal)
             .ToList();
 
-        Assert.Equal(["OnPostSendAsync"], handlers);
+        Assert.Equal(["OnPostConfirmAsync", "OnPostDismissAsync", "OnPostSendAsync"], handlers);
 
         var project = await SeedProjectAsync();
         var task = await SeedTaskAsync(project.Id, $"Token source {Guid.NewGuid():N}");
@@ -515,6 +521,167 @@ public sealed class FamiliarPageTests(FindFamiliarWebApplicationFactory factory)
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
     }
 
+    /// <summary>Confirm and Dismiss are guarded exactly as Send is, and change nothing without a token.</summary>
+    [Theory]
+    [InlineData("Confirm")]
+    [InlineData("Dismiss")]
+    public async Task Deciding_a_proposal_requires_an_antiforgery_token(string handler)
+    {
+        var project = await SeedProjectAsync();
+        var proposal = await SeedPendingProposalAsync(project.Id);
+        var before = await CaptureAsync(project.Id);
+
+        using var raw = factory.CreateClient(new() { AllowAutoRedirect = false });
+
+        var response = await raw.PostAsync(
+            $"/Familiar/{project.Id}?handler={handler}",
+            new FormUrlEncodedContent(new Dictionary<string, string>
+            {
+                ["Decision.ProposalId"] = proposal.Id.ToString(),
+                ["Decision.ExpectedConcurrencyToken"] = proposal.ConcurrencyToken.ToString()
+            }));
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Equal(before, await CaptureAsync(project.Id));
+    }
+
+    /// <summary>
+    /// Confirming through the real page creates exactly one task, and the proposal carries a durable
+    /// link to it.
+    /// </summary>
+    [Fact]
+    public async Task Confirming_from_the_page_creates_exactly_one_task()
+    {
+        var project = await SeedProjectAsync();
+        var proposal = await SeedPendingProposalAsync(project.Id);
+
+        var afClient = new AntiforgeryHttpClient(factory.CreateClient(new() { AllowAutoRedirect = false }));
+        var (_, html) = await afClient.GetPageAsync($"/Familiar/{project.Id}");
+        var token = AntiforgeryHttpClient.ExtractAntiforgeryToken(html);
+
+        var fields = new List<KeyValuePair<string, string>>
+        {
+            new("Decision.ProposalId", proposal.Id.ToString()),
+            new("Decision.ExpectedConcurrencyToken", proposal.ConcurrencyToken.ToString()),
+            new("Decision.Title", "A confirmed task"),
+            new("Decision.RequestedOutcome", "A confirmed outcome.")
+        };
+
+        var first = await afClient.PostFormAsync($"/Familiar/{project.Id}?handler=Confirm", token, fields);
+        Assert.Equal(HttpStatusCode.Redirect, first.StatusCode);
+
+        // A double submit — the classic double-click — must still produce one task.
+        var replay = await afClient.PostFormAsync($"/Familiar/{project.Id}?handler=Confirm", token, fields);
+        Assert.Equal(HttpStatusCode.Redirect, replay.StatusCode);
+
+        using var scope = factory.Services.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<FamiliarDbContext>();
+
+        var tasks = await dbContext.Tasks.AsNoTracking()
+            .Where(task => task.ProjectId == project.Id).ToListAsync();
+        Assert.Single(tasks);
+        Assert.Equal("A confirmed task", tasks[0].Title);
+
+        var stored = await dbContext.FamiliarActionProposals.AsNoTracking().SingleAsync(p => p.Id == proposal.Id);
+        Assert.Equal(FamiliarActionStatus.Confirmed, stored.Status);
+        Assert.Equal(tasks[0].Id, stored.CreatedTaskId);
+    }
+
+    /// <summary>
+    /// The model-binding boundary. A crafted post naming another project's proposal, or trying to
+    /// set the kind, the target task or a created id, changes nothing — those are read server-side.
+    /// </summary>
+    [Fact]
+    public async Task A_crafted_decision_cannot_retarget_a_proposal()
+    {
+        var mine = await SeedProjectAsync();
+        var theirs = await SeedProjectAsync();
+        var theirProposal = await SeedPendingProposalAsync(theirs.Id);
+
+        var before = await CaptureAsync(theirs.Id);
+
+        var afClient = new AntiforgeryHttpClient(factory.CreateClient(new() { AllowAutoRedirect = false }));
+        var (_, html) = await afClient.GetPageAsync($"/Familiar/{mine.Id}");
+
+        // Confirming another project's proposal from this project's page.
+        var response = await afClient.PostFormAsync(
+            $"/Familiar/{mine.Id}?handler=Confirm",
+            AntiforgeryHttpClient.ExtractAntiforgeryToken(html),
+            [
+                new("Decision.ProposalId", theirProposal.Id.ToString()),
+                new("Decision.ExpectedConcurrencyToken", theirProposal.ConcurrencyToken.ToString()),
+                // Fields that are not bound at all — the page reads these from the row.
+                new("Decision.Kind", "StartPlanner"),
+                new("Decision.ProjectId", mine.Id.ToString()),
+                new("Decision.TargetTaskId", Guid.NewGuid().ToString()),
+                new("Decision.Status", "Confirmed"),
+                new("Decision.CreatedTaskId", Guid.NewGuid().ToString())
+            ]);
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        Assert.Equal(before, await CaptureAsync(theirs.Id));
+
+        using var scope = factory.Services.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<FamiliarDbContext>();
+
+        var stored = await dbContext.FamiliarActionProposals.AsNoTracking()
+            .SingleAsync(p => p.Id == theirProposal.Id);
+        Assert.Equal(FamiliarActionStatus.Pending, stored.Status);
+        Assert.Equal(FamiliarActionKind.CreateTask, stored.Kind);
+        Assert.Equal(theirs.Id, stored.ProjectId);
+        Assert.Null(stored.TargetTaskId);
+    }
+
+    [Fact]
+    public async Task Dismissing_from_the_page_creates_nothing()
+    {
+        var project = await SeedProjectAsync();
+        var proposal = await SeedPendingProposalAsync(project.Id);
+
+        var afClient = new AntiforgeryHttpClient(factory.CreateClient(new() { AllowAutoRedirect = false }));
+        var (_, html) = await afClient.GetPageAsync($"/Familiar/{project.Id}");
+
+        var response = await afClient.PostFormAsync(
+            $"/Familiar/{project.Id}?handler=Dismiss",
+            AntiforgeryHttpClient.ExtractAntiforgeryToken(html),
+            [
+                new("Decision.ProposalId", proposal.Id.ToString()),
+                new("Decision.ExpectedConcurrencyToken", proposal.ConcurrencyToken.ToString())
+            ]);
+
+        Assert.Equal(HttpStatusCode.Redirect, response.StatusCode);
+
+        using var scope = factory.Services.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<FamiliarDbContext>();
+
+        Assert.Empty(await dbContext.Tasks.AsNoTracking().Where(t => t.ProjectId == project.Id).ToListAsync());
+        Assert.Equal(
+            FamiliarActionStatus.Dismissed,
+            (await dbContext.FamiliarActionProposals.AsNoTracking().SingleAsync(p => p.Id == proposal.Id)).Status);
+    }
+
+    /// <summary>
+    /// Staleness is derived at render time: a CreateTask proposal whose project moved shows the
+    /// reason instead of a Confirm button, and Dismiss is still offered.
+    /// </summary>
+    [Fact]
+    public async Task A_stale_proposal_shows_the_reason_instead_of_confirm()
+    {
+        var project = await SeedProjectAsync();
+        await SeedPendingProposalAsync(project.Id);
+
+        // Anything at all moves the project's revision.
+        await SeedTaskAsync(project.Id, $"Mover {Guid.NewGuid():N}");
+        await BumpRevisionAsync(project.Id);
+
+        using var client = factory.CreateClient();
+        var html = await client.GetStringAsync($"/Familiar/{project.Id}");
+
+        Assert.Contains("The project&#x27;s context changed after this was proposed", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("handler=Confirm", html, StringComparison.Ordinal);
+        Assert.Contains("handler=Dismiss", html, StringComparison.Ordinal);
+    }
+
     // ---------------------------------------------------------------- helpers
 
     /// <summary>Everything about this project that a read must leave exactly as it found it.</summary>
@@ -551,6 +718,75 @@ public sealed class FamiliarPageTests(FindFamiliarWebApplicationFactory factory)
         };
 
         return string.Join("; ", counts);
+    }
+
+    /// <summary>
+    /// Seeds a conversation carrying one Pending CreateTask proposal, observed at the project's
+    /// current revision so it is confirmable until something moves the project.
+    /// </summary>
+    private async Task<FamiliarActionProposal> SeedPendingProposalAsync(Guid projectId)
+    {
+        using var scope = factory.Services.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<FamiliarDbContext>();
+
+        var now = DateTime.UtcNow;
+
+        var conversation = new FamiliarConversation
+        {
+            Id = Guid.NewGuid(),
+            ProjectId = projectId,
+            CreatedUtc = now,
+            UpdatedUtc = now
+        };
+
+        var message = new FamiliarMessage
+        {
+            Id = Guid.NewGuid(),
+            ConversationId = conversation.Id,
+            Author = FamiliarMessageAuthor.Familiar,
+            Sequence = 1,
+            Content = "I could create a task for that.",
+            CreatedUtc = now,
+            ProviderName = "Fake",
+            ProviderModel = "fake-model-1",
+            Delivery = FamiliarMessageDelivery.Delivered
+        };
+
+        var revision = await dbContext.Projects.AsNoTracking()
+            .Where(project => project.Id == projectId)
+            .Select(project => project.ContextRevision)
+            .SingleAsync();
+
+        var proposal = new FamiliarActionProposal
+        {
+            Id = Guid.NewGuid(),
+            ConversationId = conversation.Id,
+            ProjectId = projectId,
+            MessageId = message.Id,
+            Kind = FamiliarActionKind.CreateTask,
+            Status = FamiliarActionStatus.Pending,
+            ConcurrencyToken = Guid.NewGuid(),
+            ObservedContextRevision = revision,
+            Title = "A proposed task",
+            RequestedOutcome = "A proposed outcome.",
+            CreatedUtc = now,
+            UpdatedUtc = now
+        };
+
+        dbContext.AddRange(conversation, message, proposal);
+        await dbContext.SaveChangesAsync();
+        return proposal;
+    }
+
+    /// <summary>Advances the project's context revision, as any real mutation would.</summary>
+    private async Task BumpRevisionAsync(Guid projectId)
+    {
+        using var scope = factory.Services.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<FamiliarDbContext>();
+
+        var project = await dbContext.Projects.SingleAsync(candidate => candidate.Id == projectId);
+        project.IncrementContextRevision();
+        await dbContext.SaveChangesAsync();
     }
 
     private async Task<FamiliarProject> SeedProjectAsync(ProjectStatus status = ProjectStatus.Active)
