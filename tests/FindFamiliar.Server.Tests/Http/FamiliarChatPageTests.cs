@@ -404,14 +404,17 @@ public sealed class FamiliarChatPageTests(FindFamiliarWebApplicationFactory fact
         var project = await SeedProjectAsync();
         var chatId = await StartConversationAsync("plan the next sprint");
 
-        await DraftPlanAsync(chatId, project.Id);
+        var planId = await DraftPlanAsync(chatId, project.Id);
 
         using var scope = factory.Services.CreateScope();
         var dbContext = scope.ServiceProvider.GetRequiredService<FamiliarDbContext>();
 
         Assert.Empty(await dbContext.Tasks.AsNoTracking().Where(task => task.ProjectId == project.Id).ToListAsync());
+
+        // Scoped to this plan: these tests share a database and others approve their plans, so an
+        // assertion over every item in it would be about the suite rather than about drafting.
         Assert.All(
-            await dbContext.FamiliarPlanItems.AsNoTracking().ToListAsync(),
+            await dbContext.FamiliarPlanItems.AsNoTracking().Where(item => item.PlanId == planId).ToListAsync(),
             item => Assert.Null(item.CreatedTaskId));
     }
 
@@ -777,6 +780,136 @@ public sealed class FamiliarChatPageTests(FindFamiliarWebApplicationFactory fact
         await dbContext.SaveChangesAsync();
 
         return (task.Id, handoff.Id);
+    }
+
+    /// <summary>
+    /// The plan is approved by submitting the form the page actually rendered, field for field,
+    /// exactly as a browser would.
+    ///
+    /// This exists because every other test here built its own field dictionary and posted a single
+    /// <c>IsIncluded=true</c> — a shape no browser sends. The real form posts a checkbox and a hidden
+    /// field under one name, and the binder takes the first value; with the hidden written first,
+    /// every item bound false however it was ticked, and approving always refused with "every item was
+    /// excluded". Every service test passed throughout, because none of them went through form
+    /// binding. Building the post from the rendered HTML is the only version of this test that could
+    /// have caught it.
+    /// </summary>
+    [Fact]
+    public async Task The_rendered_form_approves_the_plan_as_a_browser_submits_it()
+    {
+        var project = await SeedProjectAsync();
+        var chatId = await StartConversationAsync("plan the next sprint");
+        var planId = await DraftPlanAsync(chatId, project.Id);
+
+        var client = new AntiforgeryHttpClient(factory.CreateClient(
+            new Microsoft.AspNetCore.Mvc.Testing.WebApplicationFactoryClientOptions { AllowAutoRedirect = false }));
+
+        var (_, html) = await client.GetPageAsync($"/Familiar/Chat/{chatId}");
+
+        var response = await client.PostFormAsync(
+            $"/Familiar/Chat/{chatId}?handler=DecidePlan",
+            AntiforgeryHttpClient.ExtractAntiforgeryToken(html),
+            SubmitPlanForm(html, approve: true));
+
+        Assert.Equal(HttpStatusCode.Redirect, response.StatusCode);
+
+        using var scope = factory.Services.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<FamiliarDbContext>();
+
+        Assert.Equal(
+            FamiliarPlanStatus.Approved,
+            (await dbContext.FamiliarPlanProposals.AsNoTracking().SingleAsync(plan => plan.Id == planId)).Status);
+
+        Assert.Equal(2, await dbContext.Tasks.AsNoTracking().CountAsync(task => task.ProjectId == project.Id));
+    }
+
+    /// <summary>
+    /// Clearing an item's checkbox excludes it — the control doing what it says. A browser posts only
+    /// the hidden false for a cleared box, which is the case the ordering above exists to serve.
+    /// </summary>
+    [Fact]
+    public async Task Clearing_an_items_checkbox_excludes_only_that_item()
+    {
+        var project = await SeedProjectAsync();
+        var chatId = await StartConversationAsync("plan the next sprint");
+        var planId = await DraftPlanAsync(chatId, project.Id);
+
+        var client = new AntiforgeryHttpClient(factory.CreateClient(
+            new Microsoft.AspNetCore.Mvc.Testing.WebApplicationFactoryClientOptions { AllowAutoRedirect = false }));
+
+        var (_, html) = await client.GetPageAsync($"/Familiar/Chat/{chatId}");
+
+        // Item 0's checkbox cleared: a browser drops it and posts only its hidden false.
+        var fields = SubmitPlanForm(html, approve: true)
+            .Where(field => !(field.Key == "Items[0].IsIncluded" && field.Value == "true"))
+            .ToList();
+
+        await client.PostFormAsync(
+            $"/Familiar/Chat/{chatId}?handler=DecidePlan",
+            AntiforgeryHttpClient.ExtractAntiforgeryToken(html),
+            fields);
+
+        using var scope = factory.Services.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<FamiliarDbContext>();
+
+        var items = await dbContext.FamiliarPlanItems.AsNoTracking()
+            .Where(item => item.PlanId == planId)
+            .OrderBy(item => item.Position)
+            .ToListAsync();
+
+        Assert.False(items[0].IsIncluded);
+        Assert.Null(items[0].CreatedTaskId);
+        Assert.True(items[1].IsIncluded);
+        Assert.NotNull(items[1].CreatedTaskId);
+
+        // The excluded item named the session, so nothing started.
+        Assert.Empty(await dbContext.AgentSessions.AsNoTracking()
+            .Where(session => session.Task.ProjectId == project.Id)
+            .ToListAsync());
+    }
+
+    /// <summary>
+    /// Every field of the rendered plan form, in document order, the way a browser serialises it: a
+    /// checkbox contributes its value only when checked, and both names under one key are kept in the
+    /// order they appear.
+    /// </summary>
+    private static List<KeyValuePair<string, string>> SubmitPlanForm(string html, bool approve)
+    {
+        var start = html.IndexOf("handler=DecidePlan", StringComparison.Ordinal);
+        Assert.True(start >= 0, "The plan form did not render.");
+
+        var form = html[start..html.IndexOf("</form>", start, StringComparison.Ordinal)];
+        var fields = new List<KeyValuePair<string, string>>();
+
+        foreach (System.Text.RegularExpressions.Match tag in
+                 System.Text.RegularExpressions.Regex.Matches(form, "<input[^>]*>"))
+        {
+            var name = System.Text.RegularExpressions.Regex.Match(tag.Value, "name=\"([^\"]+)\"");
+            var value = System.Text.RegularExpressions.Regex.Match(tag.Value, "value=\"([^\"]*)\"");
+
+            if (!name.Success
+                || name.Groups[1].Value == "__RequestVerificationToken"
+                || (tag.Value.Contains("type=\"checkbox\"", StringComparison.Ordinal)
+                    && !tag.Value.Contains("checked", StringComparison.Ordinal)))
+            {
+                continue;
+            }
+
+            fields.Add(new(name.Groups[1].Value, System.Net.WebUtility.HtmlDecode(value.Groups[1].Value)));
+        }
+
+        foreach (System.Text.RegularExpressions.Match area in
+                 System.Text.RegularExpressions.Regex.Matches(
+                     form, "<textarea[^>]*name=\"([^\"]+)\"[^>]*>(.*?)</textarea>",
+                     System.Text.RegularExpressions.RegexOptions.Singleline))
+        {
+            fields.Add(new(area.Groups[1].Value, System.Net.WebUtility.HtmlDecode(area.Groups[2].Value)));
+        }
+
+        // The submit button that was pressed, which is how the handler learns which one it was.
+        fields.Add(new("Approve", approve ? "true" : "false"));
+
+        return fields;
     }
 
     private static string ReadPlanToken(string html)

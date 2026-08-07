@@ -225,12 +225,18 @@ else
                                                     @if (plan.IsPending)
                                                     {
                                                         <label class="familiar-plan-include">
-                                                            @* The unchecked value is posted by the hidden field beside it,
-                                                               because a cleared checkbox posts nothing at all and would
-                                                               otherwise read as "left alone" rather than "excluded". *@
-                                                            <input type="hidden" name="Items[@index].IsIncluded" value="false" />
+                                                            @* A cleared checkbox posts nothing at all, which would read as
+                                                               "left alone" rather than "excluded", so a hidden field carries
+                                                               the false.
+
+                                                               The hidden goes AFTER the checkbox and the order is the whole
+                                                               point: both names post, and the model binder takes the first
+                                                               value. With the hidden first, every item bound false however it
+                                                               was ticked — the include control silently did nothing, and
+                                                               approving always refused with "every item was excluded". *@
                                                             <input type="checkbox" name="Items[@index].IsIncluded" value="true"
                                                                    checked="@item.IsIncluded" />
+                                                            <input type="hidden" name="Items[@index].IsIncluded" value="false" />
                                                             <span>Include</span>
                                                         </label>
 
