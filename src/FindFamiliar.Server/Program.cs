@@ -1,6 +1,7 @@
 using System.Text.Json.Serialization;
 using FindFamiliar.Server.Api.Familiar;
 using FindFamiliar.Server.Api.Gateway;
+using FindFamiliar.Server.Api.Gateway.OAuth;
 using FindFamiliar.Server.Api.Repository;
 using FindFamiliar.Server.Api.Runner;
 using FindFamiliar.Server.Data;
@@ -251,6 +252,13 @@ builder.Services.Configure<FamiliarGatewayOptions>(
     builder.Configuration.GetSection(FamiliarGatewayOptions.SectionName));
 builder.Services.AddScoped<IFamiliarGateway, FamiliarGateway>();
 
+// The authorization server behind the gate (ADR-0017). Singletons because both are stateless but for
+// one short-lived set of spent identifiers, which must be shared across requests to mean anything.
+// Registered unconditionally; whether any OAuth route exists is decided by MapFamiliarOAuthEndpoints,
+// and the filter consults these only when a public base URL has actually been configured.
+builder.Services.AddSingleton<FamiliarOAuthArtifacts>();
+builder.Services.AddSingleton<FamiliarOAuthReplayGuard>();
+
 // Registered unconditionally so the tool surface is identical whether or not this deployment has
 // turned the gate on; whether anything is reachable is decided by MapMcp and MapFamiliarGateway
 // below, and by the filter in front of both.
@@ -358,6 +366,11 @@ app.MapRepositorySnapshotEndpoints();
 // 404 is a more honest answer than a 401 about a gate that is not there.
 app.MapFamiliarGatewayEndpoints();
 app.MapFamiliarMcpEndpoint();
+
+// The OAuth surface is unauthenticated by necessity — discovery, registration and the consent screen
+// are what a client reaches before it has any credential — so it is mapped separately and holds no
+// Familiar data of its own. It is not mapped at all unless FamiliarGateway__PublicBaseUrl is set.
+app.MapFamiliarOAuthEndpoints();
 
 app.Run();
 

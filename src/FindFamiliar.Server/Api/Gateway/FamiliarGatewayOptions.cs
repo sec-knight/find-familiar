@@ -51,4 +51,88 @@ public sealed class FamiliarGatewayOptions
         Enabled
         && !string.IsNullOrWhiteSpace(Token)
         && Token.Trim().Length >= MinimumTokenLength;
+
+    // ------------------------------------------------------------------ OAuth (Sprint 14.1)
+
+    /// <summary>
+    /// The origin this deployment is reachable at from the public internet — for example
+    /// <c>https://familiar.taila1d25f.ts.net</c>. Scheme and host only; no path, no trailing slash.
+    ///
+    /// <b>Configured, never inferred from the request.</b> Every OAuth document this server publishes
+    /// contains absolute URLs, and deriving them from the <c>Host</c> header would let anyone who can
+    /// reach the server rewrite its issuer, its token endpoint and its audience by sending a header.
+    /// That is host-header injection with an authorization server on the end of it. One env line is
+    /// cheaper than the class of bug.
+    ///
+    /// Unset means no OAuth. The static bearer token continues to work and the discovery documents are
+    /// not mapped at all, so a deployment that has not opted in has no OAuth surface to probe.
+    /// </summary>
+    public string? PublicBaseUrl { get; set; }
+
+    /// <summary>
+    /// How long an issued access token is good for. Short by intent: the MCP authorization spec asks
+    /// for short-lived access tokens precisely because they travel to a vendor's servers, and a
+    /// refresh token exists so that shortness costs the user nothing.
+    /// </summary>
+    public int AccessTokenLifetimeSeconds { get; set; } = 3600;
+
+    /// <summary>How long a refresh token is good for, in days. Rotated on every use.</summary>
+    public int RefreshTokenLifetimeDays { get; set; } = 30;
+
+    /// <summary>
+    /// Hosts a client may register a redirect URI on, comma-separated. Suffix-matched, so
+    /// <c>chatgpt.com</c> also admits <c>sub.chatgpt.com</c> but never <c>notchatgpt.com</c>.
+    ///
+    /// <b>This is the open-redirection control.</b> Dynamic client registration means an unauthenticated
+    /// caller chooses where the authorization code is delivered; without an allowlist, "anywhere" is
+    /// the answer, and the user's own approval would be what hands a code to an attacker's host. The
+    /// default is the vendor this gate was opened for, plus loopback for local testing.
+    /// </summary>
+    public string AllowedRedirectHosts { get; set; } = "chatgpt.com,chat.openai.com,openai.com";
+
+    /// <summary>The one scope this Familiar issues. There is exactly one thing to grant: reading.</summary>
+    public const string ReadScope = "familiar.read";
+
+    /// <summary>
+    /// The issuer, or null when this deployment has not opted into OAuth or configured it wrongly.
+    /// Validated rather than trusted: an absolute https origin with no path, no query, no fragment.
+    /// Loopback over http is admitted so the flow can be exercised on the machine itself.
+    /// </summary>
+    public string? ResolvedIssuer
+    {
+        get
+        {
+            if (!IsConfigured() || string.IsNullOrWhiteSpace(PublicBaseUrl))
+            {
+                return null;
+            }
+
+            if (!Uri.TryCreate(PublicBaseUrl.Trim().TrimEnd('/'), UriKind.Absolute, out var uri))
+            {
+                return null;
+            }
+
+            var secure = uri.Scheme == Uri.UriSchemeHttps || uri.IsLoopback;
+
+            return secure && uri.AbsolutePath == "/" && string.IsNullOrEmpty(uri.Query) && string.IsNullOrEmpty(uri.Fragment)
+                ? uri.GetLeftPart(UriPartial.Authority)
+                : null;
+        }
+    }
+
+    /// <summary>
+    /// The canonical resource identifier of this MCP server (RFC 8707 / RFC 9728) — the issuer plus the
+    /// MCP route, with no trailing slash. This is the audience every access token is bound to and the
+    /// value a token is checked against, so a token minted for some other resource cannot be spent here.
+    /// </summary>
+    public string? ResolvedResource =>
+        ResolvedIssuer is { } issuer ? issuer + FamiliarMcpEndpoint.Route : null;
+
+    public bool IsOAuthConfigured() => ResolvedIssuer is not null;
+
+    public IReadOnlyList<string> ResolvedAllowedRedirectHosts =>
+        (AllowedRedirectHosts ?? string.Empty)
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(host => host.ToLowerInvariant())
+            .ToList();
 }

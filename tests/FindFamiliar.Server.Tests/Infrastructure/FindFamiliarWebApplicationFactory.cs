@@ -29,6 +29,15 @@ public sealed class FindFamiliarWebApplicationFactory : WebApplicationFactory<Pr
     private const string GatewayEnabledVariable = "FamiliarGateway__Enabled";
     private const string GatewayTokenVariable = "FamiliarGateway__Token";
     private const string GatewayIdentityNameVariable = "Familiar__Identity__Name";
+    private const string GatewayPublicBaseUrlVariable = "FamiliarGateway__PublicBaseUrl";
+
+    /// <summary>
+    /// The origin the test host publishes in its OAuth documents. A real-looking https origin rather
+    /// than the loopback address the test client actually calls, because the property worth asserting
+    /// is that every advertised URL is built from configuration — a fixture that used the request's own
+    /// host would let a host-header-derived implementation pass.
+    /// </summary>
+    public const string GatewayTestPublicBaseUrl = "https://familiar.test";
 
     /// <summary>
     /// Obviously-fake configured runner bridge credential, used only by tests. Never a real
@@ -58,6 +67,7 @@ public sealed class FindFamiliarWebApplicationFactory : WebApplicationFactory<Pr
     private readonly string? _previousGatewayEnabled;
     private readonly string? _previousGatewayToken;
     private readonly string? _previousGatewayIdentityName;
+    private readonly string? _previousGatewayPublicBaseUrl;
 
     public string TempDirectory { get; }
 
@@ -82,6 +92,7 @@ public sealed class FindFamiliarWebApplicationFactory : WebApplicationFactory<Pr
         _previousGatewayEnabled = Environment.GetEnvironmentVariable(GatewayEnabledVariable);
         _previousGatewayToken = Environment.GetEnvironmentVariable(GatewayTokenVariable);
         _previousGatewayIdentityName = Environment.GetEnvironmentVariable(GatewayIdentityNameVariable);
+        _previousGatewayPublicBaseUrl = Environment.GetEnvironmentVariable(GatewayPublicBaseUrlVariable);
 
         // The Summoning Gate is on for the test host, because the properties worth protecting are
         // about what it refuses, and a gate that is not mapped refuses everything for the wrong
@@ -89,6 +100,7 @@ public sealed class FindFamiliarWebApplicationFactory : WebApplicationFactory<Pr
         Environment.SetEnvironmentVariable(GatewayEnabledVariable, "true");
         Environment.SetEnvironmentVariable(GatewayTokenVariable, GatewayTestToken);
         Environment.SetEnvironmentVariable(GatewayIdentityNameVariable, GatewayTestIdentityName);
+        Environment.SetEnvironmentVariable(GatewayPublicBaseUrlVariable, GatewayTestPublicBaseUrl);
 
         Environment.SetEnvironmentVariable(DataDirectoryVariable, TempDirectory);
         Environment.SetEnvironmentVariable(
@@ -125,6 +137,7 @@ public sealed class FindFamiliarWebApplicationFactory : WebApplicationFactory<Pr
         Environment.SetEnvironmentVariable(GatewayEnabledVariable, _previousGatewayEnabled);
         Environment.SetEnvironmentVariable(GatewayTokenVariable, _previousGatewayToken);
         Environment.SetEnvironmentVariable(GatewayIdentityNameVariable, _previousGatewayIdentityName);
+        Environment.SetEnvironmentVariable(GatewayPublicBaseUrlVariable, _previousGatewayPublicBaseUrl);
 
         // base.Dispose above tears down the host (and with it the DbContext pool); the shared
         // helper then releases SQLite's pooled handles before deleting, so a Windows teardown

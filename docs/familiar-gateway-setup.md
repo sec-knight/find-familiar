@@ -68,7 +68,9 @@ Requirements the server enforces:
 
 1. Generate a new value and replace `FamiliarGateway__Token` in the secrets file.
 2. `systemctl --user restart familiar-server.service`.
-3. Update the connector in ChatGPT (§6) with the new value.
+3. Reconnect the connector in ChatGPT (§7). Rotation also invalidates every OAuth token this server
+   has issued, because their signing key is derived from this secret — so an OAuth connector must be
+   re-approved, not merely edited.
 
 There is no grace period and no second accepted token: rotation is immediate, and any connected
 client stops working until it is updated. That is intentional for a one-user deployment — a
@@ -126,30 +128,104 @@ list with no explanation will fill the silence from general knowledge.
 
 ## 5. Network exposure — read before changing anything
 
-**The server currently listens on `127.0.0.1:5199` and the tailnet address only.** ChatGPT's servers
-call your MCP endpoint from the public internet, so they cannot reach it as it stands.
+The server listens on `127.0.0.1:5199` and the tailnet address only. ChatGPT's servers call from the
+public internet, so reaching them means publishing something — and publishing the Kestrel application
+would publish `/Familiar`, `/Demiplane` and `/api/runner` along with it.
 
-**No networking change has been made, and none should be made without deciding this deliberately.**
-See the decision package in the Sprint 14 report: Tailscale Funnel, a Cloudflare Tunnel, and a
-reverse proxy have materially different exposure profiles. Whichever is chosen:
+**The exposure is path-scoped, not host-scoped.** Tailscale Funnel's `--set-path` mounts individual
+paths; anything not mounted is answered by tailscaled with a 404 and never reaches Kestrel. Each of
+the following is its own mount, and each one is required:
 
-- Terminate TLS. ChatGPT requires HTTPS; the bearer token is in a header and must not cross the
-  internet in clear text.
-- Expose **only** `/mcp`. Nothing else on this server — not `/Demiplane`, not `/Familiar`, not
-  `/api/runner` — should become publicly reachable.
-- Keep the existing Tailscale posture for everything else.
+```bash
+# Requires root. The MCP endpoint itself:
+sudo tailscale funnel --bg --yes --set-path=/mcp http://127.0.0.1:5199/mcp
 
-## 6. Connect it in ChatGPT
+# OAuth discovery. Prefix mounts, so each also covers its /mcp path-inserted form:
+sudo tailscale funnel --bg --yes \
+  --set-path=/.well-known/oauth-protected-resource \
+  http://127.0.0.1:5199/.well-known/oauth-protected-resource
+sudo tailscale funnel --bg --yes \
+  --set-path=/.well-known/oauth-authorization-server \
+  http://127.0.0.1:5199/.well-known/oauth-authorization-server
+
+# OAuth registration, consent and tokens:
+sudo tailscale funnel --bg --yes --set-path=/oauth/register  http://127.0.0.1:5199/oauth/register
+sudo tailscale funnel --bg --yes --set-path=/oauth/authorize http://127.0.0.1:5199/oauth/authorize
+sudo tailscale funnel --bg --yes --set-path=/oauth/token     http://127.0.0.1:5199/oauth/token
+```
+
+Check what is actually published with `tailscale funnel status`, and confirm the boundary holds:
+
+```bash
+# Each must be 404 from tailscaled, with and without a token
+for p in / /health /Familiar /api/runner /api/gateway/manifest /Demiplane; do
+  printf '%-26s %s\n' "$p" "$(curl -s -o /dev/null -w '%{http_code}' https://your-host.ts.net$p)"
+done
+```
+
+**Never use bare `tailscale funnel 5199`.** It publishes the entire application.
+
+The REST adapter (`/api/gateway/*`) is deliberately not published. It exists to make the gateway
+verifiable with `curl` from the tailnet and has no reason to be reachable from outside.
+
+To close everything: `sudo tailscale funnel reset`.
+
+## 6. OAuth (Sprint 14.1)
+
+The static bearer token still works and is still how you verify locally. What OAuth adds is a way for
+a client that speaks the MCP authorization specification — ChatGPT's connector flow among them — to
+obtain a token for itself, so the gateway secret never has to be typed into a vendor's form.
+
+The reasoning is in [ADR-0017](decisions/ADR-0017-oauth-for-the-summoning-gate.md). One setting turns
+it on:
+
+```ini
+# /srv/familiar/config/familiar-server.env
+# Scheme and host only. No path, no trailing slash. Never inferred from the request.
+FamiliarGateway__PublicBaseUrl=https://familiar.example.ts.net
+```
+
+Unset means no OAuth routes are mapped at all. Restart the server after setting it.
+
+Optional, with sensible defaults:
+
+| Setting | Meaning | Default |
+|---|---|---|
+| `FamiliarGateway__AccessTokenLifetimeSeconds` | How long an access token lives | `3600` |
+| `FamiliarGateway__RefreshTokenLifetimeDays` | How long a refresh token lives | `30` |
+| `FamiliarGateway__AllowedRedirectHosts` | Hosts a client may register a callback on | `chatgpt.com,chat.openai.com,openai.com` |
+
+`AllowedRedirectHosts` is the open-redirection control. Dynamic client registration lets an
+unauthenticated caller nominate where an authorization code is delivered; this is what stops that
+being anywhere. Widen it only for a host you intend to hand your context to.
+
+### What the flow looks like
+
+1. ChatGPT fetches `/.well-known/oauth-protected-resource/mcp` (or is pointed at it by the
+   `WWW-Authenticate` header on a 401 from `/mcp`).
+2. It fetches `/.well-known/oauth-authorization-server` and registers itself at `/oauth/register`.
+3. It opens `/oauth/authorize` in your browser. **You paste the gateway token into the consent
+   screen** — that is the one moment the secret is used, and it goes to this server, not to ChatGPT.
+4. It exchanges the code at `/oauth/token` with PKCE, and gets an access token bound to this server
+   as its audience.
+
+Rotating `FamiliarGateway__Token` invalidates every issued token immediately, because the key that
+signs them is derived from it. There is no separate revocation step.
+
+## 7. Connect it in ChatGPT
 
 Requires ChatGPT Pro, Team, Enterprise or Edu, and Developer Mode.
 
 1. **Settings → Connectors → Advanced → Developer mode**, and turn it on.
-2. **Settings → Connectors → Create**.
+2. **Settings → Connectors → Create** (or **Plugins → Add plugin → Custom MCP Server**).
 3. Name it (for example `Sakura`), and set the MCP server URL to your public HTTPS endpoint ending in
    `/mcp` — e.g. `https://familiar.example.ts.net/mcp`.
-4. Choose authentication and supply the gateway token as a bearer token.
-5. Save, then confirm the connector lists four tools.
-6. In a new chat, enable the connector for that conversation.
+4. Choose **OAuth** as the authentication type. Leave client ID and secret blank: this server
+   supports dynamic client registration, so ChatGPT registers itself. If the form insists on a bearer
+   token instead, the static gateway token still works.
+5. ChatGPT opens the consent screen. Paste the gateway token there and approve.
+6. Confirm the connector lists four tools.
+7. In a new chat, enable the connector for that conversation.
 
 ### The acceptance phrase
 
@@ -168,7 +244,7 @@ compel it.
 - **At the server, authoritatively:** set `FamiliarGateway__Enabled=false` and restart. This is the
   only one that does not depend on the vendor honouring anything.
 
-## 7. Limitations
+## 8. Limitations
 
 - **Read and fetch only.** No write-back memory, no action execution, no task creation, no session
   start. ChatGPT Pro does not currently support MCP writes, and this server would refuse them if it
@@ -183,5 +259,10 @@ compel it.
   without being recorded is invisible, and an external model should be told to say so.
 - **Repository awareness is a listing, not the code.** The snapshot carries branch, head, recent
   commit subjects and tracked paths — never file contents or diffs.
-- **One token, all-or-nothing.** Anyone holding the gateway token can read everything non-sensitive.
-  There is no partial grant; that needs OAuth, and ADR-0016 records when it becomes worth it.
+- **Still all-or-nothing.** OAuth added a standards-compliant way to obtain a credential; it did not
+  add partial grants. There is one scope, `familiar.read`, and anyone holding either credential can
+  read everything non-sensitive. Splitting it needs a reason to, and ADR-0017 records that none exists
+  while there is one user and one client.
+- **A restart forgets spent refresh tokens.** Replay protection is in memory, so a refresh token
+  captured before a restart could be redeemed once after it. ADR-0017 §4 records why that trade is
+  taken and what would reverse it.
