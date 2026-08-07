@@ -1157,3 +1157,43 @@ h2 {
 .familiar-plan-field textarea {
   resize: vertical;
 }
+
+/* What is waiting on a human, above the transcript. Bordered and prominent without being alarming:
+   these are ordinary steps in a working loop, not incidents, and styling them as alerts would train
+   a reader to clear them rather than read them. */
+.familiar-decisions {
+  margin-bottom: clamp(2rem, 4vw, 3rem);
+  padding: 1.25rem;
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--warning);
+  border-radius: 1rem;
+  background: var(--surface);
+}
+
+.familiar-decision-list {
+  display: grid;
+  gap: 1rem;
+  margin: 0;
+  padding-left: 1.25rem;
+}
+
+.familiar-decision-title {
+  margin: 0;
+  font-weight: 650;
+}
+
+.familiar-decision-project {
+  color: var(--text-secondary);
+  font-weight: 400;
+}
+
+.familiar-decision-meta {
+  margin: 0.25rem 0 0;
+  color: var(--text-secondary);
+  font-size: 0.9375rem;
+}
+
+.familiar-decision-consequence {
+  margin: 0.375rem 0 0.625rem;
+  font-size: 0.9375rem;
+}

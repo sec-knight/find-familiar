@@ -550,6 +550,235 @@ public sealed class FamiliarChatPageTests(FindFamiliarWebApplicationFactory fact
         Assert.Empty(await dbContext.Tasks.AsNoTracking().Where(task => task.ProjectId == project.Id).ToListAsync());
     }
 
+    // ---------------------------------------------------------------- closing the loop
+
+    /// <summary>
+    /// Slice 5's acceptance criterion: a finished session's next step surfaces in the conversation,
+    /// is decided there, and starts the session — with no task page opened.
+    ///
+    /// The panel renders on <i>any</i> conversation, not only the one that started the work, because a
+    /// person should never have to remember which chat they began something in.
+    /// </summary>
+    [Fact]
+    public async Task A_pending_handoff_surfaces_in_the_conversation_and_starts_the_next_session()
+    {
+        var project = await SeedProjectAsync();
+        var (taskId, handoffId) = await SeedPendingHandoffAsync(project.Id);
+
+        // A conversation with nothing to do with that task.
+        var chatId = await StartConversationAsync("an unrelated question");
+
+        var client = new AntiforgeryHttpClient(factory.CreateClient(
+            new Microsoft.AspNetCore.Mvc.Testing.WebApplicationFactoryClientOptions { AllowAutoRedirect = false }));
+
+        var (_, html) = await client.GetPageAsync($"/Familiar/Chat/{chatId}");
+
+        Assert.Contains("Waiting for you", html, StringComparison.Ordinal);
+        Assert.Contains("Start the Implementer session", html, StringComparison.Ordinal);
+
+        // What finished, and what it produced — the decision is answerable from the card itself.
+        var flattened = System.Text.RegularExpressions.Regex.Replace(html, @"\s+", " ");
+        Assert.Contains("The Planner session finished", flattened, StringComparison.Ordinal);
+        Assert.Contains("Plan: three steps, smallest first", html, StringComparison.Ordinal);
+        Assert.Contains("starts one Implementer session", html, StringComparison.Ordinal);
+
+        var response = await client.PostFormAsync(
+            $"/Familiar/Chat/{chatId}?handler=DecideHandoff",
+            AntiforgeryHttpClient.ExtractAntiforgeryToken(html),
+            new Dictionary<string, string>
+            {
+                ["HandoffId"] = handoffId.ToString(),
+                ["HandoffToken"] = ReadHandoffToken(html, handoffId),
+                ["ApproveHandoff"] = "true"
+            });
+
+        Assert.Equal(HttpStatusCode.Redirect, response.StatusCode);
+
+        using var scope = factory.Services.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<FamiliarDbContext>();
+
+        var started = Assert.Single(await dbContext.AgentSessions.AsNoTracking()
+            .Where(session => session.TaskId == taskId && session.Status == AgentSessionStatus.Started)
+            .ToListAsync());
+
+        Assert.Equal(AgentSessionRole.Implementer, started.Role);
+
+        // The Familiar never chooses a worker.
+        Assert.Null(started.Provider);
+
+        Assert.Equal(
+            SessionHandoffStatus.Approved,
+            (await dbContext.SessionHandoffs.AsNoTracking().SingleAsync(handoff => handoff.Id == handoffId)).Status);
+
+        // And this decision is no longer waiting on anybody. Asserted by id: the panel is
+        // system-wide and these tests share a database, so other decisions legitimately remain.
+        var after = await factory.CreateClient().GetStringAsync($"/Familiar/Chat/{chatId}");
+        Assert.DoesNotContain(handoffId.ToString(), after, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task Declining_a_handoff_in_the_conversation_starts_nothing()
+    {
+        var project = await SeedProjectAsync();
+        var (taskId, handoffId) = await SeedPendingHandoffAsync(project.Id);
+        var chatId = await StartConversationAsync("another question");
+
+        var client = new AntiforgeryHttpClient(factory.CreateClient());
+        var (_, html) = await client.GetPageAsync($"/Familiar/Chat/{chatId}");
+
+        await client.PostFormAsync(
+            $"/Familiar/Chat/{chatId}?handler=DecideHandoff",
+            AntiforgeryHttpClient.ExtractAntiforgeryToken(html),
+            new Dictionary<string, string>
+            {
+                ["HandoffId"] = handoffId.ToString(),
+                ["HandoffToken"] = ReadHandoffToken(html, handoffId),
+                ["ApproveHandoff"] = "false"
+            });
+
+
+        using var scope = factory.Services.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<FamiliarDbContext>();
+
+        Assert.Empty(await dbContext.AgentSessions.AsNoTracking()
+            .Where(session => session.TaskId == taskId && session.Status == AgentSessionStatus.Started)
+            .ToListAsync());
+
+        Assert.Equal(
+            SessionHandoffStatus.Declined,
+            (await dbContext.SessionHandoffs.AsNoTracking().SingleAsync(handoff => handoff.Id == handoffId)).Status);
+    }
+
+    /// <summary>
+    /// A token from a page rendered before somebody else decided starts nothing. The same fence the
+    /// task page presents, because it is the same transaction behind both doors.
+    /// </summary>
+    [Fact]
+    public async Task A_stale_handoff_token_starts_nothing()
+    {
+        var project = await SeedProjectAsync();
+        var (taskId, handoffId) = await SeedPendingHandoffAsync(project.Id);
+        var chatId = await StartConversationAsync("a third question");
+
+        var client = new AntiforgeryHttpClient(factory.CreateClient());
+        var (_, html) = await client.GetPageAsync($"/Familiar/Chat/{chatId}");
+
+        await client.PostFormAsync(
+            $"/Familiar/Chat/{chatId}?handler=DecideHandoff",
+            AntiforgeryHttpClient.ExtractAntiforgeryToken(html),
+            new Dictionary<string, string>
+            {
+                ["HandoffId"] = handoffId.ToString(),
+                ["HandoffToken"] = Guid.NewGuid().ToString(),
+                ["ApproveHandoff"] = "true"
+            });
+
+        using var scope = factory.Services.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<FamiliarDbContext>();
+
+        Assert.Empty(await dbContext.AgentSessions.AsNoTracking()
+            .Where(session => session.TaskId == taskId && session.Status == AgentSessionStatus.Started)
+            .ToListAsync());
+
+        Assert.Equal(
+            SessionHandoffStatus.Pending,
+            (await dbContext.SessionHandoffs.AsNoTracking().SingleAsync(handoff => handoff.Id == handoffId)).Status);
+    }
+
+    /// <summary>
+    /// The token belonging to one specific decision.
+    ///
+    /// Scoped to the handoff id rather than taking the first token on the page, because these tests
+    /// share a database and the panel is system-wide: several decisions render at once, and grabbing
+    /// the first would decide somebody else's.
+    /// </summary>
+    private static string ReadHandoffToken(string html, Guid handoffId)
+    {
+        var match = System.Text.RegularExpressions.Regex.Match(
+            html,
+            "name=\"HandoffId\" value=\"" + handoffId + "\"\\s*/>\\s*<input type=\"hidden\" name=\"HandoffToken\" value=\"([^\"]+)\"");
+
+        Assert.True(match.Success, "The decision card for this handoff did not render a token.");
+        return match.Groups[1].Value;
+    }
+
+    /// <summary>
+    /// A finished Planner session with a recorded result and a pending handoff — the state the loop
+    /// reaches on its own, staged directly so this test stays about the conversation.
+    /// </summary>
+    private async Task<(Guid TaskId, Guid HandoffId)> SeedPendingHandoffAsync(Guid projectId)
+    {
+        using var scope = factory.Services.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<FamiliarDbContext>();
+
+        // The decision panel is system-wide and capped, and these tests share one database — so a
+        // handoff left pending by another test can push this one off the list. Settling them first is
+        // test hygiene, not a workaround: the panel is behaving exactly as designed.
+        await dbContext.SessionHandoffs
+            .Where(handoff => handoff.Status == SessionHandoffStatus.Pending)
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(handoff => handoff.Status, SessionHandoffStatus.Superseded));
+
+        var now = DateTime.UtcNow;
+
+        var task = new FamiliarTask
+        {
+            Id = Guid.NewGuid(),
+            ProjectId = projectId,
+            Title = "Re-specify the anchor task",
+            RequestedOutcome = "The constraint reflects reality.",
+            Status = FindFamiliar.Server.Domain.TaskStatus.InProgress,
+            CreatedUtc = now,
+            UpdatedUtc = now
+        };
+
+        var session = new AgentSession
+        {
+            Id = Guid.NewGuid(),
+            TaskId = task.Id,
+            Role = AgentSessionRole.Planner,
+            Status = AgentSessionStatus.Completed,
+            ContextRevisionRead = 0,
+            StartedUtc = now,
+            CompletedUtc = now
+        };
+
+        var handoff = new SessionHandoff
+        {
+            Id = Guid.NewGuid(),
+            TaskId = task.Id,
+            SourceSessionId = session.Id,
+            SourceOutcome = AgentSessionStatus.Completed,
+            ProposedRole = AgentSessionRole.Implementer,
+            Kind = SessionHandoffKind.NextRole,
+            Status = SessionHandoffStatus.Pending,
+            ObservedContextRevision = 0,
+            ConcurrencyToken = Guid.NewGuid(),
+            CreatedUtc = now,
+            UpdatedUtc = now
+        };
+
+        dbContext.Tasks.Add(task);
+        dbContext.AgentSessions.Add(session);
+        dbContext.SessionHandoffs.Add(handoff);
+        dbContext.ContextEntries.Add(new ContextEntry
+        {
+            Id = Guid.NewGuid(),
+            ProjectId = projectId,
+            TaskId = task.Id,
+            SourceSessionId = session.Id,
+            Kind = ContextEntryKind.Plan,
+            Title = "Plan: three steps, smallest first",
+            Content = "What the Planner produced.",
+            State = ContextEntryState.Active,
+            CreatedUtc = now
+        });
+
+        await dbContext.SaveChangesAsync();
+
+        return (task.Id, handoff.Id);
+    }
+
     private static string ReadPlanToken(string html)
     {
         var match = System.Text.RegularExpressions.Regex.Match(

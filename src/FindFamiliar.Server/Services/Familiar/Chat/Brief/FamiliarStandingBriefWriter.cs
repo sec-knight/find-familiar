@@ -1,4 +1,5 @@
 using System.Text;
+using FindFamiliar.Server.Domain;
 using FindFamiliar.Server.Services.Demiplane;
 
 namespace FindFamiliar.Server.Services.Familiar.Chat.Brief;
@@ -108,6 +109,18 @@ public static class FamiliarStandingBriefWriter
             if (!string.IsNullOrWhiteSpace(task.ReasonText))
             {
                 builder.Append(" — ").Append(Collapse(task.ReasonText));
+            }
+
+            if (task.ProposedRole is { } proposedRole)
+            {
+                // Written explicitly rather than left inside the reason text, because this is the one
+                // thing in the brief a person is being asked to act on. A model that has to infer
+                // "somebody must decide this" from prose will sometimes not mention it at all.
+                builder
+                    .Append(" — AWAITING YOUR DECISION: ")
+                    .Append(task.ProposedKind == SessionHandoffKind.RetrySameRole ? "retry the " : "start the ")
+                    .Append(proposedRole)
+                    .Append(" session. It can be approved in this conversation.");
             }
 
             builder.AppendLine();

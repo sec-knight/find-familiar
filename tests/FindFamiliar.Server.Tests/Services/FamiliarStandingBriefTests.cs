@@ -408,15 +408,17 @@ public sealed class FamiliarStandingBriefTests
         return project.Id;
     }
 
-    private static async Task SeedTaskAsync(
+    private static async Task<Guid> SeedTaskAsync(
         FamiliarDbContext dbContext,
         Guid projectId,
         string title,
         TaskStatus status = TaskStatus.Ready)
     {
+        var taskId = Guid.NewGuid();
+
         dbContext.Tasks.Add(new FamiliarTask
         {
-            Id = Guid.NewGuid(),
+            Id = taskId,
             ProjectId = projectId,
             Title = title,
             RequestedOutcome = "Seeded for FamiliarStandingBriefTests.",
@@ -427,5 +429,81 @@ public sealed class FamiliarStandingBriefTests
 
         await dbContext.SaveChangesAsync();
         dbContext.ChangeTracker.Clear();
+
+        return taskId;
+    }
+
+    /// <summary>A finished session on the task, and the decision it is waiting on.</summary>
+    private static async Task SeedPendingHandoffAsync(FamiliarDbContext dbContext, Guid taskId)
+    {
+        var session = new AgentSession
+        {
+            Id = Guid.NewGuid(),
+            TaskId = taskId,
+            Role = AgentSessionRole.Planner,
+            Status = AgentSessionStatus.Completed,
+            ContextRevisionRead = 0,
+            StartedUtc = Now.UtcDateTime,
+            CompletedUtc = Now.UtcDateTime
+        };
+
+        dbContext.AgentSessions.Add(session);
+        dbContext.SessionHandoffs.Add(new SessionHandoff
+        {
+            Id = Guid.NewGuid(),
+            TaskId = taskId,
+            SourceSessionId = session.Id,
+            SourceOutcome = AgentSessionStatus.Completed,
+            ProposedRole = AgentSessionRole.Implementer,
+            Kind = SessionHandoffKind.NextRole,
+            Status = SessionHandoffStatus.Pending,
+            ObservedContextRevision = 0,
+            ConcurrencyToken = Guid.NewGuid(),
+            CreatedUtc = Now.UtcDateTime,
+            UpdatedUtc = Now.UtcDateTime
+        });
+
+        await dbContext.SaveChangesAsync();
+        dbContext.ChangeTracker.Clear();
+    }
+
+    // ---------------------------------------------------------------- decisions the brief must raise
+
+    /// <summary>
+    /// A step waiting on a person is the one thing in these records that stops on its own, so the
+    /// brief states it outright rather than leaving it to be inferred from a reason string. A model
+    /// that has to deduce "somebody must decide this" will sometimes not mention it at all.
+    /// </summary>
+    [Fact]
+    public async Task A_task_awaiting_a_decision_says_so_in_the_brief()
+    {
+        using var database = new TemporarySqliteDatabase();
+        await using var dbContext = await database.CreateContextAsync();
+
+        var projectId = await SeedProjectAsync(dbContext, "Find Familiar", "A purpose.");
+        var taskId = await SeedTaskAsync(dbContext, projectId, "Re-specify the anchor task", TaskStatus.InProgress);
+
+        await SeedPendingHandoffAsync(dbContext, taskId);
+
+        var text = FamiliarStandingBriefWriter.Write(await NewService(dbContext).GetBriefAsync());
+
+        Assert.Contains("AWAITING YOUR DECISION", text, StringComparison.Ordinal);
+        Assert.Contains("start the Implementer session", text, StringComparison.Ordinal);
+        Assert.Contains("approved in this conversation", text, StringComparison.Ordinal);
+    }
+
+    /// <summary>A task with nothing waiting on it says nothing, so the marker keeps its meaning.</summary>
+    [Fact]
+    public async Task A_task_with_no_pending_decision_is_not_marked()
+    {
+        using var database = new TemporarySqliteDatabase();
+        await using var dbContext = await database.CreateContextAsync();
+
+        var projectId = await SeedProjectAsync(dbContext, "Find Familiar", "A purpose.");
+        await SeedTaskAsync(dbContext, projectId, "Nothing waiting here");
+
+        var text = FamiliarStandingBriefWriter.Write(await NewService(dbContext).GetBriefAsync());
+
+        Assert.DoesNotContain("AWAITING YOUR DECISION", text, StringComparison.Ordinal);
     }
 }

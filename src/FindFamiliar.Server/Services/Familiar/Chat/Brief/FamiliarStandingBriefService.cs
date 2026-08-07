@@ -199,7 +199,9 @@ public sealed class FamiliarStandingBriefService(
                 task.Title,
                 task.DisplayState,
                 task.ReasonText,
-                task.NeedsHumanAttention))
+                task.NeedsHumanAttention,
+                task.ProposedRole,
+                task.ProposedKind))
             .ToList();
 
         return new BriefProject(

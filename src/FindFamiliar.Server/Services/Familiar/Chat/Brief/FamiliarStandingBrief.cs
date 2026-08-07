@@ -1,3 +1,4 @@
+using FindFamiliar.Server.Domain;
 using FindFamiliar.Server.Services.Demiplane;
 
 namespace FindFamiliar.Server.Services.Familiar.Chat.Brief;
@@ -10,12 +11,22 @@ namespace FindFamiliar.Server.Services.Familiar.Chat.Brief;
 /// Familiar contradicting the Demiplane about the same task is precisely the failure this project
 /// exists to prevent.
 /// </remarks>
+/// <param name="ProposedRole">
+/// The role a finished session proposed running next, when one is waiting on a human. This is the
+/// decision the Familiar must be able to raise unprompted — a handoff nobody is told about is the
+/// point at which a "loop" stops being one.
+/// </param>
 public sealed record BriefTask(
     Guid TaskId,
     string Title,
     TaskDisplayState DisplayState,
     string ReasonText,
-    bool NeedsHumanAttention);
+    bool NeedsHumanAttention,
+    AgentSessionRole? ProposedRole = null,
+    SessionHandoffKind? ProposedKind = null)
+{
+    public bool AwaitsHandoffDecision => ProposedRole is not null;
+}
 
 /// <summary>One project's shape at a glance, plus whichever of its tasks matter most right now.</summary>
 /// <param name="LastRecordedActivityUtc">

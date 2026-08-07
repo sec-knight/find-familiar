@@ -140,6 +140,11 @@ builder.Services.AddScoped<IFamiliarActionService, FamiliarActionService>();
 // already exists must keep working even if the provider that drafted it is later unconfigured.
 builder.Services.AddScoped<IFamiliarPlanApprovalService, FamiliarPlanApprovalService>();
 
+// What is waiting on a human, across every project the Familiar may be told about. Read-only:
+// deciding a handoff goes through ISessionHandoffApprovalService, the same transaction the task
+// pages use.
+builder.Services.AddScoped<IFamiliarOpenDecisionsService, FamiliarOpenDecisionsService>();
+
 builder.Services.Configure<FamiliarReasoningOptions>(
     builder.Configuration.GetSection(FamiliarReasoningOptions.SectionName));
 

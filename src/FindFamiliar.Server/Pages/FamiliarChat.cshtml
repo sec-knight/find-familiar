@@ -50,6 +50,62 @@ else
         </p>
     </section>
 
+    @* ------------------------------------------------------------------- Waiting for you *@
+    @* Above the transcript, not inside it. A decision is current state rather than conversation
+       history, and it must be visible on a conversation that has nothing to do with the task it
+       belongs to — a person should never have to remember which chat they started something in. *@
+    @if (Model.OpenDecisions.Count > 0)
+    {
+        <section class="familiar-decisions" aria-labelledby="decisions-title">
+            <div class="section-heading">
+                <div>
+                    <p class="eyebrow">Waiting for you</p>
+                    <h2 id="decisions-title">@Model.OpenDecisions.Count decision(s) to make</h2>
+                </div>
+            </div>
+
+            <ol class="familiar-decision-list">
+                @foreach (var decision in Model.OpenDecisions)
+                {
+                    <li class="familiar-decision">
+                        <p class="familiar-decision-title">
+                            <a asp-page="/Tasks/Details" asp-route-id="@decision.TaskId">@decision.TaskTitle</a>
+                            <span class="familiar-decision-project"> · @decision.ProjectName</span>
+                        </p>
+
+                        <p class="familiar-decision-meta">
+                            The @decision.SourceRole session
+                            @(decision.SourceOutcome == AgentSessionStatus.Completed ? "finished" : "was cancelled").
+                            @if (decision.LastResultTitle is { Length: > 0 } resultTitle)
+                            {
+                                <span>It recorded: <em>@resultTitle</em>.</span>
+                            }
+                            else
+                            {
+                                <span>It recorded nothing I can show you.</span>
+                            }
+                        </p>
+
+                        @* What approving does, before the button. Same rule as the plan card. *@
+                        <p class="familiar-decision-consequence">@decision.Consequence</p>
+
+                        <form method="post" asp-page-handler="DecideHandoff" asp-route-chatId="@chat.ChatId">
+                            <input type="hidden" name="HandoffId" value="@decision.HandoffId" />
+                            <input type="hidden" name="HandoffToken" value="@decision.ConcurrencyToken" />
+
+                            <div class="familiar-compose-actions">
+                                <button type="submit" name="ApproveHandoff" value="true" class="familiar-compose-send">
+                                    Start the @decision.ProposedRole session
+                                </button>
+                                <button type="submit" name="ApproveHandoff" value="false" class="familiar-compose-plan">Decline</button>
+                            </div>
+                        </form>
+                    </li>
+                }
+            </ol>
+        </section>
+    }
+
     @* ----------------------------------------------------------------------------- Transcript *@
     @* data-cursor is the client's whole durable state: the sequence it has rendered through. Every
        reconnection, wake-up and network handoff resumes from it, so a device four hours behind takes

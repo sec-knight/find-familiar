@@ -1,5 +1,6 @@
 using FindFamiliar.Server.Domain;
 using FindFamiliar.Server.Services.Familiar.Chat;
+using FindFamiliar.Server.Services;
 using FindFamiliar.Server.Services.Familiar.Chat.Planning;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
@@ -24,7 +25,9 @@ namespace FindFamiliar.Server.Pages;
 /// </summary>
 public sealed class FamiliarChatModel(
     IFamiliarChatService chats,
-    IFamiliarPlanApprovalService plans) : PageModel
+    IFamiliarPlanApprovalService plans,
+    IFamiliarOpenDecisionsService decisions,
+    ISessionHandoffApprovalService handoffs) : PageModel
 {
     /// <summary>
     /// How long the page waits before re-reading while a turn is in flight.
@@ -36,6 +39,16 @@ public sealed class FamiliarChatModel(
     public const int InFlightRefreshSeconds = 3;
 
     public FamiliarChatView? Chat { get; private set; }
+
+    /// <summary>
+    /// Everything waiting on a human right now, across every project this conversation may see.
+    ///
+    /// Rendered above the transcript rather than inside it, because a decision is not part of the
+    /// conversation's history — it is current state, and it must be visible on a conversation that
+    /// has nothing to do with the task it belongs to. A person should never have to remember which
+    /// chat they started something in.
+    /// </summary>
+    public IReadOnlyList<FamiliarOpenDecision> OpenDecisions { get; private set; } = [];
 
     /// <summary>The message being composed. The only value bound from the send form.</summary>
     [BindProperty]
@@ -62,7 +75,14 @@ public sealed class FamiliarChatModel(
     private async Task<bool> LoadAsync(Guid chatId, CancellationToken cancellationToken)
     {
         Chat = await chats.GetAsync(chatId, cancellationToken);
-        return Chat is not null;
+
+        if (Chat is null)
+        {
+            return false;
+        }
+
+        OpenDecisions = await decisions.ReadAsync(cancellationToken);
+        return true;
     }
 
     /// <summary>
@@ -214,6 +234,75 @@ public sealed class FamiliarChatModel(
         };
 
         return await LoadAsync(chatId, cancellationToken) ? Page() : NotFound();
+    }
+
+    // ---------------------------------------------------------------- deciding a handoff
+
+    [BindProperty]
+    public Guid HandoffId { get; set; }
+
+    [BindProperty]
+    public Guid HandoffToken { get; set; }
+
+    /// <summary>True for Approve, false for Decline.</summary>
+    [BindProperty]
+    public bool ApproveHandoff { get; set; }
+
+    /// <summary>
+    /// The other end of the loop: the next session is started from the conversation, on the evidence
+    /// of what the last one produced.
+    ///
+    /// Straight through <see cref="ISessionHandoffApprovalService"/> — the same transaction the task
+    /// page uses, with the same fence and the same partial unique index behind it. Two doors to one
+    /// decision; the rules live in one place.
+    /// </summary>
+    public async Task<IActionResult> OnPostDecideHandoffAsync(Guid chatId, CancellationToken cancellationToken)
+    {
+        var request = new SessionHandoffDecisionRequest(HandoffId, HandoffToken);
+
+        var outcome = ApproveHandoff
+            ? await handoffs.ApproveAsync(request, cancellationToken)
+            : await handoffs.DeclineAsync(request, cancellationToken);
+
+        TempData["StatusMessage"] = outcome.Status switch
+        {
+            SessionHandoffDecisionStatus.Approved =>
+                $"Started a {outcome.Role} session. It will be picked up by a worker; ask me about it when it finishes.",
+
+            SessionHandoffDecisionStatus.Declined =>
+                "That step was declined. Nothing was started, and the task is no longer waiting on you.",
+
+            SessionHandoffDecisionStatus.AlreadyApproved =>
+                "That step was already approved, so nothing was started again.",
+
+            SessionHandoffDecisionStatus.AlreadyDeclined =>
+                "That step was already declined. Nothing was started.",
+
+            SessionHandoffDecisionStatus.Superseded =>
+                "Something newer happened on that task, so this decision no longer applies. Nothing was started.",
+
+            SessionHandoffDecisionStatus.StaleHandoff =>
+                "That decision changed since the page was loaded, so nothing was done. Reload and read it again.",
+
+            SessionHandoffDecisionStatus.SessionAlreadyStarted =>
+                "A session is already running on that task, so another was not started.",
+
+            SessionHandoffDecisionStatus.TaskClosed =>
+                "That task is closed, so nothing was started.",
+
+            SessionHandoffDecisionStatus.ProjectInactive =>
+                "That project is no longer active, so nothing was started.",
+
+            SessionHandoffDecisionStatus.NotFound =>
+                "That decision no longer exists. Nothing was started.",
+
+            SessionHandoffDecisionStatus.DatabaseBusy =>
+                "The database was busy, so nothing was done. Nothing was changed — try again.",
+
+            _ => "Someone else decided that first, so nothing was started."
+        };
+
+        return RedirectToPage(new { chatId });
     }
 
     /// <summary>
