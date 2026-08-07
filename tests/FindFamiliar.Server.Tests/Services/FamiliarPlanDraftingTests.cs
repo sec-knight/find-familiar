@@ -241,6 +241,50 @@ public sealed class FamiliarPlanDraftingTests
         Assert.Empty(await dbContext.FamiliarPlanProposals.AsNoTracking().ToListAsync());
     }
 
+    /// <summary>
+    /// An uninvited pass that decides there is nothing to propose writes nothing.
+    ///
+    /// This is what makes drafting on every turn safe. A question, an explanation or a correction
+    /// returns no items, and no items has always meant no plan — so the common case costs a call and
+    /// leaves the transcript exactly as it was, with no card for the person to read and dismiss.
+    /// </summary>
+    [Fact]
+    public async Task An_uninvited_pass_with_nothing_to_propose_writes_no_plan()
+    {
+        using var database = new TemporarySqliteDatabase();
+        await using var dbContext = await database.CreateContextAsync();
+
+        var project = await SeedProjectAsync(dbContext);
+        var (chatId, turnId) = await SeedTurnAsync(dbContext);
+
+        await NewService(dbContext, Provider("""{"summary": "They asked a question.", "items": []}"""))
+            .DraftAsync(Request(chatId, turnId, project.Id) with { Intent = FamiliarPlanDraftIntent.Offered });
+
+        Assert.Empty(await dbContext.FamiliarPlanProposals.AsNoTracking().ToListAsync());
+    }
+
+    /// <summary>
+    /// The judgement the pass is asked to make differs by how it was started, and nothing else does.
+    /// An uninvited plan is held to exactly the rules an invited one is.
+    /// </summary>
+    [Fact]
+    public async Task How_the_pass_was_started_reaches_the_provider()
+    {
+        using var database = new TemporarySqliteDatabase();
+        await using var dbContext = await database.CreateContextAsync();
+
+        var project = await SeedProjectAsync(dbContext);
+        var (chatId, turnId) = await SeedTurnAsync(dbContext);
+
+        var provider = Provider("""{"summary": "Nothing.", "items": []}""");
+
+        await NewService(dbContext, provider)
+            .DraftAsync(Request(chatId, turnId, project.Id) with { Intent = FamiliarPlanDraftIntent.Offered });
+
+        Assert.Contains("Nobody asked for a plan", provider.LastRequest!.SystemPrompt, StringComparison.Ordinal);
+        Assert.DoesNotContain("The person pressed \"Plan this\"", provider.LastRequest!.SystemPrompt, StringComparison.Ordinal);
+    }
+
     // ---------------------------------------------------------------- helpers
 
     private static FamiliarPlanDraftingService NewService(FamiliarDbContext dbContext, IFamiliarChatProvider provider) =>
@@ -343,10 +387,15 @@ public sealed class FamiliarPlanDraftingTests
         public void Finish(FamiliarChatProviderStatus status) =>
             _events.Add(new FamiliarChatStreamEvent.Finished(status, "scripted-model"));
 
+        /// <summary>What the drafting pass last asked for, so a test can state what it was told.</summary>
+        public FamiliarChatRequest? LastRequest { get; private set; }
+
         public async IAsyncEnumerable<FamiliarChatStreamEvent> StreamAsync(
             FamiliarChatRequest request,
             [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
         {
+            LastRequest = request;
+
             foreach (var streamEvent in _events)
             {
                 yield return streamEvent;

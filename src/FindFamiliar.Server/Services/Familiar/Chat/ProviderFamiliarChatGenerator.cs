@@ -70,19 +70,25 @@ public sealed class ProviderFamiliarChatGenerator(
         // rather than what happened.
         var planState = await conversationState.ReadAsync(request.ChatId, cancellationToken);
 
+        // Decided once and used twice — for what the model is told and for whether the pass runs. Two
+        // separate readings of "is a plan happening" would eventually disagree, and the turn where
+        // they did would be one that promised a card it did not draft.
+        var draftIntent = FamiliarPlanDraftIntentDecision.Decide(planState, request.RequestedPlan);
+
         var prompt = new FamiliarChatRequest(
             FamiliarChatSystemPrompt.Text,
             history,
             request.UserText,
             FamiliarStandingBriefWriter.Write(brief),
             FamiliarRetrievalWriter.Write(found),
-            FamiliarConversationStateWriter.Write(planState, request.RequestedPlan));
+            FamiliarConversationStateWriter.Write(planState, draftIntent));
 
         var emitted = 0;
 
-        // Kept only when a plan was asked for. The drafting pass needs the reply as context, and
-        // holding a second copy of every ordinary reply in memory would buy nothing.
-        var reply = request.RequestedPlan ? new System.Text.StringBuilder() : null;
+        // Kept on every turn. The drafting pass now decides for itself whether a turn asked for work,
+        // and it judges that from the exchange — so the reply has to be there to hand it, including on
+        // the turns that turn out not to need one.
+        var reply = new System.Text.StringBuilder();
 
         var metadata = new FamiliarChatGenerationMetadata(provider.Name, provider.Model);
         FamiliarChatStreamEvent.Finished? finished = null;
@@ -95,7 +101,7 @@ public sealed class ProviderFamiliarChatGenerator(
                     // Straight into the persisted turn. Nobody has to be listening for this to be
                     // kept, which is the property the whole lane is built around.
                     await sink.AppendAsync(delta.Text, cancellationToken);
-                    reply?.Append(delta.Text);
+                    reply.Append(delta.Text);
                     emitted += delta.Text.Length;
                     break;
 
@@ -135,21 +141,27 @@ public sealed class ProviderFamiliarChatGenerator(
             return FamiliarChatGenerationOutcome.Failed(note.Code, note.Sentence, metadata);
         }
 
-        if (request.RequestedPlan)
+        if (draftIntent is not FamiliarPlanDraftIntent.Withheld)
         {
             // After the reply is complete and durable, never before. A structured second pass must not
             // delay a word of what the person is already reading, and a plan that fails to draft must
             // not retract an answer that succeeded.
+            //
+            // This now runs on ordinary turns too, and the pass itself decides whether the exchange
+            // asked for work — because the alternative was a Familiar that answered a request for a
+            // change by naming a button. A turn with nothing to propose returns no items and writes
+            // no row, which the reader already treats as an ordinary outcome rather than a failure.
             await planning.DraftAsync(
                 new FamiliarPlanDraftRequest(
                     request.ChatId,
                     request.TurnId,
                     request.FocusProjectId,
                     request.UserText,
-                    reply!.ToString(),
+                    reply.ToString(),
                     prompt.StandingBrief,
                     prompt.RecordedContext,
-                    found.Entries.Select(entry => entry.EntryId).ToList()),
+                    found.Entries.Select(entry => entry.EntryId).ToList(),
+                    draftIntent),
                 cancellationToken);
         }
 

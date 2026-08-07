@@ -111,9 +111,11 @@ public sealed class FamiliarConversationStateTests
     {
         foreach (var text in new[]
                  {
-                     FamiliarConversationStateWriter.Write(null),
+                     FamiliarConversationStateWriter.Write(null, FamiliarPlanDraftIntent.Offered),
+                     FamiliarConversationStateWriter.Write(null, FamiliarPlanDraftIntent.Requested),
                      FamiliarConversationStateWriter.Write(
-                         new FamiliarConversationPlanState(FamiliarPlanStatus.Pending, 1, 0, null))
+                         new FamiliarConversationPlanState(FamiliarPlanStatus.Pending, 1, 0, null),
+                         FamiliarPlanDraftIntent.Withheld)
                  })
         {
             // Flattened, because the prompt is a wrapped raw literal and the assertion is about what
@@ -127,30 +129,79 @@ public sealed class FamiliarConversationStateTests
     }
 
     /// <summary>
-    /// Which button was pressed, told outright. Drafting happens outside the reply, so a model told
-    /// neither will guess — and it did: "Plan drafted. Approve it to start the session." on a turn
-    /// where nothing was drafted and there was nothing to approve.
+    /// An ordinary turn may now draft a plan too, so the model is told the outcome is not knowable to
+    /// it. It must not announce a card — the old failure, "Plan drafted. Approve it to start the
+    /// session." on a turn where nothing was drafted — and it must no longer send the person off to
+    /// press a button for something the pass will do on its own.
     /// </summary>
     [Fact]
-    public void An_ordinary_turn_says_no_plan_is_being_drafted()
+    public void An_ordinary_turn_says_a_plan_may_follow()
     {
-        var text = FamiliarConversationStateWriter.Write(null, planRequestedThisTurn: false);
+        var flat = Flatten(FamiliarConversationStateWriter.Write(null, FamiliarPlanDraftIntent.Offered));
 
-        Assert.Contains("NO plan is being drafted", text, StringComparison.Ordinal);
-        Assert.Contains("Nothing you write creates one", text, StringComparison.Ordinal);
-        Assert.Contains("press \"Plan this\"", text, StringComparison.Ordinal);
-        Assert.Contains("Never announce a plan you have not been asked to draft", text, StringComparison.Ordinal);
+        Assert.Contains("a plan may appear under this reply", flat, StringComparison.Ordinal);
+        Assert.Contains("do not write \"I have drafted a plan\"", flat, StringComparison.Ordinal);
+        Assert.Contains("never say anything has been created or approved", flat, StringComparison.Ordinal);
+
+        // The deflection this whole change exists to remove: the button is named as a way to force a
+        // plan, never as the thing the person must go and do before one can exist.
+        Assert.DoesNotContain("NO plan is being drafted", flat, StringComparison.Ordinal);
+        Assert.DoesNotContain("they should press", flat, StringComparison.Ordinal);
     }
 
     [Fact]
     public void A_plan_turn_says_a_plan_is_being_drafted()
     {
-        var text = FamiliarConversationStateWriter.Write(null, planRequestedThisTurn: true);
+        var text = FamiliarConversationStateWriter.Write(null, FamiliarPlanDraftIntent.Requested);
 
         Assert.Contains("a plan IS being drafted", text, StringComparison.Ordinal);
         Assert.Contains("Do not say it has been approved", text, StringComparison.Ordinal);
-        Assert.DoesNotContain("NO plan is being drafted", text, StringComparison.Ordinal);
     }
+
+    /// <summary>
+    /// One plan at a time. A conversation holds at most one undecided plan, and the model is told so
+    /// rather than left to draft a second one that the unique index would refuse in silence.
+    /// </summary>
+    [Fact]
+    public void A_pending_plan_says_no_second_plan_is_drafted()
+    {
+        var flat = Flatten(FamiliarConversationStateWriter.Write(
+            new FamiliarConversationPlanState(FamiliarPlanStatus.Pending, 2, 0, AgentSessionRole.Implementer),
+            FamiliarPlanDraftIntent.Withheld));
+
+        Assert.Contains("no new plan is being drafted", flat, StringComparison.Ordinal);
+        Assert.Contains("One plan at a time", flat, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Which of the three a turn is. A pending plan outranks a pressed button: drafting a second is
+    /// refused by the database either way, and a stated refusal beats a silent one.
+    /// </summary>
+    [Theory]
+    [InlineData(null, false, FamiliarPlanDraftIntent.Offered)]
+    [InlineData(null, true, FamiliarPlanDraftIntent.Requested)]
+    [InlineData(FamiliarPlanStatus.Pending, false, FamiliarPlanDraftIntent.Withheld)]
+    [InlineData(FamiliarPlanStatus.Pending, true, FamiliarPlanDraftIntent.Withheld)]
+    [InlineData(FamiliarPlanStatus.Declined, false, FamiliarPlanDraftIntent.Offered)]
+    [InlineData(FamiliarPlanStatus.Approved, true, FamiliarPlanDraftIntent.Requested)]
+    public void The_turns_intent_is_decided_in_one_place(
+        FamiliarPlanStatus? status,
+        bool requested,
+        FamiliarPlanDraftIntent expected)
+    {
+        var plan = status is { } value
+            ? new FamiliarConversationPlanState(value, 1, 0, null)
+            : null;
+
+        Assert.Equal(expected, FamiliarPlanDraftIntentDecision.Decide(plan, requested));
+    }
+
+    /// <summary>
+    /// Flattened, because the prompt is a wrapped raw literal and the assertion is about what it says
+    /// rather than where its lines break.
+    /// </summary>
+    private static string Flatten(string text) =>
+        System.Text.RegularExpressions.Regex.Replace(text, @"\s+", " ");
 
     /// <summary>The newest plan is the one on screen, so it is the one described.</summary>
     [Fact]

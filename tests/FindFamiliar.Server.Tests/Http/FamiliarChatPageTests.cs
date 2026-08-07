@@ -869,6 +869,43 @@ public sealed class FamiliarChatPageTests(FindFamiliarWebApplicationFactory fact
     }
 
     /// <summary>
+    /// The streamed card posts the same fields as the rendered one.
+    ///
+    /// There is no JavaScript test runner in this repository, so this is a text check rather than a
+    /// rendering one — but the failure it guards against is a rename, and a rename is exactly what a
+    /// text check catches. The two renderers have to stay interchangeable: a plan arriving over the
+    /// stream is the one most people will meet now that an ordinary turn can draft one, and it spent
+    /// a sprint rendering the words "Approving a plan in the conversation is not built yet" after
+    /// that had stopped being true.
+    /// </summary>
+    [Fact]
+    public void The_streamed_plan_card_posts_the_fields_the_handler_binds()
+    {
+        var script = File.ReadAllText(Path.Combine(
+            AppContext.BaseDirectory, "..", "..", "..", "..", "..",
+            "src", "FindFamiliar.Server", "wwwroot", "js", "familiar-chat.js"));
+
+        foreach (var field in new[]
+                 {
+                     "handler=DecidePlan",
+                     "__RequestVerificationToken",
+                     "PlanId",
+                     "ExpectedConcurrencyToken",
+                     "].ItemId",
+                     "].IsIncluded",
+                     "].Title",
+                     "].RequestedOutcome",
+                     "Approve"
+                 })
+        {
+            Assert.Contains(field, script, StringComparison.Ordinal);
+        }
+
+        // The claim that outlived its truth. If it ever comes back, so has the dead card.
+        Assert.DoesNotContain("is not built yet", script, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// Every field of the rendered plan form, in document order, the way a browser serialises it: a
     /// checkbox contributes its value only when checked, and both names under one key are kept in the
     /// order they appear.

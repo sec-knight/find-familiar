@@ -19,6 +19,11 @@ public interface IFamiliarPlanDraftingService
 /// The same retrieval block the conversational reply was given, so the plan is drawn from the same
 /// evidence the person just read rather than from a second, different search.
 /// </param>
+/// <param name="Intent">
+/// Whether the person asked for this plan or the pass is deciding for itself whether there is one.
+/// Only the prompt differs; everything this service does with the result is the same either way, and
+/// deliberately so — an uninvited plan is held to exactly the rules an invited one is.
+/// </param>
 public sealed record FamiliarPlanDraftRequest(
     Guid ChatId,
     Guid TurnId,
@@ -27,7 +32,8 @@ public sealed record FamiliarPlanDraftRequest(
     string ConversationalReply,
     string? StandingBrief,
     string? RecordedContext,
-    IReadOnlyCollection<Guid> OfferedEvidence);
+    IReadOnlyCollection<Guid> OfferedEvidence,
+    FamiliarPlanDraftIntent Intent = FamiliarPlanDraftIntent.Requested);
 
 /// <summary>
 /// The second pass: turn what was just said into something a person can approve.
@@ -127,7 +133,7 @@ public sealed class FamiliarPlanDraftingService(
         // The conversation's own reply travels as the last exchange, so the plan follows from what the
         // person just read rather than from a second opinion they never saw.
         var prompt = new FamiliarChatRequest(
-            FamiliarPlanDraftPrompt.Text,
+            FamiliarPlanDraftPrompt.For(request.Intent),
             [new FamiliarChatHistoryTurn(request.UserText, request.ConversationalReply)],
             "Draft the plan as JSON now.",
             request.StandingBrief,

@@ -110,8 +110,13 @@ else
     @* data-cursor is the client's whole durable state: the sequence it has rendered through. Every
        reconnection, wake-up and network handoff resumes from it, so a device four hours behind takes
        the same path as one four seconds behind. *@
+    @* The plan-item limits travel to the script so a streamed card enforces the same maxlength the
+       rendered one does. Read from the domain constants rather than repeated as literals in the
+       JavaScript, which is how the two would eventually disagree. *@
     <section class="familiar-conversation" aria-labelledby="transcript-title"
-             data-familiar-chat data-chat-id="@chat.ChatId" data-cursor="@Model.ResumeCursor">
+             data-familiar-chat data-chat-id="@chat.ChatId" data-cursor="@Model.ResumeCursor"
+             data-max-title-length="@FamiliarPlanItem.MaxTitleLength"
+             data-max-outcome-length="@FamiliarPlanItem.MaxRequestedOutcomeLength">
         <div class="section-heading">
             <div>
                 <p class="eyebrow">Conversation · through sequence @Model.Cursor</p>
@@ -176,8 +181,10 @@ else
                                     }
                                     else if (turn.Cited.FirstOrDefault(citation => citation.EntryId == segment.EntryId) is { } cited)
                                     {
-                                        <a class="familiar-citation" asp-page="/Demiplane" asp-route-id="@cited.ProjectId"
-                                           title="@cited.Kind — @cited.Title">@cited.Kind.ToString().ToLowerInvariant(): @cited.Title</a>
+                                        @* Href and Label come from the view rather than being built
+                                           here, because the script builds the same chip and two copies
+                                           of a routing rule is how they come to disagree. *@
+                                        <a class="familiar-citation" href="@cited.Href" title="@cited.Tooltip">@cited.Label</a>
                                     }
                                     else
                                     {
@@ -279,8 +286,7 @@ else
 
                                                         @foreach (var evidence in item.Evidence)
                                                         {
-                                                            <a class="familiar-citation" asp-page="/Demiplane" asp-route-id="@evidence.ProjectId"
-                                                               title="@evidence.Kind — @evidence.Title">@evidence.Kind.ToString().ToLowerInvariant(): @evidence.Title</a>
+                                                            <a class="familiar-citation" href="@evidence.Href" title="@evidence.Tooltip">@evidence.Label</a>
                                                         }
                                                     </p>
                                                 </li>
@@ -366,7 +372,8 @@ else
 
             <p class="familiar-compose-hint" id="familiar-chat-message-hint">
                 Up to @FamiliarChatTurn.MaxUserTextLength.ToString("N0") characters.
-                One reply at a time — the Familiar answers from what is recorded, and cannot change anything.
+                One reply at a time — the Familiar answers from what is recorded and can propose work.
+                Anything it proposes waits here for you to approve it.
             </p>
 
             @* Two buttons, one form. "Plan this" is a different request, not a different page: the

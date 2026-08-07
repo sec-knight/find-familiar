@@ -19,19 +19,56 @@ public sealed record FamiliarChatSummary(
     DateTime CreatedUtc,
     DateTime UpdatedUtc);
 
+/// <summary>What a chip points at. The three things a reply can name by id.</summary>
+public enum FamiliarCitationTarget
+{
+    ContextEntry,
+    Project,
+    Task
+}
+
 /// <summary>
-/// One context entry a reply may cite, resolved for display.
+/// One thing a reply may cite, resolved for display.
 ///
 /// Resolved when the transcript is read, not when the answer was written, and through a query that
 /// re-applies the sensitivity filter. An entry flagged sensitive after it was cited stops being
 /// displayable without any turn having to be rewritten — the row records which ids were offered, and
 /// this decides which of those a reader may still be shown.
 /// </summary>
+/// <param name="Kind">The entry's kind, and null for a project or a task, which have none.</param>
 public sealed record FamiliarChatCitationView(
     Guid EntryId,
     Guid ProjectId,
-    ContextEntryKind Kind,
-    string Title);
+    ContextEntryKind? Kind,
+    string Title,
+    FamiliarCitationTarget Target = FamiliarCitationTarget.ContextEntry)
+{
+    /// <summary>
+    /// Where the chip goes, decided here rather than twice.
+    ///
+    /// Both renderers used to build this independently — the Razor page through a tag helper, the
+    /// script by concatenation — which is two copies of a routing rule that must never disagree,
+    /// because a chip tapped on a streamed reply has to land where a rendered one does.
+    /// </summary>
+    public string Href => Target == FamiliarCitationTarget.Task
+        ? "/Tasks/Details/" + EntryId
+        : "/Demiplane/" + ProjectId;
+
+    /// <summary>The chip's visible text. Same reason as <see cref="Href"/>: written once, read by both.</summary>
+    public string Label => Target switch
+    {
+        FamiliarCitationTarget.Project => "project: " + Title,
+        FamiliarCitationTarget.Task => "task: " + Title,
+        _ => (Kind?.ToString().ToLowerInvariant() ?? "entry") + ": " + Title
+    };
+
+    public string Tooltip => Target switch
+    {
+        FamiliarCitationTarget.Project => "Project — " + Title,
+        FamiliarCitationTarget.Task => "Task — " + Title,
+        _ => Kind + " — " + Title
+    };
+}
 
 /// <summary>One proposed item of a drafted plan, as a client renders it.</summary>
 public sealed record FamiliarPlanItemView(

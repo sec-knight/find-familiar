@@ -493,7 +493,156 @@ public sealed class FamiliarChatServiceTests
         Assert.Empty(await dbContext.FamiliarChats.AsNoTracking().ToListAsync());
     }
 
+    // ---------------------------------------------------------------- projects and tasks as chips
+
+    /// <summary>
+    /// A project id the reply named becomes a chip, not the words "unsupported reference".
+    ///
+    /// The standing brief hands the model project and task ids, and every one it repeated used to be
+    /// checked against a pack holding only retrieved context entries — so a transcript that named the
+    /// project it was discussing rendered a row of failure chips. These ids reach a reply through the
+    /// brief and nowhere else, so naming a real and visible one is itself evidence of having been
+    /// shown it.
+    /// </summary>
+    [Fact]
+    public async Task A_project_the_reply_names_resolves_to_a_project_chip()
+    {
+        using var database = new TemporarySqliteDatabase();
+        await using var dbContext = await database.CreateContextAsync();
+        var service = NewService(dbContext);
+
+        var project = await SeedProjectAsync(dbContext);
+
+        var sent = await service.SendAsync(null, "what is the state of things?");
+        await SettleNamingAsync(dbContext, project.Id);
+
+        var turn = (await service.ReadTurnsAfterAsync(sent.ChatId, 0))!.Turns[0];
+        var cited = Assert.Single(turn.Cited);
+
+        Assert.Equal(FamiliarCitationTarget.Project, cited.Target);
+        Assert.Equal($"project: {project.Name}", cited.Label);
+        Assert.Contains(turn.Segments, segment => segment.IsCitation && segment.IsSupported);
+    }
+
+    [Fact]
+    public async Task A_task_the_reply_names_resolves_to_a_task_chip()
+    {
+        using var database = new TemporarySqliteDatabase();
+        await using var dbContext = await database.CreateContextAsync();
+        var service = NewService(dbContext);
+
+        var project = await SeedProjectAsync(dbContext);
+        var task = await SeedTaskAsync(dbContext, project.Id, "Append Sakura ~ Hello World to README");
+
+        var sent = await service.SendAsync(null, "what is waiting on me?");
+        await SettleNamingAsync(dbContext, task.Id);
+
+        var turn = (await service.ReadTurnsAfterAsync(sent.ChatId, 0))!.Turns[0];
+        var cited = Assert.Single(turn.Cited);
+
+        Assert.Equal(FamiliarCitationTarget.Task, cited.Target);
+        Assert.Equal("task: Append Sakura ~ Hello World to README", cited.Label);
+        Assert.Equal($"/Tasks/Details/{task.Id}", cited.Href);
+    }
+
+    /// <summary>
+    /// The guarantee this must not weaken. Resolving against live state rather than a recorded pack
+    /// is sound for projects and tasks, but an id naming nothing at all is still an invention and
+    /// still has to be marked in front of the reader.
+    /// </summary>
+    [Fact]
+    public async Task An_id_that_names_nothing_at_all_is_still_unsupported()
+    {
+        using var database = new TemporarySqliteDatabase();
+        await using var dbContext = await database.CreateContextAsync();
+        var service = NewService(dbContext);
+
+        var sent = await service.SendAsync(null, "what is the state of things?");
+        await SettleNamingAsync(dbContext, Guid.NewGuid());
+
+        var turn = (await service.ReadTurnsAfterAsync(sent.ChatId, 0))!.Turns[0];
+
+        Assert.Empty(turn.Cited);
+        Assert.Contains(turn.Segments, segment => segment.IsCitation && !segment.IsSupported);
+    }
+
+    /// <summary>
+    /// A sensitive project's id resolves to nothing, and the chip stays unsupported.
+    ///
+    /// That is the correct outcome rather than a gap: it discloses neither the title nor the fact
+    /// that a row exists, which is the same what-not-which rule the retrieval filter follows. The
+    /// assertion is that the name appears nowhere in what a reader is handed.
+    /// </summary>
+    [Fact]
+    public async Task A_sensitive_projects_id_resolves_to_nothing_and_leaks_no_name()
+    {
+        using var database = new TemporarySqliteDatabase();
+        await using var dbContext = await database.CreateContextAsync();
+        var service = NewService(dbContext);
+
+        var project = await SeedProjectAsync(dbContext);
+        var task = await SeedTaskAsync(dbContext, project.Id, "A distinctive withheld task title");
+
+        var stored = await dbContext.Projects.SingleAsync(candidate => candidate.Id == project.Id);
+        stored.IsSensitive = true;
+        await dbContext.SaveChangesAsync();
+        dbContext.ChangeTracker.Clear();
+
+        var sent = await service.SendAsync(null, "what is waiting on me?");
+        await SettleNamingAsync(dbContext, task.Id);
+
+        var turn = (await service.ReadTurnsAfterAsync(sent.ChatId, 0))!.Turns[0];
+
+        Assert.Empty(turn.Cited);
+        Assert.Contains(turn.Segments, segment => segment.IsCitation && !segment.IsSupported);
+        Assert.DoesNotContain("distinctive withheld", turn.Output, StringComparison.OrdinalIgnoreCase);
+    }
+
     // ---------------------------------------------------------------- helpers
+
+    /// <summary>
+    /// Completes the in-flight turn with a reply that names <paramref name="id"/> and records no
+    /// evidence at all — which is the situation these tests are about: an id that reached the reply
+    /// through the standing brief rather than through the retrieval pack.
+    /// </summary>
+    private static async Task SettleNamingAsync(FamiliarDbContext dbContext, Guid id)
+    {
+        var turn = await dbContext.FamiliarChatTurns
+            .SingleAsync(candidate =>
+                candidate.State == FamiliarChatTurnState.Pending
+                || candidate.State == FamiliarChatTurnState.Generating);
+
+        turn.State = FamiliarChatTurnState.Completed;
+        turn.Output = $"The one that matters here is {id}.";
+        turn.EvidenceEntryIds = null;
+        turn.CompletedUtc = Now.UtcDateTime;
+
+        await dbContext.SaveChangesAsync();
+        dbContext.ChangeTracker.Clear();
+    }
+
+    private static async Task<FamiliarTask> SeedTaskAsync(
+        FamiliarDbContext dbContext,
+        Guid projectId,
+        string title)
+    {
+        var task = new FamiliarTask
+        {
+            Id = Guid.NewGuid(),
+            ProjectId = projectId,
+            Title = title,
+            RequestedOutcome = "Seeded for FamiliarChatServiceTests.",
+            Status = FindFamiliar.Server.Domain.TaskStatus.Ready,
+            CreatedUtc = Now.UtcDateTime,
+            UpdatedUtc = Now.UtcDateTime
+        };
+
+        dbContext.Tasks.Add(task);
+        await dbContext.SaveChangesAsync();
+        dbContext.ChangeTracker.Clear();
+
+        return task;
+    }
 
     private static FamiliarChatService NewService(
         FamiliarDbContext dbContext,

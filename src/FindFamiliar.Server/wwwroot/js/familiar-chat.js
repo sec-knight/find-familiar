@@ -143,18 +143,30 @@
 
         const link = document.createElement("a");
         link.className = "familiar-citation";
-        // The route form the Razor page produces, not a query string. The two renderers must build
-        // the same link or a chip tapped on a streamed reply lands somewhere a rendered one does not.
-        link.href = "/Demiplane/" + encodeURIComponent(citation.projectId);
-        link.title = citation.kind + " — " + citation.title;
-        link.textContent = String(citation.kind).toLowerCase() + ": " + citation.title;
+        // Route, label and tooltip all come from the view. They used to be built here and again in
+        // the Razor page — two copies of the same rule, which is how a chip tapped on a streamed
+        // reply comes to land somewhere a rendered one does not. Parity is now a property of there
+        // being one implementation rather than of two agreeing.
+        link.href = citation.href;
+        link.title = citation.tooltip;
+        link.textContent = citation.label;
         return link;
+    }
+
+    // The token Razor stamps into every form on this page. Read from one that was rendered rather
+    // than fetched: a decision posted from a streamed card goes through the same antiforgery check
+    // as one posted from a rendered card, because it carries the same token.
+    function antiforgeryToken() {
+        const field = document.querySelector('input[name="__RequestVerificationToken"]');
+        return field ? field.value : "";
     }
 
     // The same card the Razor page renders, built the same way: elements for structure, textContent
     // for every value. A plan arriving over the stream and one that came with a page render have to
     // be the same thing on screen, or a person who reloads sees a different proposal than the one
-    // they were reading.
+    // they were reading — and since Sprint 13 that includes being decidable. This card used to say
+    // approving here was not built yet, which stopped being true and left the streamed plan as the
+    // only one a person could not act on.
     function renderPlan(node, plan) {
         const reply = node.querySelector("[data-reply]");
         const existing = reply.querySelector("[data-plan]");
@@ -167,41 +179,106 @@
             return;
         }
 
+        // Rebuilt only when the plan itself moved. A frame arrives about once a second, and this card
+        // now holds text boxes a person edits before approving — re-rendering on every frame would
+        // wipe a sentence out from under them mid-word. The token changes whenever the row does, so
+        // it is the honest test of "is this still the plan already on screen".
+        const identity = String(plan.planId) + ":" + String(plan.concurrencyToken) + ":" + String(plan.status);
+
+        if (existing && existing.dataset.planIdentity === identity) {
+            return;
+        }
+
         const section = existing || document.createElement("section");
         section.className = "familiar-plan";
         section.dataset.plan = "";
+        section.dataset.planIdentity = identity;
         section.setAttribute("aria-label", "Drafted plan");
         section.textContent = "";
 
-        section.appendChild(
-            line("p", "familiar-plan-meta", "Drafted plan · " + plan.projectName + " · " + String(plan.status).toLowerCase()));
+        const meta = document.createElement("p");
+        meta.className = "familiar-plan-meta";
+        meta.appendChild(line("strong", "", "Drafted plan"));
+        meta.appendChild(line("span", "", " · " + plan.projectName));
+        meta.appendChild(line("span", "", " · " + String(plan.status).toLowerCase()));
+        section.appendChild(meta);
+
         section.appendChild(line("p", "familiar-plan-summary", plan.summary));
+
+        // One form for the whole plan, posting to the handler the rendered card posts to. Approval is
+        // a single decision on a single row, so a person cannot half-approve by submitting twice.
+        const form = document.createElement("form");
+        form.method = "post";
+        form.action = "/Familiar/Chat/" + encodeURIComponent(chatId) + "?handler=DecidePlan";
+        form.appendChild(hidden("__RequestVerificationToken", antiforgeryToken()));
+        form.appendChild(hidden("PlanId", plan.planId));
+
+        // The token this rendering carried. A plan decided or redrawn since — on another device, in
+        // another tab — is refused rather than applied to something the person did not read.
+        form.appendChild(hidden("ExpectedConcurrencyToken", plan.concurrencyToken));
 
         const list = document.createElement("ol");
         list.className = "familiar-plan-items";
 
-        (plan.items || []).forEach(function (item) {
+        (plan.items || []).forEach(function (item, index) {
             const entry = document.createElement("li");
             entry.className = "familiar-plan-item";
-            entry.appendChild(line("p", "familiar-plan-item-title", item.title));
-            entry.appendChild(line("p", "familiar-plan-item-outcome", item.requestedOutcome));
+            entry.appendChild(hidden("Items[" + index + "].ItemId", item.itemId));
 
-            const meta = document.createElement("p");
-            meta.className = "familiar-plan-item-meta";
-            meta.appendChild(item.role
+            if (plan.isPending) {
+                const include = document.createElement("label");
+                include.className = "familiar-plan-include";
+
+                // A cleared checkbox posts nothing at all, which would read as "left alone" rather
+                // than "excluded", so a hidden field carries the false. The hidden goes AFTER the
+                // checkbox and the order is the whole point: both names post, and the model binder
+                // takes the first value. With the hidden first, every item binds false however it was
+                // ticked (commit 81d754a).
+                const box = document.createElement("input");
+                box.type = "checkbox";
+                box.name = "Items[" + index + "].IsIncluded";
+                box.value = "true";
+                box.checked = !!item.isIncluded;
+                include.appendChild(box);
+                include.appendChild(hidden("Items[" + index + "].IsIncluded", "false"));
+                include.appendChild(line("span", "", "Include"));
+                entry.appendChild(include);
+
+                entry.appendChild(field("Title", input("Items[" + index + "].Title", item.title)));
+                entry.appendChild(field("Requested outcome", textarea("Items[" + index + "].RequestedOutcome", item.requestedOutcome)));
+            } else {
+                entry.appendChild(line("p", "familiar-plan-item-title", item.title));
+                entry.appendChild(line("p", "familiar-plan-item-outcome", item.requestedOutcome));
+            }
+
+            const itemMeta = document.createElement("p");
+            itemMeta.className = "familiar-plan-item-meta";
+            itemMeta.appendChild(item.role
                 ? line("span", "familiar-plan-role", "starts a " + item.role + " session")
                 : line("span", "familiar-plan-role is-quiet", "records the work, starts nothing"));
 
+            if (item.createdTaskId) {
+                const created = document.createElement("a");
+                created.className = "familiar-citation";
+                created.href = "/Tasks/Details/" + encodeURIComponent(item.createdTaskId);
+                created.textContent = "created task";
+                itemMeta.appendChild(created);
+            } else if (!plan.isPending && !item.isIncluded) {
+                itemMeta.appendChild(line("span", "familiar-plan-role is-quiet", "excluded — nothing created"));
+            }
+
             (item.evidence || []).forEach(function (citation) {
-                meta.appendChild(chip(citation));
+                itemMeta.appendChild(chip(citation));
             });
 
-            entry.appendChild(meta);
+            entry.appendChild(itemMeta);
             list.appendChild(entry);
         });
 
-        section.appendChild(list);
+        form.appendChild(list);
 
+        // Stated before anything is pressed. The disclosure is what makes an approval an act of
+        // reading rather than of trust.
         const included = (plan.items || []).filter(function (item) {
             return item.isIncluded;
         });
@@ -209,25 +286,76 @@
             return item.role;
         })[0];
 
-        section.appendChild(line(
-            "p",
-            "familiar-plan-consequence",
-            "Approving this would create " + included.length + " task(s) in " + plan.projectName
-            + (firstSession
-                ? " and start one " + firstSession.role + " session, on “" + firstSession.title + "”."
-                : " and start no sessions.")
-            + " Nothing has been created yet."));
+        form.appendChild(line("p", "familiar-plan-consequence", plan.isPending
+            ? "Approving this would create " + included.length + " task(s) in " + plan.projectName
+              + (firstSession
+                  ? " and start one " + firstSession.role + " session, on “" + firstSession.title + "”."
+                  : " and start no sessions.")
+              + " The rest of the plan waits until you have seen what comes back. Nothing has been created yet."
+            : plan.status === "Approved"
+                ? "Approved. " + plan.items.filter(function (item) { return item.createdTaskId; }).length
+                  + " task(s) were created in " + plan.projectName + "."
+                : "Declined. Nothing was created."));
 
-        section.appendChild(line(
-            "p",
-            "familiar-plan-note",
-            "Approving a plan in the conversation is not built yet. This is a record of what was proposed."));
+        if (plan.isPending) {
+            const actions = document.createElement("div");
+            actions.className = "familiar-compose-actions";
+            actions.appendChild(button("familiar-compose-send", "true", "Approve this plan"));
+            actions.appendChild(button("familiar-compose-plan", "false", "Decline"));
+            form.appendChild(actions);
+        }
+
+        section.appendChild(form);
 
         if (!existing) {
             // Before the waiting note, which is where the server renders it. Appending would put the
             // plan after it and give the two renderings a different DOM order.
             reply.insertBefore(section, reply.querySelector("[data-pending]"));
         }
+    }
+
+    function hidden(name, value) {
+        const node = document.createElement("input");
+        node.type = "hidden";
+        node.name = name;
+        node.value = value == null ? "" : String(value);
+        return node;
+    }
+
+    function input(name, value) {
+        const node = document.createElement("input");
+        node.type = "text";
+        node.name = name;
+        node.value = value || "";
+        node.maxLength = Number(root.dataset.maxTitleLength || "200");
+        return node;
+    }
+
+    function textarea(name, value) {
+        const node = document.createElement("textarea");
+        node.name = name;
+        node.rows = 2;
+        node.maxLength = Number(root.dataset.maxOutcomeLength || "4000");
+        node.value = value || "";
+        return node;
+    }
+
+    function field(label, control) {
+        const node = document.createElement("label");
+        node.className = "familiar-plan-field";
+        node.appendChild(line("span", "", label));
+        node.appendChild(control);
+        return node;
+    }
+
+    function button(className, approve, label) {
+        const node = document.createElement("button");
+        node.type = "submit";
+        node.className = className;
+        node.name = "Approve";
+        node.value = approve;
+        node.textContent = label;
+        return node;
     }
 
     function line(tag, className, text) {

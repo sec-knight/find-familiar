@@ -29,6 +29,15 @@ public sealed record FamiliarReplySegment(string Text, Guid? EntryId = null, boo
 /// An id that was not in the pack is kept and marked, never silently deleted. Dropping it would hide
 /// the most diagnostic thing a reply can do: name a source that does not exist. A reader should see
 /// that happen, and so should anyone reading the transcript afterwards.
+///
+/// <b>"The pack" is not the same test for every kind of id, and the difference is epistemic rather
+/// than a relaxation.</b> A context entry is one of thousands, of which a handful were retrieved, so
+/// its existence proves nothing about its having been shown and the recorded pack is the only honest
+/// check. A project id or a task id reaches a reply through one channel only — the standing brief —
+/// so "this names a real project or task the reader may see" <i>is</i> evidence it was shown, and it
+/// is a check the brief cannot fail to have made, because it is what the brief is built from. Holding
+/// project and task ids to the entry pack instead is what put the literal words "unsupported
+/// reference" in front of readers wherever the Familiar named a task it had been handed.
 /// </summary>
 public static class FamiliarChatCitations
 {
@@ -87,6 +96,48 @@ public static class FamiliarChatCitations
         }
 
         return segments;
+    }
+
+    /// <summary>
+    /// Every canonical id a reply names, distinct, in the order they appear.
+    ///
+    /// The same scan <see cref="Segment"/> performs, exposed so a caller can go and find out what the
+    /// ids point at before deciding how to render them. Sharing <see cref="TryReadId"/> is the point:
+    /// a second scanner with its own boundary rules would eventually disagree with the segmenter about
+    /// what an id is, and the disagreement would show as a chip in one renderer and plain text in the
+    /// other.
+    /// </summary>
+    /// <param name="limit">
+    /// A bound, not a guess. Resolving these costs a query, and a reply that is somehow a thousand
+    /// ids long must not turn one page render into a thousand-row lookup.
+    /// </param>
+    public static IReadOnlyList<Guid> FindIds(string? output, int limit = 32)
+    {
+        if (string.IsNullOrEmpty(output))
+        {
+            return [];
+        }
+
+        var found = new List<Guid>();
+        var index = 0;
+
+        while (index <= output.Length - IdLength && found.Count < limit)
+        {
+            if (!TryReadId(output, index, out var entryId))
+            {
+                index++;
+                continue;
+            }
+
+            if (!found.Contains(entryId))
+            {
+                found.Add(entryId);
+            }
+
+            index += IdLength;
+        }
+
+        return found;
     }
 
     /// <summary>

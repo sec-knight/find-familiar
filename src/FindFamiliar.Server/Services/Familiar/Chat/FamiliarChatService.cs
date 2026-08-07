@@ -317,6 +317,20 @@ public sealed class FamiliarChatService(
                 .ToList(),
             cancellationToken);
 
+        // Ids the replies named that no context entry explains. A project or a task id reaches a reply
+        // only through the standing brief, so one that names a real, visible row was shown — which is
+        // the same check the pack performs for entries, made against the only record that holds these.
+        var unexplained = rows
+            .SelectMany(row => FamiliarChatCitations.FindIds(row.Output))
+            .Where(id => !resolved.ContainsKey(id))
+            .Distinct()
+            .ToList();
+
+        foreach (var reference in await ResolveReferencesAsync(unexplained, cancellationToken))
+        {
+            resolved[reference.EntryId] = reference;
+        }
+
         return rows
             .Select(row => new FamiliarChatTurnView(
                 row.Id,
@@ -329,7 +343,13 @@ public sealed class FamiliarChatService(
                 row.CompletedUtc,
                 row.ProviderName,
                 row.ProviderModel,
+                // The pack, plus whatever else the reply named and this page could resolve. Both are
+                // needed: the pack is what the turn was answered from, and the segmenter treats this
+                // list as the set of ids that earn a chip, so a project the reply named has to be in
+                // it or the streaming renderer has nothing to build a chip from.
                 evidence[row.Id]
+                    .Concat(FamiliarChatCitations.FindIds(row.Output))
+                    .Distinct()
                     .Where(resolved.ContainsKey)
                     .Select(id => resolved[id])
                     .ToList(),
@@ -483,8 +503,56 @@ public sealed class FamiliarChatService(
                 entry.Id,
                 entry.ProjectId,
                 entry.Kind,
-                entry.Title))
+                entry.Title,
+                FamiliarCitationTarget.ContextEntry))
             .ToDictionaryAsync(citation => citation.EntryId, cancellationToken);
+    }
+
+    /// <summary>
+    /// The projects and tasks a reply named, for ids no context entry explains.
+    ///
+    /// These are checked against live state rather than against the turn's evidence pack, and
+    /// <c>FamiliarChatCitations</c> carries the argument for why that is sound: a project or task id
+    /// reaches a reply only through the standing brief, so naming a real and visible one is itself
+    /// evidence of having been shown it. Holding them to the entry pack is what rendered every task
+    /// the Familiar named as the words "unsupported reference".
+    ///
+    /// Both queries re-apply the sensitivity filter exactly as the entry query does. A sensitive
+    /// project's id resolves to nothing and still renders unsupported, which is the right outcome: it
+    /// discloses neither the title nor the fact that the row exists.
+    /// </summary>
+    private async Task<IReadOnlyList<FamiliarChatCitationView>> ResolveReferencesAsync(
+        IReadOnlyCollection<Guid> ids,
+        CancellationToken cancellationToken)
+    {
+        if (ids.Count == 0)
+        {
+            return [];
+        }
+
+        var projects = await dbContext.Projects
+            .AsNoTracking()
+            .Where(project => ids.Contains(project.Id) && !project.IsSensitive)
+            .Select(project => new FamiliarChatCitationView(
+                project.Id,
+                project.Id,
+                null,
+                project.Name,
+                FamiliarCitationTarget.Project))
+            .ToListAsync(cancellationToken);
+
+        var tasks = await dbContext.Tasks
+            .AsNoTracking()
+            .Where(task => ids.Contains(task.Id) && !task.Project.IsSensitive)
+            .Select(task => new FamiliarChatCitationView(
+                task.Id,
+                task.ProjectId,
+                null,
+                task.Title,
+                FamiliarCitationTarget.Task))
+            .ToListAsync(cancellationToken);
+
+        return [.. projects, .. tasks];
     }
 
     private async Task<int?> ReadInFlightSequenceAsync(Guid? chatId, CancellationToken cancellationToken)

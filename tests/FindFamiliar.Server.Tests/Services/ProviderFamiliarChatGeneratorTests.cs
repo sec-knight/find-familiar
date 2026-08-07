@@ -369,7 +369,157 @@ public sealed class ProviderFamiliarChatGeneratorTests
         Assert.Equal("asked one", history[0].UserText);
     }
 
+    // ---------------------------------------------------------------- when a plan is drafted
+
+    /// <summary>
+    /// An ordinary turn drafts too, and this is the whole point of the change.
+    ///
+    /// Asked for a change without pressing "Plan this", the Familiar used to answer by naming a
+    /// button — telling the person to go and do by hand the thing the system exists to do. The pass
+    /// now runs on every turn and decides for itself whether the exchange asked for work, which it
+    /// cannot do unless it is called.
+    /// </summary>
+    [Fact]
+    public async Task An_ordinary_turn_still_reaches_the_drafting_pass()
+    {
+        using var database = new TemporarySqliteDatabase();
+        await using var dbContext = await database.CreateContextAsync();
+
+        var provider = new ScriptedChatProvider();
+        provider.Emit("That would need an edit to the retrieval floor.");
+        provider.Finish(FamiliarChatProviderStatus.Completed);
+
+        var planning = new RecordingPlanDraftingService();
+
+        await NewGenerator(dbContext, provider, planning: planning)
+            .GenerateAsync(
+                new FamiliarChatGenerationRequest(Guid.NewGuid(), Guid.NewGuid(), 1, "raise the floor", null),
+                new RecordingSink());
+
+        var drafted = Assert.Single(planning.Requests);
+
+        Assert.Equal(FamiliarPlanDraftIntent.Offered, drafted.Intent);
+
+        // The reply is what the pass judges "was this a request for work?" from, so it has to be
+        // carried on an ordinary turn — it used to be collected only when a plan had been asked for.
+        Assert.Equal("That would need an edit to the retrieval floor.", drafted.ConversationalReply);
+    }
+
+    [Fact]
+    public async Task Pressing_plan_this_says_so_to_the_drafting_pass()
+    {
+        using var database = new TemporarySqliteDatabase();
+        await using var dbContext = await database.CreateContextAsync();
+
+        var provider = new ScriptedChatProvider();
+        provider.Emit("Proposing two items.");
+        provider.Finish(FamiliarChatProviderStatus.Completed);
+
+        var planning = new RecordingPlanDraftingService();
+
+        await NewGenerator(dbContext, provider, planning: planning)
+            .GenerateAsync(
+                new FamiliarChatGenerationRequest(
+                    Guid.NewGuid(), Guid.NewGuid(), 1, "plan the next sprint", null, RequestedPlan: true),
+                new RecordingSink());
+
+        Assert.Equal(FamiliarPlanDraftIntent.Requested, Assert.Single(planning.Requests).Intent);
+    }
+
+    /// <summary>
+    /// One plan at a time, and a pending plan outranks a pressed button.
+    ///
+    /// The filtered unique index refuses a second undecided plan per conversation, so drafting one
+    /// would fail on insert and tell the person nothing. Not calling the pass at all saves the call
+    /// and lets the reply say why.
+    /// </summary>
+    [Fact]
+    public async Task A_pending_plan_stops_a_second_one_being_drafted()
+    {
+        using var database = new TemporarySqliteDatabase();
+        await using var dbContext = await database.CreateContextAsync();
+
+        var chatId = await SeedChatWithPendingPlanAsync(dbContext);
+
+        var provider = new ScriptedChatProvider();
+        provider.Emit("Decide the plan already on screen first.");
+        provider.Finish(FamiliarChatProviderStatus.Completed);
+
+        var planning = new RecordingPlanDraftingService();
+
+        await NewGenerator(dbContext, provider, planning: planning)
+            .GenerateAsync(
+                new FamiliarChatGenerationRequest(
+                    chatId, Guid.NewGuid(), 2, "and also fix the other thing", null, RequestedPlan: true),
+                new RecordingSink());
+
+        Assert.Empty(planning.Requests);
+    }
+
     // ---------------------------------------------------------------- helpers
+
+    /// <summary>A conversation with one undecided plan in it, which is the state that withholds drafting.</summary>
+    private static async Task<Guid> SeedChatWithPendingPlanAsync(FamiliarDbContext dbContext)
+    {
+        var project = new FamiliarProject
+        {
+            Id = Guid.NewGuid(),
+            Name = "Find Familiar",
+            Purpose = "Seeded for ProviderFamiliarChatGeneratorTests.",
+            Status = ProjectStatus.Active,
+            CreatedUtc = Now.UtcDateTime,
+            UpdatedUtc = Now.UtcDateTime
+        };
+
+        var chat = new FamiliarChat
+        {
+            Id = Guid.NewGuid(),
+            Title = "Seeded",
+            CreatedUtc = Now.UtcDateTime,
+            UpdatedUtc = Now.UtcDateTime
+        };
+
+        var turn = new FamiliarChatTurn
+        {
+            Id = Guid.NewGuid(),
+            ChatId = chat.Id,
+            Sequence = 1,
+            State = FamiliarChatTurnState.Completed,
+            UserText = "do the first thing",
+            Output = "Proposing it.",
+            CreatedUtc = Now.UtcDateTime,
+            CompletedUtc = Now.UtcDateTime
+        };
+
+        dbContext.Projects.Add(project);
+        dbContext.FamiliarChats.Add(chat);
+        dbContext.FamiliarChatTurns.Add(turn);
+        dbContext.FamiliarPlanProposals.Add(new FamiliarPlanProposal
+        {
+            Id = Guid.NewGuid(),
+            ChatId = chat.Id,
+            TurnId = turn.Id,
+            ProjectId = project.Id,
+            Status = FamiliarPlanStatus.Pending,
+            Summary = "Already waiting on a decision.",
+            CreatedUtc = Now.UtcDateTime,
+            Items =
+            [
+                new FamiliarPlanItem
+                {
+                    Id = Guid.NewGuid(),
+                    Position = 0,
+                    Title = "Something already proposed",
+                    RequestedOutcome = "It is on screen and undecided.",
+                    Role = AgentSessionRole.Implementer
+                }
+            ]
+        });
+
+        await dbContext.SaveChangesAsync();
+
+        return chat.Id;
+    }
 
     private static ProviderFamiliarChatGenerator NewGenerator(
         FamiliarDbContext dbContext,
@@ -380,7 +530,9 @@ public sealed class ProviderFamiliarChatGeneratorTests
         new(dbContext,
             provider,
             briefs ?? new EmptyStandingBriefService(),
-            retrieval ?? new FamiliarContextRetrievalService(dbContext),
+            retrieval ?? new FamiliarContextRetrievalService(
+                dbContext,
+                Microsoft.Extensions.Options.Options.Create(new FamiliarRetrievalOptions())),
             planning ?? new RecordingPlanDraftingService(),
             new FamiliarConversationStateService(dbContext));
 

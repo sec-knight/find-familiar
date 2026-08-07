@@ -172,4 +172,84 @@ public sealed class FamiliarChatCitationTests
     [Fact]
     public void An_unreadable_stored_fragment_is_skipped_rather_than_fatal() =>
         Assert.Equal([Offered], FamiliarChatCitations.ParseEvidence($"not-an-id {Offered:N}"));
+
+    // ---------------------------------------------------------------- finding ids to resolve
+
+    /// <summary>
+    /// Every id a reply names, so a caller can go and find out what they point at. Distinct and in
+    /// order, because the caller turns them into one query.
+    /// </summary>
+    [Fact]
+    public void Every_id_a_reply_names_is_found_once()
+    {
+        var found = FamiliarChatCitations.FindIds(
+            $"Both {NeverOffered} and {Offered} matter, and {NeverOffered} twice.");
+
+        Assert.Equal([NeverOffered, Offered], found);
+    }
+
+    /// <summary>
+    /// The same boundary rule the segmenter uses. A scanner with its own would eventually disagree
+    /// about what an id is, and the disagreement would show as a chip in one renderer and plain text
+    /// in the other.
+    /// </summary>
+    [Fact]
+    public void An_id_inside_a_longer_token_is_not_found() =>
+        Assert.Empty(FamiliarChatCitations.FindIds($"x{Offered}"));
+
+    /// <summary>
+    /// A bound, not a guess: resolving costs a query, and one reply must not become a thousand-row
+    /// lookup however long it is.
+    /// </summary>
+    [Fact]
+    public void The_number_of_ids_returned_is_bounded()
+    {
+        var text = string.Join(" ", Enumerable.Range(0, 50).Select(_ => Guid.NewGuid()));
+
+        Assert.Equal(8, FamiliarChatCitations.FindIds(text, limit: 8).Count);
+    }
+
+    // ---------------------------------------------------------------- what a chip says and where it goes
+
+    /// <summary>
+    /// Route, label and tooltip come from the view so that both renderers read one implementation.
+    /// They used to be built twice — in Razor and again in the script — which is how a chip tapped on
+    /// a streamed reply comes to land somewhere a rendered one does not.
+    /// </summary>
+    [Fact]
+    public void An_entry_chip_names_its_kind_and_links_to_its_project()
+    {
+        var projectId = Guid.NewGuid();
+        var citation = new FamiliarChatCitationView(
+            Offered, projectId, ContextEntryKind.Decision, "Retrieval gets a floor");
+
+        Assert.Equal("decision: Retrieval gets a floor", citation.Label);
+        Assert.Equal($"/Demiplane/{projectId}", citation.Href);
+    }
+
+    [Fact]
+    public void A_project_chip_links_to_the_project()
+    {
+        var projectId = Guid.NewGuid();
+        var citation = new FamiliarChatCitationView(
+            projectId, projectId, null, "Find Familiar", FamiliarCitationTarget.Project);
+
+        Assert.Equal("project: Find Familiar", citation.Label);
+        Assert.Equal($"/Demiplane/{projectId}", citation.Href);
+    }
+
+    /// <summary>
+    /// A task chip goes to the task, not to its project. This is the one place the two targets route
+    /// differently, so it is the one worth stating.
+    /// </summary>
+    [Fact]
+    public void A_task_chip_links_to_the_task_rather_than_its_project()
+    {
+        var taskId = Guid.NewGuid();
+        var citation = new FamiliarChatCitationView(
+            taskId, Guid.NewGuid(), null, "Stop plans naming paths sessions cannot reach", FamiliarCitationTarget.Task);
+
+        Assert.Equal("task: Stop plans naming paths sessions cannot reach", citation.Label);
+        Assert.Equal($"/Tasks/Details/{taskId}", citation.Href);
+    }
 }

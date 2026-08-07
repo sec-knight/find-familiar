@@ -52,4 +52,46 @@ public static class FamiliarPlanDraftPrompt
         - Return {"summary": "...", "items": []} only when there is genuinely nothing to do — not
           because the records left you unsure. Say what you are unsure about in the summary instead.
         """;
+
+    /// <summary>
+    /// Appended when the person pressed "Plan this". They have already declared what they want, so the
+    /// judgement below is not theirs to make again.
+    /// </summary>
+    public const string Requested =
+        """
+        The person pressed "Plan this". They have asked for a plan, so draft one. Return no items only
+        if the exchange genuinely names no work at all — not because the records left you unsure.
+        """;
+
+    /// <summary>
+    /// Appended on an ordinary turn, where this pass runs uninvited and its first job is to decide
+    /// whether it should have.
+    ///
+    /// This paragraph is the only guard against a plan card appearing on a turn that was a question,
+    /// and it is prose, which is worth being honest about. What makes it safe enough is the gate
+    /// around it rather than the wording inside it: a conversation holds at most one pending plan, so
+    /// the worst this can produce is a single stray card with a Decline button under it.
+    /// </summary>
+    public const string Offered =
+        """
+        Nobody asked for a plan. This pass runs on every turn, so your first decision is whether this
+        exchange is asking for work to be done at all.
+
+        Return {"summary": "why there is nothing to propose", "items": []} unless the person is asking
+        for something to be changed, built, fixed, investigated or produced. A question about what is
+        recorded, a request to explain or summarise, a correction, an argument about how something
+        should work, thanks and small talk are all answered with no items. A plan is a card a person
+        has to read and dismiss, so the bar is a request for work — not a subject that could one day
+        become work.
+
+        Where they are asking for something to be done, draft it exactly as you would if they had
+        pressed the button.
+        """;
+
+    /// <summary>
+    /// The prompt for a pass started this way. The judgement goes last, after the rules it operates
+    /// on, which is where a model weights it most.
+    /// </summary>
+    public static string For(FamiliarPlanDraftIntent intent) =>
+        Text + "\n\n" + (intent == FamiliarPlanDraftIntent.Requested ? Requested : Offered);
 }
