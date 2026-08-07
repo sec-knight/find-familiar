@@ -31,7 +31,8 @@ public sealed class ProviderFamiliarChatGenerator(
     IFamiliarChatProvider provider,
     IFamiliarStandingBriefService briefs,
     IFamiliarContextRetrievalService retrieval,
-    IFamiliarPlanDraftingService planning) : IFamiliarChatGenerator
+    IFamiliarPlanDraftingService planning,
+    IFamiliarConversationStateService conversationState) : IFamiliarChatGenerator
 {
     /// <summary>
     /// Prior exchanges sent back with a new message. A count, not a size — Sprint 12 caps working
@@ -64,12 +65,18 @@ public sealed class ProviderFamiliarChatGenerator(
             found.Entries.Select(entry => entry.EntryId).ToList(),
             cancellationToken);
 
+        // What this conversation has already done, and what approving a plan actually causes. Without
+        // it a model asked "did that work?" answers from the transcript, which records what was said
+        // rather than what happened.
+        var planState = await conversationState.ReadAsync(request.ChatId, cancellationToken);
+
         var prompt = new FamiliarChatRequest(
             FamiliarChatSystemPrompt.Text,
             history,
             request.UserText,
             FamiliarStandingBriefWriter.Write(brief),
-            FamiliarRetrievalWriter.Write(found));
+            FamiliarRetrievalWriter.Write(found),
+            FamiliarConversationStateWriter.Write(planState, request.RequestedPlan));
 
         var emitted = 0;
 

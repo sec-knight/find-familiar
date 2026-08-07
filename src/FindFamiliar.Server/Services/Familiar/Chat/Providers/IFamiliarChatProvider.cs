@@ -25,6 +25,10 @@ public sealed record FamiliarChatHistoryTurn(string UserText, string Output);
 /// and folding it into the constant would mean every project edit invalidated the cache entry for the
 /// part that never changes at all.
 /// </summary>
+/// <param name="ConversationState">
+/// What this conversation has already done — whether a plan is awaiting a decision, and what
+/// approving one actually causes. Volatile, so it sits in the tail beside the retrieved context.
+/// </param>
 /// <param name="RecordedContext">
 /// What searching the recorded context turned up for this message, or null when nothing selective was
 /// asked. Placed after the history rather than beside the brief because it is the most volatile
@@ -35,7 +39,8 @@ public sealed record FamiliarChatRequest(
     IReadOnlyList<FamiliarChatHistoryTurn> History,
     string UserMessage,
     string? StandingBrief = null,
-    string? RecordedContext = null);
+    string? RecordedContext = null,
+    string? ConversationState = null);
 
 /// <summary>
 /// How a stream ended. Every member maps to exactly one code and one sentence in

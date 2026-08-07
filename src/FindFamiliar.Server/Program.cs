@@ -145,6 +145,10 @@ builder.Services.AddScoped<IFamiliarPlanApprovalService, FamiliarPlanApprovalSer
 // pages use.
 builder.Services.AddScoped<IFamiliarOpenDecisionsService, FamiliarOpenDecisionsService>();
 
+// Where this conversation's own plan stands. Without it a model asked "did that work?" invents an
+// answer, which it did the first time somebody tested the loop end to end.
+builder.Services.AddScoped<IFamiliarConversationStateService, FamiliarConversationStateService>();
+
 builder.Services.Configure<FamiliarReasoningOptions>(
     builder.Configuration.GetSection(FamiliarReasoningOptions.SectionName));
 

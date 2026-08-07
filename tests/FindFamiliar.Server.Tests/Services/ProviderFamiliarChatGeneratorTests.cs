@@ -381,7 +381,8 @@ public sealed class ProviderFamiliarChatGeneratorTests
             provider,
             briefs ?? new EmptyStandingBriefService(),
             retrieval ?? new FamiliarContextRetrievalService(dbContext),
-            planning ?? new RecordingPlanDraftingService());
+            planning ?? new RecordingPlanDraftingService(),
+            new FamiliarConversationStateService(dbContext));
 
     /// <summary>
     /// A brief with nothing in it, so these tests stay about the generator rather than about what the

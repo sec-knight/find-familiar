@@ -336,6 +336,13 @@ public sealed class OpenAiCompatibleFamiliarChatProvider(
             messages.Add(new ChatMessage("system", recorded));
         }
 
+        if (request.ConversationState is { Length: > 0 } state)
+        {
+            // Last of the system segments, immediately before the person's message: it is the most
+            // volatile thing sent and the thing a reply is most likely to be wrong about.
+            messages.Add(new ChatMessage("system", state));
+        }
+
         messages.Add(new ChatMessage("user", request.UserMessage));
 
         return new ChatRequest(
