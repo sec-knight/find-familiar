@@ -49,6 +49,20 @@ public static class FamiliarRetrievalWriter
                 + "knowledge as though it came from these records.");
         }
 
+        if (result.BelowThreshold > 0)
+        {
+            // The near-miss, stated as a near-miss. Retrieval always has a best candidate and this is
+            // where it says so honestly: these rows shared a word and answered nothing, they are
+            // deliberately not shown, and describing one would be the original defect returning.
+            builder
+                .Append(result.BelowThreshold)
+                .AppendLine(
+                    " further entr(ies) mentioned some of these words but were not close enough to be "
+                    + "responsive, so they were not retrieved. They are not a partial answer. Do not "
+                    + "guess at them, and do not treat this count as evidence that something relevant "
+                    + "exists.");
+        }
+
         foreach (var entry in result.Entries)
         {
             builder.Append("<entry id=\"").Append(entry.EntryId).AppendLine("\">");

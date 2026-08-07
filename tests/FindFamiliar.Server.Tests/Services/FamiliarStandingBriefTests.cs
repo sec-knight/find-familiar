@@ -2,6 +2,7 @@ using FindFamiliar.Server.Data;
 using FindFamiliar.Server.Domain;
 using FindFamiliar.Server.Services.Demiplane;
 using FindFamiliar.Server.Services.Familiar.Chat.Brief;
+using FindFamiliar.Server.Services.Familiar.Repository;
 using FindFamiliar.Server.Services.Providers;
 using FindFamiliar.Server.Tests.Infrastructure;
 using Microsoft.EntityFrameworkCore;
@@ -284,6 +285,59 @@ public sealed class FamiliarStandingBriefTests
 
         // And the limitation that says records are not the same thing as reality.
         Assert.Contains("when recording stopped, not when work stopped", text, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The repository snapshot must not set the newest-record date.
+    ///
+    /// It is written by a timer every half hour, so counting it pins "the newest record is dated X"
+    /// to today forever — and that date is what the Familiar's entire answer about how stale the
+    /// records are rests on. An automated capture records that a machine looked, not that anybody did
+    /// any work, so a project whose only recent write is a snapshot must still date its records from
+    /// the last real one.
+    /// </summary>
+    [Fact]
+    public async Task An_automated_repository_snapshot_does_not_move_the_newest_record_date()
+    {
+        using var database = new TemporarySqliteDatabase();
+        await using var dbContext = await database.CreateContextAsync();
+
+        var projectId = await SeedProjectAsync(dbContext, "Dated Project", "A purpose.");
+        var lastRealWork = Now.UtcDateTime.AddDays(-30);
+
+        // The project row is dated back too, so this test is about the snapshot rather than about the
+        // project's own UpdatedUtc, which is the other input to the same maximum.
+        var project = await dbContext.Projects.SingleAsync(candidate => candidate.Id == projectId);
+        project.UpdatedUtc = lastRealWork;
+
+        dbContext.ContextEntries.AddRange(
+            new ContextEntry
+            {
+                Id = Guid.NewGuid(),
+                ProjectId = projectId,
+                Kind = ContextEntryKind.Decision,
+                Title = "The last thing anybody actually wrote down",
+                Content = "Body.",
+                State = ContextEntryState.Active,
+                CreatedUtc = lastRealWork
+            },
+            new ContextEntry
+            {
+                Id = Guid.NewGuid(),
+                ProjectId = projectId,
+                Kind = ContextEntryKind.Summary,
+                Title = RepositorySnapshotService.SnapshotTitle,
+                Content = "branch: main",
+                State = ContextEntryState.Active,
+                CreatedUtc = Now.UtcDateTime
+            });
+
+        await dbContext.SaveChangesAsync();
+        dbContext.ChangeTracker.Clear();
+
+        var brief = await NewService(dbContext).GetBriefAsync();
+
+        Assert.Equal(lastRealWork, brief.NewestRecordedActivityUtc);
     }
 
     /// <summary>An empty system has no activity date, and inventing one would claim work that never happened.</summary>

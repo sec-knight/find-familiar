@@ -1,5 +1,6 @@
 using System.Text.Json.Serialization;
 using FindFamiliar.Server.Api.Familiar;
+using FindFamiliar.Server.Api.Repository;
 using FindFamiliar.Server.Api.Runner;
 using FindFamiliar.Server.Data;
 using FindFamiliar.Server.Domain;
@@ -12,6 +13,7 @@ using FindFamiliar.Server.Services.Familiar.Chat.Providers;
 using FindFamiliar.Server.Services.Familiar.Chat.Planning;
 using FindFamiliar.Server.Services.Familiar.Chat.Retrieval;
 using FindFamiliar.Server.Services.Familiar.Reasoning;
+using FindFamiliar.Server.Services.Familiar.Repository;
 using FindFamiliar.Server.Services.Providers;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.EntityFrameworkCore;
@@ -69,8 +71,29 @@ builder.Services.AddScoped<IFamiliarChatService, FamiliarChatService>();
 // sent. Both are read-only and neither needs a credential.
 builder.Services.AddScoped<IFamiliarStandingBriefService, FamiliarStandingBriefService>();
 builder.Services.AddScoped<IFamiliarContextRetrievalService, FamiliarContextRetrievalService>();
+
+// Where the bar sits between answering the question and sharing a word with it. In configuration
+// because the right numbers are a property of the corpus rather than of the algorithm.
+builder.Services.Configure<FamiliarRetrievalOptions>(
+    builder.Configuration.GetSection(FamiliarRetrievalOptions.SectionName));
+
 builder.Services.AddScoped<IFamiliarChatUsageService, FamiliarChatUsageService>();
 builder.Services.AddHostedService<FamiliarChatGenerationHost>();
+
+// ---- The repository state snapshot (ADR-0015) ----
+//
+// A worker that writes down what the repository actually contains, so the Familiar's picture of it
+// does not depend on somebody remembering to paste a file listing into a conversation. It is an
+// ordinary context entry, so it is retrieved through exactly the path everything else is, and it is
+// superseded by delete-on-write, so exactly one exists and no reader needs a filtering rule.
+//
+// Off unless configured: this is the one part of the talk lane that runs a process on the host.
+builder.Services.Configure<RepositorySnapshotOptions>(
+    builder.Configuration.GetSection(RepositorySnapshotOptions.SectionName));
+builder.Services.AddSingleton<RepositorySnapshotQueue>();
+builder.Services.AddScoped<IRepositoryStateReader, GitRepositoryStateReader>();
+builder.Services.AddScoped<IRepositorySnapshotService, RepositorySnapshotService>();
+builder.Services.AddHostedService<RepositorySnapshotHost>();
 
 builder.Services.Configure<FamiliarChatOptions>(
     builder.Configuration.GetSection(FamiliarChatOptions.SectionName));
@@ -295,6 +318,7 @@ app.MapFamiliarChatEndpoints();
 app.MapFamiliarChatStreamEndpoint();
 
 app.MapRunnerEndpoints();
+app.MapRepositorySnapshotEndpoints();
 
 app.Run();
 

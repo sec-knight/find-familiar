@@ -2,6 +2,7 @@ using FindFamiliar.Server.Data;
 using FindFamiliar.Server.Domain;
 using FindFamiliar.Server.Services.Familiar.Chat.Retrieval;
 using FindFamiliar.Server.Tests.Infrastructure;
+using Microsoft.Extensions.Options;
 
 namespace FindFamiliar.Server.Tests.Services;
 
@@ -255,6 +256,190 @@ public sealed class FamiliarContextRetrievalTests
         Assert.Null(FamiliarRetrievalWriter.Write(result));
     }
 
+    // ---------------------------------------------------------------- the relevance floor
+
+    /// <summary>
+    /// The regression test for the observed defect.
+    ///
+    /// Pressing "Plan this" on a question about repository snapshots returned an unrelated open item,
+    /// "DEFECT: plans name absolute paths", worded as though it were a freshly drafted plan. The
+    /// planning path was never at fault: the search under it had no floor, so it returned its best
+    /// candidate whatever that candidate scored, and its best candidate shared exactly one word with
+    /// the question — in a title, which is the heaviest signal this scorer has.
+    ///
+    /// The entry that actually answers the question is present here too, so this asserts the floor
+    /// discriminates rather than merely suppresses.
+    /// </summary>
+    [Fact]
+    public async Task A_question_about_repository_snapshots_does_not_return_the_absolute_paths_defect()
+    {
+        using var database = new TemporarySqliteDatabase();
+        await using var dbContext = await database.CreateContextAsync();
+
+        var project = await SeedProjectAsync(dbContext);
+
+        await SeedEntryAsync(dbContext, project, ContextEntryKind.OpenQuestion,
+            "DEFECT: plans name absolute paths",
+            "Drafted plans name absolute paths in their files_touched lists, which are wrong on any "
+            + "machine but this one.");
+
+        await SeedEntryAsync(dbContext, project, ContextEntryKind.Summary,
+            "Repository state snapshot (current)",
+            "Automated snapshot of the repository state: tracked files, recent commits, and a "
+            + "two-level view of tracked paths.");
+
+        var result = await Retrieve(dbContext, "what does the automated repository state snapshot record?");
+
+        var entry = Assert.Single(result.Entries);
+        Assert.Equal("Repository state snapshot (current)", entry.Title);
+
+        var written = FamiliarRetrievalWriter.Write(result)!;
+        Assert.DoesNotContain("absolute paths", written, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// The shape of the defect, isolated: one term, landing in a title, on a question of five.
+    ///
+    /// A title hit is worth eight content hits, so this scores well above any absolute floor. Only
+    /// breadth separates it from a real answer, which is why the floor is two numbers and not one.
+    /// </summary>
+    [Fact]
+    public async Task One_term_landing_in_a_title_is_not_an_answer()
+    {
+        using var database = new TemporarySqliteDatabase();
+        await using var dbContext = await database.CreateContextAsync();
+
+        var project = await SeedProjectAsync(dbContext);
+
+        await SeedEntryAsync(dbContext, project, ContextEntryKind.OpenQuestion,
+            "DEFECT: plans name absolute paths",
+            "Drafted plans name absolute paths in their files_touched lists.");
+
+        var result = await Retrieve(dbContext, "can you plan the automated repository state snapshot?");
+
+        Assert.True(result.FoundNothing);
+        Assert.True(result.NoMatchAboveFloor);
+        Assert.Equal(1, result.BelowThreshold);
+    }
+
+    /// <summary>
+    /// A near-miss is stated as a near-miss. The count travels into the prompt and the content does
+    /// not — the same disclosure rule sensitivity follows, applied to irrelevance.
+    ///
+    /// Saying nothing at all here would be worse than it sounds: retrieval genuinely did surface
+    /// something, and a model told only "nothing matches" while the store visibly contains the words
+    /// it asked about has been told something misleading.
+    /// </summary>
+    [Fact]
+    public async Task A_near_miss_is_disclosed_as_a_count_and_never_as_content()
+    {
+        using var database = new TemporarySqliteDatabase();
+        await using var dbContext = await database.CreateContextAsync();
+
+        var project = await SeedProjectAsync(dbContext);
+
+        await SeedEntryAsync(dbContext, project, ContextEntryKind.OpenQuestion,
+            "DEFECT: plans name absolute paths",
+            "A distinctive sentence that is not an answer to anything asked here.");
+
+        var written = FamiliarRetrievalWriter.Write(
+            await Retrieve(dbContext, "can you plan the automated repository state snapshot?"))!;
+
+        Assert.Contains("Nothing recorded matches this", written, StringComparison.Ordinal);
+        Assert.Contains("not close enough to be responsive", written, StringComparison.Ordinal);
+        Assert.DoesNotContain("distinctive sentence", written, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("absolute paths", written, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// On a one-word question breadth can say nothing — every match touches the only term there is —
+    /// so the absolute floor is the whole guard, and a passing mention in an unrelated note is exactly
+    /// what it rejects.
+    /// </summary>
+    [Fact]
+    public async Task On_a_one_word_question_a_passing_mention_does_not_clear_the_floor()
+    {
+        using var database = new TemporarySqliteDatabase();
+        await using var dbContext = await database.CreateContextAsync();
+
+        var project = await SeedProjectAsync(dbContext);
+
+        await SeedEntryAsync(dbContext, project, ContextEntryKind.Summary, "Weekly notes",
+            "Among other things we discussed handoff once.");
+
+        var result = await Retrieve(dbContext, "handoff");
+
+        Assert.True(result.NoMatchAboveFloor);
+        Assert.Equal(1, result.BelowThreshold);
+    }
+
+    /// <summary>
+    /// The clamp. A single identifier is the most precise query a person can type here, and a bar of
+    /// two terms applied literally would make it unanswerable.
+    /// </summary>
+    [Fact]
+    public async Task A_one_word_question_can_still_be_answered()
+    {
+        using var database = new TemporarySqliteDatabase();
+        await using var dbContext = await database.CreateContextAsync();
+
+        var project = await SeedProjectAsync(dbContext);
+
+        await SeedEntryAsync(dbContext, project, ContextEntryKind.Decision, "ADR-0013 provider split",
+            "The talk lane and the reasoning lane are configured separately.");
+
+        Assert.Equal("ADR-0013 provider split", (await Retrieve(dbContext, "adr-0013")).Entries[0].Title);
+    }
+
+    /// <summary>
+    /// An empty store is not a near-miss, and the prompt must not conflate them. "Nothing is written
+    /// down about this" and "things were written down and none of them answer you" lead a reader to
+    /// different next actions.
+    /// </summary>
+    [Fact]
+    public async Task An_empty_store_reports_no_match_and_no_near_misses()
+    {
+        using var database = new TemporarySqliteDatabase();
+        await using var dbContext = await database.CreateContextAsync();
+
+        await SeedProjectAsync(dbContext);
+
+        var result = await Retrieve(dbContext, "what does the repository state snapshot record?");
+
+        Assert.True(result.FoundNothing);
+        Assert.Equal(0, result.BelowThreshold);
+        Assert.False(result.NoMatchAboveFloor);
+
+        var written = FamiliarRetrievalWriter.Write(result)!;
+        Assert.Contains("Nothing recorded matches this", written, StringComparison.Ordinal);
+        Assert.DoesNotContain("not close enough to be responsive", written, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The bar is configuration, not a literal. The corpus this searches is thirty-odd entries today
+    /// and will not be, and the right numbers are a property of the corpus rather than the algorithm.
+    /// </summary>
+    [Fact]
+    public async Task Raising_the_bar_in_configuration_raises_it()
+    {
+        using var database = new TemporarySqliteDatabase();
+        await using var dbContext = await database.CreateContextAsync();
+
+        var project = await SeedProjectAsync(dbContext);
+
+        await SeedEntryAsync(dbContext, project, ContextEntryKind.Summary, "Snapshot trimming",
+            "The snapshot trims the tree section before the log.");
+
+        var question = "how does the snapshot trim its tree section?";
+
+        Assert.False((await Retrieve(dbContext, question)).FoundNothing);
+
+        // Raised past anything this scorer produces, so the same question that just succeeded now
+        // reports an explicit no-match. Nothing about the query changed; only where the bar sits.
+        var strict = new FamiliarRetrievalOptions { MinimumScore = 1_000 };
+        Assert.True((await Retrieve(dbContext, question, options: strict)).NoMatchAboveFloor);
+    }
+
     // ---------------------------------------------------------------- bounds and determinism
 
     [Fact]
@@ -396,8 +581,10 @@ public sealed class FamiliarContextRetrievalTests
     private static Task<FamiliarRetrievalResult> Retrieve(
         FamiliarDbContext dbContext,
         string message,
-        Guid? focusProjectId = null) =>
-        new FamiliarContextRetrievalService(dbContext).RetrieveAsync(message, focusProjectId);
+        Guid? focusProjectId = null,
+        FamiliarRetrievalOptions? options = null) =>
+        new FamiliarContextRetrievalService(dbContext, Options.Create(options ?? new FamiliarRetrievalOptions()))
+            .RetrieveAsync(message, focusProjectId);
 
     private static async Task<FamiliarProject> SeedProjectAsync(
         FamiliarDbContext dbContext,

@@ -1,6 +1,7 @@
 using FindFamiliar.Server.Data;
 using FindFamiliar.Server.Domain;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 
 namespace FindFamiliar.Server.Services.Familiar.Chat.Retrieval;
 
@@ -36,10 +37,20 @@ public interface IFamiliarContextRetrievalService
 /// <b>Sensitivity is honoured in the query, not after it</b>, on both the entry and its project, so
 /// there is no moment at which flagged rows are in memory beside a prompt being built. The count of
 /// what was withheld travels out; nothing about the content does.
+///
+/// <b>There is a floor, and below it the answer is "nothing".</b> Ranking always has a best candidate;
+/// relevance does not. Without a floor this returned its top row whatever it scored, which is how a
+/// question about repository snapshots came back with an unrelated defect about absolute paths,
+/// narrated as though it were responsive. <see cref="FamiliarRetrievalOptions"/> holds where the bar
+/// sits and why it is two numbers rather than one.
 /// </summary>
-public sealed class FamiliarContextRetrievalService(FamiliarDbContext dbContext)
+public sealed class FamiliarContextRetrievalService(
+    FamiliarDbContext dbContext,
+    IOptions<FamiliarRetrievalOptions> options)
     : IFamiliarContextRetrievalService
 {
+    private readonly FamiliarRetrievalOptions _options = options.Value;
+
     /// <summary>
     /// Kinds never retrieved, whatever they score.
     ///
@@ -128,10 +139,28 @@ public sealed class FamiliarContextRetrievalService(FamiliarDbContext dbContext)
                 entry.CreatedUtc))
             .ToListAsync(cancellationToken);
 
-        var scored = candidates
-            .Select(candidate => new { Candidate = candidate, Score = Score(candidate, terms, focusProjectId) })
-            .Where(row => row.Score > 0)
-            .OrderByDescending(row => row.Score)
+        var touched = candidates
+            .Select(candidate => new { Candidate = candidate, Relevance = Score(candidate, terms, focusProjectId) })
+            .Where(row => row.Relevance.MatchedTerms > 0)
+            .ToList();
+
+        // Both bars, and the clamp: a one-word question cannot match two terms, and requiring it to
+        // would make the most precise query a person can type unanswerable.
+        var requiredTerms = _options.RequiredMatchedTerms(terms.Count);
+
+        var relevant = touched
+            .Where(row =>
+                row.Relevance.Score >= _options.MinimumScore
+                && row.Relevance.MatchedTerms >= requiredTerms)
+            .ToList();
+
+        // Counted before the entry cap, not after. This is "how much of what shares a word with the
+        // question was not responsive" — a fact about relevance. Rows dropped by MaxEntries were
+        // responsive and lost to a budget, which is a different fact and not this one.
+        var belowThreshold = touched.Count - relevant.Count;
+
+        var scored = relevant
+            .OrderByDescending(row => row.Relevance.Score)
             // Ties broken by recency, then by id. The id is arbitrary and that is the point: two
             // entries scoring identically must order identically on every run, or the same question
             // produces a different prompt each time and nothing about an answer is reproducible.
@@ -164,7 +193,7 @@ public sealed class FamiliarContextRetrievalService(FamiliarDbContext dbContext)
                 excerpt.IsExcerpted));
         }
 
-        return new FamiliarRetrievalResult(entries, terms, candidates.Count, withheld);
+        return new FamiliarRetrievalResult(entries, terms, candidates.Count, withheld, belowThreshold);
     }
 
     private sealed record Candidate(
@@ -177,12 +206,26 @@ public sealed class FamiliarContextRetrievalService(FamiliarDbContext dbContext)
         DateTime CreatedUtc);
 
     /// <summary>
+    /// How well one entry answers one question, in the two dimensions the floor is applied to.
+    /// </summary>
+    /// <param name="Score">Weighted strength of the match.</param>
+    /// <param name="MatchedTerms">
+    /// How many distinct terms of the question the entry touched — its <i>breadth</i>. Carried
+    /// separately rather than folded into the score because the floor needs to distinguish a strong
+    /// narrow match from a strong broad one, and by the time they are one number it cannot.
+    /// </param>
+    private readonly record struct Relevance(int Score, int MatchedTerms)
+    {
+        public static Relevance None { get; } = new(0, 0);
+    }
+
+    /// <summary>
     /// How well one entry answers one question.
     ///
     /// Zero means it is not carried at all. An entry matching nothing is not weakly relevant — it is
     /// irrelevant, and padding a prompt with it costs tokens and invites the model to use it.
     /// </summary>
-    private static int Score(Candidate candidate, IReadOnlyList<string> terms, Guid? focusProjectId)
+    private static Relevance Score(Candidate candidate, IReadOnlyList<string> terms, Guid? focusProjectId)
     {
         var score = 0;
         var matched = 0;
@@ -203,7 +246,7 @@ public sealed class FamiliarContextRetrievalService(FamiliarDbContext dbContext)
 
         if (matched == 0)
         {
-            return 0;
+            return Relevance.None;
         }
 
         // Breadth beats depth: an entry touching three of the question's words is more likely to be
@@ -218,7 +261,7 @@ public sealed class FamiliarContextRetrievalService(FamiliarDbContext dbContext)
             score += 2;
         }
 
-        return score;
+        return new Relevance(score, matched);
     }
 
     private static int Count(string haystack, string term, int cap)

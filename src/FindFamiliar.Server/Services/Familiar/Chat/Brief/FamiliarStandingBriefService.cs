@@ -1,6 +1,7 @@
 using FindFamiliar.Server.Data;
 using FindFamiliar.Server.Domain;
 using FindFamiliar.Server.Services.Demiplane;
+using FindFamiliar.Server.Services.Familiar.Repository;
 using Microsoft.EntityFrameworkCore;
 
 namespace FindFamiliar.Server.Services.Familiar.Chat.Brief;
@@ -158,9 +159,16 @@ public sealed class FamiliarStandingBriefService(
             .Select(task => (DateTime?)task.UpdatedUtc)
             .MaxAsync(cancellationToken);
 
+        // The repository snapshot is excluded. It is written by a timer every half hour, so counting it
+        // pins "the newest record is dated X" to today forever — and that date is what the Familiar's
+        // whole answer about how stale the records are rests on. An automated capture records that a
+        // machine looked, not that anybody did any work.
         var contextCreated = await dbContext.ContextEntries
             .AsNoTracking()
-            .Where(entry => entry.ProjectId == projectId && !entry.IsSensitive)
+            .Where(entry =>
+                entry.ProjectId == projectId
+                && !entry.IsSensitive
+                && entry.Title != RepositorySnapshotService.SnapshotTitle)
             .Select(entry => (DateTime?)entry.CreatedUtc)
             .MaxAsync(cancellationToken);
 

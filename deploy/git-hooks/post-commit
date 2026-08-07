@@ -1,0 +1,45 @@
+#!/bin/sh
+#
+# Tells the Familiar that the repository moved.
+#
+# Install by copying (or symlinking) into a repository's hook directory:
+#
+#     ln -s /srv/familiar/apps/FindFamiliar/deploy/git-hooks/post-commit \
+#           /srv/familiar/apps/FindFamiliar/.git/hooks/post-commit
+#
+# Worktrees have their own hook directory. Installing this in one worktree and not another is
+# expected and harmless — the server's timer takes a snapshot regardless, and this hook only makes
+# it prompt. Nothing about the snapshot depends on this hook existing anywhere.
+#
+# Configuration comes from the environment, so nothing here is specific to one deployment:
+#
+#     FAMILIAR_SERVER_URL   default http://127.0.0.1:5199
+#     FAMILIAR_BRIDGE_TOKEN default the contents of /srv/familiar/secrets/runner-bridge.token
+#
+# The hook never fails a commit. A server that is down, a token that is missing, a curl that is not
+# installed — none of those are reasons a commit should not have happened, and a hook that can block
+# committing is a hook that gets deleted the first time it does.
+
+set -u
+
+SERVER_URL="${FAMILIAR_SERVER_URL:-http://127.0.0.1:5199}"
+TOKEN_FILE="${FAMILIAR_BRIDGE_TOKEN_FILE:-/srv/familiar/secrets/runner-bridge.token}"
+TOKEN="${FAMILIAR_BRIDGE_TOKEN:-}"
+
+if [ -z "$TOKEN" ] && [ -r "$TOKEN_FILE" ]; then
+    TOKEN=$(cat "$TOKEN_FILE")
+fi
+
+if [ -z "$TOKEN" ]; then
+    exit 0
+fi
+
+# Backgrounded and silenced: the request is a notification, the response is of no interest to the
+# person committing, and a slow server must not be felt as a slow commit.
+curl --silent --show-error --max-time 5 \
+     --request POST \
+     --header "Authorization: Bearer $TOKEN" \
+     --header "Content-Length: 0" \
+     "$SERVER_URL/api/repository/snapshot" >/dev/null 2>&1 &
+
+exit 0
