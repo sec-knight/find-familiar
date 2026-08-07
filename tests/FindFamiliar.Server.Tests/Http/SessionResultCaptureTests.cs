@@ -359,6 +359,97 @@ public sealed class SessionResultCaptureTests(FindFamiliarWebApplicationFactory 
         Assert.Equal(TaskStatus.InProgress, refreshed.Status);
     }
 
+    /// <summary>
+    /// Closing a task retires the decision that was waiting on it — the defect this test exists for.
+    ///
+    /// Before this, the handoff stayed Pending forever: it could not be approved, because the approval
+    /// service refuses a Completed task, and nothing retired it. It sat in every "waiting for you"
+    /// list being asked about and never answerable. Two real ones had been doing that for a day.
+    /// </summary>
+    [Fact]
+    public async Task Completing_a_task_retires_the_handoff_waiting_on_it()
+    {
+        var (_, task, session) = await SeedStartedSessionAsync(AgentSessionRole.Planner);
+        var handoffId = await SeedPendingHandoffAsync(task.Id, session.Id);
+
+        var afClient = new AntiforgeryHttpClient(factory.CreateClient(new() { AllowAutoRedirect = false }));
+        var (_, html) = await afClient.GetPageAsync($"/Tasks/Details/{task.Id}");
+
+        var response = await afClient.PostFormAsync(
+            $"/Tasks/Details/{task.Id}?handler=UpdateStatus",
+            AntiforgeryHttpClient.ExtractAntiforgeryToken(html),
+            [new("NewTaskStatus", nameof(TaskStatus.Completed))]);
+
+        Assert.Equal(HttpStatusCode.Redirect, response.StatusCode);
+
+        using var scope = factory.Services.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<FamiliarDbContext>();
+
+        Assert.Equal(
+            TaskStatus.Completed,
+            (await dbContext.Tasks.AsNoTracking().SingleAsync(candidate => candidate.Id == task.Id)).Status);
+
+        var handoff = await dbContext.SessionHandoffs.AsNoTracking().SingleAsync(candidate => candidate.Id == handoffId);
+        Assert.Equal(SessionHandoffStatus.Superseded, handoff.Status);
+
+        // Nobody decided this — it stopped applying — so it is not recorded as a human decision.
+        Assert.Null(handoff.DecidedUtc);
+    }
+
+    /// <summary>
+    /// A status change that is not a closure leaves the decision alone. A task moving to Blocked still
+    /// has a real question waiting on it, and retiring that would quietly discard the next step.
+    /// </summary>
+    [Theory]
+    [InlineData(TaskStatus.InProgress)]
+    [InlineData(TaskStatus.Blocked)]
+    public async Task A_status_change_that_is_not_a_closure_leaves_the_handoff_pending(TaskStatus status)
+    {
+        var (_, task, session) = await SeedStartedSessionAsync(AgentSessionRole.Planner);
+        var handoffId = await SeedPendingHandoffAsync(task.Id, session.Id);
+
+        var afClient = new AntiforgeryHttpClient(factory.CreateClient(new() { AllowAutoRedirect = false }));
+        var (_, html) = await afClient.GetPageAsync($"/Tasks/Details/{task.Id}");
+
+        await afClient.PostFormAsync(
+            $"/Tasks/Details/{task.Id}?handler=UpdateStatus",
+            AntiforgeryHttpClient.ExtractAntiforgeryToken(html),
+            [new("NewTaskStatus", status.ToString())]);
+
+        using var scope = factory.Services.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<FamiliarDbContext>();
+
+        Assert.Equal(
+            SessionHandoffStatus.Pending,
+            (await dbContext.SessionHandoffs.AsNoTracking().SingleAsync(candidate => candidate.Id == handoffId)).Status);
+    }
+
+    private async Task<Guid> SeedPendingHandoffAsync(Guid taskId, Guid sourceSessionId)
+    {
+        using var scope = factory.Services.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<FamiliarDbContext>();
+
+        var handoff = new SessionHandoff
+        {
+            Id = Guid.NewGuid(),
+            TaskId = taskId,
+            SourceSessionId = sourceSessionId,
+            SourceOutcome = AgentSessionStatus.Completed,
+            ProposedRole = AgentSessionRole.Implementer,
+            Kind = SessionHandoffKind.NextRole,
+            Status = SessionHandoffStatus.Pending,
+            ObservedContextRevision = 0,
+            ConcurrencyToken = Guid.NewGuid(),
+            CreatedUtc = DateTime.UtcNow,
+            UpdatedUtc = DateTime.UtcNow
+        };
+
+        dbContext.SessionHandoffs.Add(handoff);
+        await dbContext.SaveChangesAsync();
+
+        return handoff.Id;
+    }
+
     private static List<KeyValuePair<string, string>> BuildFormFields(Guid sessionId, string artifactTitle)
     {
         return

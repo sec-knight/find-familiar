@@ -15,7 +15,8 @@ public sealed class DetailsModel(
     ISessionResultCaptureService resultCapture,
     ISessionCancellationService cancellation,
     IWorkflowDispatchService workflowDispatch,
-    ISessionHandoffApprovalService handoffApproval) : PageModel
+    ISessionHandoffApprovalService handoffApproval,
+    ISessionHandoffService handoffs) : PageModel
 {
     public TaskContextDocument? Document { get; private set; }
 
@@ -261,12 +262,33 @@ public sealed class DetailsModel(
             return NotFound();
         }
 
-        task.Status = NewTaskStatus;
-        task.UpdatedUtc = DateTime.UtcNow;
-        task.Project.IncrementContextRevision();
-        await dbContext.SaveChangesAsync(cancellationToken);
+        var nowUtc = DateTime.UtcNow;
 
-        TempData["StatusMessage"] = $"Task status changed to {task.Status}.";
+        task.Status = NewTaskStatus;
+        task.UpdatedUtc = nowUtc;
+        task.Project.IncrementContextRevision();
+
+        // Closing a task settles any decision still pending on it. Without this the handoff stays
+        // Pending forever: it cannot be approved — SessionHandoffApprovalService refuses a closed
+        // task — and nothing retires it, so it sits in every "waiting for you" list being asked about
+        // and never answerable. Superseded is exactly the state for it: something newer replaced the
+        // decision point, and closing the task is that something.
+        //
+        // In one transaction with the status change, because a task that closed while its handoff
+        // stayed pending is precisely the state this exists to prevent.
+        await using var transaction = await dbContext.Database.BeginTransactionAsync(cancellationToken);
+
+        var retired = NewTaskStatus == FindFamiliar.Server.Domain.TaskStatus.Completed
+            ? await handoffs.SupersedePendingAsync(task.Id, nowUtc, cancellationToken)
+            : 0;
+
+        await dbContext.SaveChangesAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+
+        TempData["StatusMessage"] = retired > 0
+            ? $"Task status changed to {task.Status}. The step that was waiting on you no longer applies."
+            : $"Task status changed to {task.Status}.";
+
         return RedirectToPage(new { id });
     }
 

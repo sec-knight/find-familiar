@@ -15,6 +15,21 @@ public interface ISessionHandoffService
         int observedContextRevision,
         DateTime nowUtc,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Retires any handoff pending on a task, because something newer settled it.
+    ///
+    /// Closing a task by hand is one of those somethings, and until this existed it was the one that
+    /// leaked: the task became Completed, the handoff stayed Pending, and the decision could never be
+    /// approved — <c>SessionHandoffApprovalService</c> refuses a closed task — nor did it go away. It
+    /// simply sat there being asked about forever.
+    ///
+    /// Returns how many were retired, so a caller can say what it did rather than guess.
+    /// </summary>
+    Task<int> SupersedePendingAsync(
+        Guid taskId,
+        DateTime nowUtc,
+        CancellationToken cancellationToken = default);
 }
 
 /// <summary>
@@ -54,15 +69,7 @@ public sealed class SessionHandoffService(FamiliarDbContext dbContext) : ISessio
 
         // At most one handoff per task is actionable. Superseding first is what lets the filtered
         // unique index hold, and it means contenders can only ever race for one row.
-        await dbContext.SessionHandoffs
-            .Where(candidate =>
-                candidate.TaskId == terminalSession.TaskId
-                && candidate.Status == SessionHandoffStatus.Pending)
-            .ExecuteUpdateAsync(
-                setters => setters
-                    .SetProperty(candidate => candidate.Status, SessionHandoffStatus.Superseded)
-                    .SetProperty(candidate => candidate.UpdatedUtc, nowUtc),
-                cancellationToken);
+        await SupersedePendingAsync(terminalSession.TaskId, nowUtc, cancellationToken);
 
         dbContext.SessionHandoffs.Add(new SessionHandoff
         {
@@ -79,6 +86,20 @@ public sealed class SessionHandoffService(FamiliarDbContext dbContext) : ISessio
             UpdatedUtc = nowUtc
         });
     }
+
+    public async Task<int> SupersedePendingAsync(
+        Guid taskId,
+        DateTime nowUtc,
+        CancellationToken cancellationToken = default) =>
+        await dbContext.SessionHandoffs
+            .Where(candidate =>
+                candidate.TaskId == taskId
+                && candidate.Status == SessionHandoffStatus.Pending)
+            .ExecuteUpdateAsync(
+                setters => setters
+                    .SetProperty(candidate => candidate.Status, SessionHandoffStatus.Superseded)
+                    .SetProperty(candidate => candidate.UpdatedUtc, nowUtc),
+                cancellationToken);
 
     /// <summary>
     /// The whole role-progression rule. Returns null when nothing should be proposed.
