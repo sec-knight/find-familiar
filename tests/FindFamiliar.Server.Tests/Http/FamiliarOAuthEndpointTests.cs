@@ -147,6 +147,124 @@ public sealed class FamiliarOAuthEndpointTests(FindFamiliarWebApplicationFactory
     }
 
     /// <summary>
+    /// ChatGPT's actual registration request, field for field, as observed against the live deployment
+    /// in Sprint 14.1 — full RFC 7591 client metadata rather than the two fields the happy-path test
+    /// sends. The failure this guards against is a future change that reads one of these fields and
+    /// chokes on it: registration is unauthenticated, so anything it rejects is a connector that cannot
+    /// be created, diagnosable only from the vendor's side as "failed to resolve OAuth client".
+    ///
+    /// The response is asserted against every field RFC 7591 §3.2.1 requires or ChatGPT reads, because
+    /// a missing one is invisible here and fatal there.
+    /// </summary>
+    [Fact]
+    public async Task The_registration_request_chatgpt_actually_sends_is_answered_completely()
+    {
+        using var client = factory.CreateClient();
+
+        using var response = await client.PostAsJsonAsync("/oauth/register", new
+        {
+            client_name = "ChatGPT",
+            redirect_uris = new[] { "https://chatgpt.com/connector_platform_oauth_redirect" },
+            grant_types = new[] { "authorization_code", "refresh_token" },
+            response_types = new[] { "code" },
+            token_endpoint_auth_method = "none",
+            scope = FamiliarGatewayOptions.ReadScope,
+            application_type = "web",
+            client_uri = "https://chatgpt.com",
+            logo_uri = "https://chatgpt.com/logo.png",
+            tos_uri = "https://openai.com/policies/terms-of-use",
+            policy_uri = "https://openai.com/policies/privacy-policy",
+            contacts = new[] { "support@openai.com" },
+            software_id = "chatgpt-connector",
+            software_version = "1.0"
+        });
+
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+
+        var document = await response.Content.ReadFromJsonAsync<JsonElement>();
+
+        Assert.False(string.IsNullOrWhiteSpace(document.GetProperty("client_id").GetString()));
+        Assert.True(document.GetProperty("client_id_issued_at").GetInt64() > 0);
+        Assert.Equal(
+            ["https://chatgpt.com/connector_platform_oauth_redirect"],
+            document.GetProperty("redirect_uris").EnumerateArray().Select(value => value.GetString()));
+        Assert.Equal(
+            ["authorization_code", "refresh_token"],
+            document.GetProperty("grant_types").EnumerateArray().Select(value => value.GetString()));
+        Assert.Equal(
+            ["code"],
+            document.GetProperty("response_types").EnumerateArray().Select(value => value.GetString()));
+        Assert.Equal("none", document.GetProperty("token_endpoint_auth_method").GetString());
+        Assert.Equal("ChatGPT", document.GetProperty("client_name").GetString());
+        Assert.Equal(FamiliarGatewayOptions.ReadScope, document.GetProperty("scope").GetString());
+    }
+
+    /// <summary>
+    /// The registered client must work with no server-side state behind it — that is the whole claim of
+    /// the stateless design, and the place it would fail is the next request, on a different host
+    /// process, after a restart. Asserted by taking the client_id from registration and driving the
+    /// authorization endpoint with it and nothing else.
+    /// </summary>
+    [Fact]
+    public async Task A_registered_client_id_is_accepted_at_authorize_with_no_stored_registration()
+    {
+        using var client = NonRedirectingClient();
+        var clientId = await RegisterAsync(client);
+
+        using var response = await client.GetAsync(
+            "/oauth/authorize?response_type=code"
+            + $"&client_id={Uri.EscapeDataString(clientId)}"
+            + "&redirect_uri=" + Uri.EscapeDataString(RegisteredRedirectUri)
+            + "&code_challenge=" + Challenge(NewVerifier())
+            + "&code_challenge_method=S256");
+
+        // The redirect URI is not sent again at authorize time by value alone — it is checked against
+        // the list carried inside the client_id itself.
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Contains("Approve read access", await response.Content.ReadAsStringAsync(), StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A client that probes before it fetches must not conclude this server has no metadata. A HEAD
+    /// that 404s and a preflight that 405s are indistinguishable, from the client's side, from a
+    /// discovery document that is not there.
+    /// </summary>
+    [Theory]
+    [InlineData("/.well-known/oauth-protected-resource")]
+    [InlineData("/.well-known/oauth-protected-resource/mcp")]
+    [InlineData("/.well-known/oauth-authorization-server")]
+    [InlineData("/.well-known/oauth-authorization-server/mcp")]
+    public async Task A_discovery_document_answers_head_and_preflight(string route)
+    {
+        using var client = factory.CreateClient();
+
+        using var head = await client.SendAsync(new HttpRequestMessage(HttpMethod.Head, route));
+        Assert.Equal(HttpStatusCode.OK, head.StatusCode);
+
+        using var preflight = await client.SendAsync(new HttpRequestMessage(HttpMethod.Options, route));
+        Assert.Equal(HttpStatusCode.NoContent, preflight.StatusCode);
+        Assert.Equal("*", preflight.Headers.GetValues("Access-Control-Allow-Origin").Single());
+    }
+
+    /// <summary>
+    /// The discovery documents and the two POST endpoints are readable cross-origin. They carry no user
+    /// data and this server accepts no cookies, so what a browser can read is what curl can read — and
+    /// a blocked preflight is a failure with nothing in this server's log to explain it.
+    /// </summary>
+    [Theory]
+    [InlineData("/oauth/register")]
+    [InlineData("/oauth/token")]
+    public async Task The_post_endpoints_answer_a_preflight(string route)
+    {
+        using var client = factory.CreateClient();
+
+        using var preflight = await client.SendAsync(new HttpRequestMessage(HttpMethod.Options, route));
+
+        Assert.Equal(HttpStatusCode.NoContent, preflight.StatusCode);
+        Assert.Contains("POST", preflight.Headers.GetValues("Access-Control-Allow-Methods").Single(), StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// The open-redirection control, on the cases that actually get tried: another origin entirely, a
     /// lookalike host that merely ends in the allowed one, and plain http.
     /// </summary>

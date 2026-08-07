@@ -68,11 +68,11 @@ public static class FamiliarOAuthEndpoints
                      ProtectedResourceMetadataRoute + FamiliarMcpEndpoint.Route
                  })
         {
-            app.MapGet(route, (IOptions<FamiliarGatewayOptions> current) =>
-                Results.Json(new
+            MapMetadataDocument(app, route, (context, current) =>
+                Document(context, new
                 {
-                    resource = current.Value.ResolvedResource,
-                    authorization_servers = new[] { current.Value.ResolvedIssuer },
+                    resource = current.ResolvedResource,
+                    authorization_servers = new[] { current.ResolvedIssuer },
                     scopes_supported = new[] { FamiliarGatewayOptions.ReadScope },
                     bearer_methods_supported = new[] { "header" }
                 }));
@@ -84,11 +84,11 @@ public static class FamiliarOAuthEndpoints
                      AuthorizationServerMetadataRoute + FamiliarMcpEndpoint.Route
                  })
         {
-            app.MapGet(route, (IOptions<FamiliarGatewayOptions> current) =>
+            MapMetadataDocument(app, route, (context, current) =>
             {
-                var issuer = current.Value.ResolvedIssuer;
+                var issuer = current.ResolvedIssuer;
 
-                return Results.Json(new
+                return Document(context, new
                 {
                     issuer,
                     authorization_endpoint = issuer + AuthorizeRoute,
@@ -113,9 +113,23 @@ public static class FamiliarOAuthEndpoints
 
         // ------------------------------------------------------------ registration (RFC 7591)
 
+        // Registration and token are called by clients that may run either side of a browser. The
+        // preflight is answered for the same reason the metadata documents answer one: a blocked
+        // preflight fails on the client with nothing in this server's log to explain it.
+        foreach (var route in new[] { RegisterRoute, TokenRoute })
+        {
+            app.MapMethods(route, ["OPTIONS"], (HttpContext context) =>
+            {
+                ApplyCrossOriginPostHeaders(context);
+
+                return Results.StatusCode(StatusCodes.Status204NoContent);
+            });
+        }
+
         app.MapPost(RegisterRoute, async (HttpContext context, IOptions<FamiliarGatewayOptions> current, FamiliarOAuthArtifacts artifacts) =>
         {
             var settings = current.Value;
+            ApplyCrossOriginPostHeaders(context);
 
             if (context.Request.ContentLength is { } length && length > settings.MaxRequestBytes)
             {
@@ -155,8 +169,13 @@ public static class FamiliarOAuthEndpoints
                 }
             }
 
-            var clientId = artifacts.IssueClientId(redirectUris, Truncate(request?.ClientName, 100));
+            var clientName = Truncate(request?.ClientName, 100);
+            var clientId = artifacts.IssueClientId(redirectUris, clientName);
 
+            // RFC 7591 §3.2.1 requires the response to state all of the client's registered metadata —
+            // not only what changed, and not only what the server chose to keep. A client comparing
+            // what it asked for against what it got is entitled to find every field there, and one that
+            // treats a missing field as a failed registration is within its rights.
             return Results.Json(
                 new
                 {
@@ -166,7 +185,12 @@ public static class FamiliarOAuthEndpoints
                     token_endpoint_auth_method = "none",
                     grant_types = new[] { "authorization_code", "refresh_token" },
                     response_types = new[] { "code" },
-                    scope = FamiliarGatewayOptions.ReadScope
+                    scope = FamiliarGatewayOptions.ReadScope,
+
+                    // Echoed when supplied, absent when not. This is the name shown on the consent
+                    // screen, so a client that sent one and got nothing back has reason to doubt the
+                    // registration took.
+                    client_name = clientName
                 },
                 statusCode: StatusCodes.Status201Created);
         });
@@ -314,6 +338,7 @@ public static class FamiliarOAuthEndpoints
         {
             var settings = current.Value;
             context.Response.Headers.CacheControl = "no-store";
+            ApplyCrossOriginPostHeaders(context);
 
             if (context.Request.ContentLength is { } length && length > settings.MaxRequestBytes)
             {
@@ -345,6 +370,78 @@ public static class FamiliarOAuthEndpoints
                 _ => Error(StatusCodes.Status400BadRequest, "unsupported_grant_type", "This server issues tokens by authorization code or refresh token.")
             };
         });
+    }
+
+    // ---------------------------------------------------------------- serving the metadata documents
+
+    /// <summary>
+    /// A discovery document answers GET, HEAD and OPTIONS.
+    ///
+    /// <c>MapGet</c> alone answers only GET — a HEAD probe gets 404 and an OPTIONS preflight gets 405,
+    /// which for a client that probes before it fetches looks exactly like "this server has no
+    /// metadata". These documents are public, fixed, and identical for every caller, so the extra two
+    /// methods cost nothing and remove a whole class of "discovery failed" that is not about content.
+    ///
+    /// Kestrel discards the response body for a HEAD request, so the same handler serves both.
+    /// </summary>
+    private static void MapMetadataDocument(
+        WebApplication app,
+        string route,
+        Func<HttpContext, FamiliarGatewayOptions, IResult> handler) =>
+        app.MapMethods(route, ["GET", "HEAD", "OPTIONS"], (HttpContext context, IOptions<FamiliarGatewayOptions> current) =>
+        {
+            if (HttpMethods.IsOptions(context.Request.Method))
+            {
+                ApplyMetadataHeaders(context);
+
+                return Results.StatusCode(StatusCodes.Status204NoContent);
+            }
+
+            return handler(context, current.Value);
+        });
+
+    private static IResult Document(HttpContext context, object body)
+    {
+        ApplyMetadataHeaders(context);
+
+        return Results.Json(body);
+    }
+
+    /// <summary>
+    /// The headers a discovery document needs beyond its body.
+    ///
+    /// <b>CORS, deliberately wide open, and safe because of what these documents are.</b> They contain
+    /// fixed protocol URLs and no user data, they are readable by anyone who can reach the host, and
+    /// this server accepts no cookies — so a cross-origin reader learns exactly what a
+    /// <c>curl</c> would. Allowing the read means a client whose discovery happens in a browser is not
+    /// silently blocked by the one policy that produces no server-side error to diagnose.
+    ///
+    /// <b>A short cache, not none.</b> These change only when the deployment is reconfigured, and a
+    /// client that re-fetches them on every call is being made to pay for nothing.
+    /// </summary>
+    private static void ApplyMetadataHeaders(HttpContext context)
+    {
+        context.Response.Headers.AccessControlAllowOrigin = "*";
+        context.Response.Headers.AccessControlAllowMethods = "GET, HEAD, OPTIONS";
+        context.Response.Headers.AccessControlAllowHeaders = "Content-Type, Authorization, Mcp-Protocol-Version";
+        context.Response.Headers.AccessControlMaxAge = "3600";
+        context.Response.Headers.CacheControl = "public, max-age=300";
+    }
+
+    /// <summary>
+    /// The same reasoning as the metadata documents, for the two endpoints a client POSTs to.
+    ///
+    /// Neither is authenticated by anything a browser would attach automatically: registration is
+    /// public, and the token endpoint is protected by a code and a PKCE verifier the caller must
+    /// already hold. Credentials are not allowed, so no ambient cookie or header can be replayed
+    /// cross-origin — an attacker's page gains nothing it could not get from its own server.
+    /// </summary>
+    private static void ApplyCrossOriginPostHeaders(HttpContext context)
+    {
+        context.Response.Headers.AccessControlAllowOrigin = "*";
+        context.Response.Headers.AccessControlAllowMethods = "POST, OPTIONS";
+        context.Response.Headers.AccessControlAllowHeaders = "Content-Type, Mcp-Protocol-Version";
+        context.Response.Headers.AccessControlMaxAge = "3600";
     }
 
     // ---------------------------------------------------------------- grants

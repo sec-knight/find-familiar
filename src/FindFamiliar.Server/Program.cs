@@ -370,6 +370,7 @@ app.MapFamiliarMcpEndpoint();
 // The OAuth surface is unauthenticated by necessity — discovery, registration and the consent screen
 // are what a client reaches before it has any credential — so it is mapped separately and holds no
 // Familiar data of its own. It is not mapped at all unless FamiliarGateway__PublicBaseUrl is set.
+app.UseFamiliarOAuthRequestLog();
 app.MapFamiliarOAuthEndpoints();
 
 app.Run();

@@ -90,6 +90,14 @@ public sealed class FamiliarGatewayOptions
     /// </summary>
     public string AllowedRedirectHosts { get; set; } = "chatgpt.com,chat.openai.com,openai.com";
 
+    /// <summary>
+    /// Whether to record the OAuth surface's traffic to the server log. Off by default and meant to be
+    /// turned off again — it exists to diagnose a client that reports only that it failed. It never
+    /// records the Authorization header, a query string, or any body but registration's, which is
+    /// public client metadata. See <see cref="OAuth.FamiliarOAuthRequestLog"/>.
+    /// </summary>
+    public bool LogOAuthRequests { get; set; }
+
     /// <summary>The one scope this Familiar issues. There is exactly one thing to grant: reading.</summary>
     public const string ReadScope = "familiar.read";
 
