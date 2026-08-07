@@ -346,6 +346,7 @@ public sealed class FamiliarChatService(
         FamiliarPlanStatus Status,
         string Summary,
         DateTime CreatedUtc,
+        Guid ConcurrencyToken,
         IReadOnlyList<PlanItemRow> Items);
 
     private sealed record PlanItemRow(
@@ -355,6 +356,7 @@ public sealed class FamiliarChatService(
         string RequestedOutcome,
         AgentSessionRole? Role,
         bool IsIncluded,
+        Guid? CreatedTaskId,
         IReadOnlyList<Guid> Evidence);
 
     /// <summary>
@@ -385,6 +387,7 @@ public sealed class FamiliarChatService(
                 plan.Status,
                 plan.Summary,
                 plan.CreatedUtc,
+                plan.ConcurrencyToken,
                 Items = plan.Items
                     .OrderBy(item => item.Position)
                     .Select(item => new
@@ -395,6 +398,7 @@ public sealed class FamiliarChatService(
                         item.RequestedOutcome,
                         item.Role,
                         item.IsIncluded,
+                        item.CreatedTaskId,
                         item.EvidenceEntryIds
                     })
                     .ToList()
@@ -411,6 +415,7 @@ public sealed class FamiliarChatService(
                 plan.Status,
                 plan.Summary,
                 plan.CreatedUtc,
+                plan.ConcurrencyToken,
                 plan.Items
                     .Select(item => new PlanItemRow(
                         item.Id,
@@ -419,6 +424,7 @@ public sealed class FamiliarChatService(
                         item.RequestedOutcome,
                         item.Role,
                         item.IsIncluded,
+                        item.CreatedTaskId,
                         FamiliarChatCitations.ParseEvidence(item.EvidenceEntryIds)))
                     .ToList()));
     }
@@ -440,9 +446,11 @@ public sealed class FamiliarChatService(
                     // Same read-time sensitivity filter the prose citations get: an entry withheld
                     // today stops being shown as an item's source, without the item changing.
                     item.Evidence.Where(resolved.ContainsKey).Select(id => resolved[id]).ToList(),
-                    item.IsIncluded))
+                    item.IsIncluded,
+                    item.CreatedTaskId))
                 .ToList(),
-            plan.CreatedUtc);
+            plan.CreatedUtc,
+            plan.ConcurrencyToken);
 
     /// <summary>
     /// Turns offered ids into something displayable, re-applying the sensitivity filter as it goes.

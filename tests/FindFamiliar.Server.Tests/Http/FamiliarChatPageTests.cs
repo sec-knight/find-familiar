@@ -416,10 +416,166 @@ public sealed class FamiliarChatPageTests(FindFamiliarWebApplicationFactory fact
     }
 
     /// <summary>
+    /// The sprint's acceptance criterion, end to end through HTTP: a plan is approved in the
+    /// conversation, the tasks appear, one session starts, and no task page is opened at any point.
+    /// </summary>
+    [Fact]
+    public async Task Approving_a_plan_in_the_conversation_creates_the_work()
+    {
+        var project = await SeedProjectAsync();
+        var chatId = await StartConversationAsync("plan the next sprint");
+        var planId = await DraftPlanAsync(chatId, project.Id);
+
+        // Redirects are not followed, so the post/redirect/get is observable rather than collapsed
+        // into the page it lands on.
+        var client = new AntiforgeryHttpClient(factory.CreateClient(
+            new Microsoft.AspNetCore.Mvc.Testing.WebApplicationFactoryClientOptions { AllowAutoRedirect = false }));
+
+        var (_, html) = await client.GetPageAsync($"/Familiar/Chat/{chatId}");
+
+        var token = ReadPlanToken(html);
+
+        var response = await client.PostFormAsync(
+            $"/Familiar/Chat/{chatId}?handler=DecidePlan",
+            AntiforgeryHttpClient.ExtractAntiforgeryToken(html),
+            new Dictionary<string, string>
+            {
+                ["PlanId"] = planId.ToString(),
+                ["ExpectedConcurrencyToken"] = token,
+                ["Approve"] = "true",
+                ["Items[0].ItemId"] = await ItemIdAsync(planId, 0),
+                ["Items[0].IsIncluded"] = "true",
+                ["Items[0].Title"] = "Re-specify the anchor task",
+                ["Items[0].RequestedOutcome"] = "The constraint reflects that the application now ships JavaScript.",
+                ["Items[1].ItemId"] = await ItemIdAsync(planId, 1),
+                ["Items[1].IsIncluded"] = "true",
+                ["Items[1].Title"] = "Record the superseded boundary",
+                ["Items[1].RequestedOutcome"] = "The no-JavaScript constraint is marked superseded."
+            });
+
+        Assert.Equal(HttpStatusCode.Redirect, response.StatusCode);
+
+        using var scope = factory.Services.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<FamiliarDbContext>();
+
+        var tasks = await dbContext.Tasks.AsNoTracking()
+            .Where(task => task.ProjectId == project.Id)
+            .ToListAsync();
+
+        Assert.Equal(2, tasks.Count);
+        Assert.Contains(tasks, task => task.Title == "Re-specify the anchor task");
+
+        // Exactly one session, on the first item that named a role.
+        var session = Assert.Single(await dbContext.AgentSessions.AsNoTracking()
+            .Where(candidate => tasks.Select(task => task.Id).Contains(candidate.TaskId))
+            .ToListAsync());
+        Assert.Equal(AgentSessionRole.Planner, session.Role);
+
+        var plan = await dbContext.FamiliarPlanProposals.AsNoTracking().SingleAsync(candidate => candidate.Id == planId);
+        Assert.Equal(FamiliarPlanStatus.Approved, plan.Status);
+
+        // And the transcript now reads as a receipt rather than a proposal.
+        var after = await factory.CreateClient().GetStringAsync($"/Familiar/Chat/{chatId}");
+        Assert.Contains("Approved. 2 task(s) were created", after, StringComparison.Ordinal);
+        Assert.DoesNotContain("Approve this plan", after, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Declining in the conversation creates nothing, and the card says so rather than disappearing.
+    /// </summary>
+    [Fact]
+    public async Task Declining_a_plan_in_the_conversation_creates_nothing()
+    {
+        var project = await SeedProjectAsync();
+        var chatId = await StartConversationAsync("plan the next sprint");
+        var planId = await DraftPlanAsync(chatId, project.Id);
+
+        var client = new AntiforgeryHttpClient(factory.CreateClient());
+        var (_, html) = await client.GetPageAsync($"/Familiar/Chat/{chatId}");
+
+        await client.PostFormAsync(
+            $"/Familiar/Chat/{chatId}?handler=DecidePlan",
+            AntiforgeryHttpClient.ExtractAntiforgeryToken(html),
+            new Dictionary<string, string>
+            {
+                ["PlanId"] = planId.ToString(),
+                ["ExpectedConcurrencyToken"] = ReadPlanToken(html),
+                ["Approve"] = "false"
+            });
+
+        using var scope = factory.Services.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<FamiliarDbContext>();
+
+        Assert.Empty(await dbContext.Tasks.AsNoTracking().Where(task => task.ProjectId == project.Id).ToListAsync());
+        Assert.Equal(
+            FamiliarPlanStatus.Declined,
+            (await dbContext.FamiliarPlanProposals.AsNoTracking().SingleAsync(plan => plan.Id == planId)).Status);
+
+        var after = await factory.CreateClient().GetStringAsync($"/Familiar/Chat/{chatId}");
+        Assert.Contains("Declined. Nothing was created.", after, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A token from a page loaded before someone else decided the plan creates nothing. The card is
+    /// re-rendered with the reason rather than the person being redirected away from what they read.
+    /// </summary>
+    [Fact]
+    public async Task A_stale_plan_token_creates_nothing_and_says_so()
+    {
+        var project = await SeedProjectAsync();
+        var chatId = await StartConversationAsync("plan the next sprint");
+        var planId = await DraftPlanAsync(chatId, project.Id);
+
+        var client = new AntiforgeryHttpClient(factory.CreateClient());
+        var (_, html) = await client.GetPageAsync($"/Familiar/Chat/{chatId}");
+
+        var response = await client.PostFormAsync(
+            $"/Familiar/Chat/{chatId}?handler=DecidePlan",
+            AntiforgeryHttpClient.ExtractAntiforgeryToken(html),
+            new Dictionary<string, string>
+            {
+                ["PlanId"] = planId.ToString(),
+                ["ExpectedConcurrencyToken"] = Guid.NewGuid().ToString(),
+                ["Approve"] = "true"
+            });
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Contains(
+            "This plan changed since the page was loaded",
+            await response.Content.ReadAsStringAsync(),
+            StringComparison.Ordinal);
+
+        using var scope = factory.Services.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<FamiliarDbContext>();
+        Assert.Empty(await dbContext.Tasks.AsNoTracking().Where(task => task.ProjectId == project.Id).ToListAsync());
+    }
+
+    private static string ReadPlanToken(string html)
+    {
+        var match = System.Text.RegularExpressions.Regex.Match(
+            html,
+            "name=\"ExpectedConcurrencyToken\" value=\"([^\"]+)\"");
+
+        Assert.True(match.Success, "The plan card did not render a concurrency token.");
+        return match.Groups[1].Value;
+    }
+
+    private async Task<string> ItemIdAsync(Guid planId, int position)
+    {
+        using var scope = factory.Services.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<FamiliarDbContext>();
+
+        return (await dbContext.FamiliarPlanItems
+                .AsNoTracking()
+                .SingleAsync(item => item.PlanId == planId && item.Position == position))
+            .Id.ToString();
+    }
+
+    /// <summary>
     /// Writes a plan directly, standing in for the drafting service so these tests stay about
     /// rendering and durability rather than about a provider.
     /// </summary>
-    private async Task DraftPlanAsync(Guid chatId, Guid projectId)
+    private async Task<Guid> DraftPlanAsync(Guid chatId, Guid projectId)
     {
         using var scope = factory.Services.CreateScope();
         var dbContext = scope.ServiceProvider.GetRequiredService<FamiliarDbContext>();
@@ -434,9 +590,11 @@ public sealed class FamiliarChatPageTests(FindFamiliarWebApplicationFactory fact
         turn.RequestedPlan = true;
         turn.CompletedUtc = DateTime.UtcNow;
 
+        var planId = Guid.NewGuid();
+
         dbContext.FamiliarPlanProposals.Add(new FamiliarPlanProposal
         {
-            Id = Guid.NewGuid(),
+            Id = planId,
             ChatId = chatId,
             TurnId = turn.Id,
             ProjectId = projectId,
@@ -470,6 +628,8 @@ public sealed class FamiliarChatPageTests(FindFamiliarWebApplicationFactory fact
         });
 
         await dbContext.SaveChangesAsync();
+
+        return planId;
     }
 
     private async Task<Guid> SeedEntryAsync(Guid projectId, string title)

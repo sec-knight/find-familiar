@@ -1,5 +1,6 @@
 @page "/Familiar/Chat/{chatId:guid}"
 @using FindFamiliar.Server.Domain
+@using FindFamiliar.Server.Services.Familiar.Chat
 @model FindFamiliar.Server.Pages.FamiliarChatModel
 @{
     ViewData["Title"] = Model.Chat is null ? "Familiar" : $"Familiar — {Model.Chat.Title}";
@@ -132,9 +133,11 @@ else
                                     }
                                 }</p>
 
-                            @* The plan, in the transcript at the point it was proposed. Slice 3 renders
-                               it and nothing more: there is no approve control yet, and nothing in the
-                               system can act on it. *@
+                            @* The plan, in the transcript at the point it was proposed, and decided
+                               there. This is the human gate of Sprint 13: approving here creates the
+                               tasks and starts one session, and the same decision is reachable on the
+                               task pages — two doors, one rule, re-checked inside the transaction that
+                               applies it. *@
                             @if (turn.Plan is { } plan)
                             {
                                 <section class="familiar-plan" data-plan aria-label="Drafted plan">
@@ -146,45 +149,119 @@ else
 
                                     <p class="familiar-plan-summary">@plan.Summary</p>
 
-                                    <ol class="familiar-plan-items">
-                                        @foreach (var item in plan.Items)
-                                        {
-                                            <li class="familiar-plan-item">
-                                                <p class="familiar-plan-item-title">@item.Title</p>
-                                                <p class="familiar-plan-item-outcome">@item.RequestedOutcome</p>
-                                                <p class="familiar-plan-item-meta">
-                                                    @if (item.Role is { } role)
+                                    @* One form for the whole plan. Approval is a single decision on a single
+                                       row, so a person cannot half-approve a plan by submitting twice. *@
+                                    <form method="post" asp-page-handler="DecidePlan" asp-route-chatId="@chat.ChatId">
+                                        <input type="hidden" name="PlanId" value="@plan.PlanId" />
+
+                                        @* The token the rendering carried. A plan decided or redrawn since
+                                           this page was drawn is refused rather than applied to something
+                                           the person did not read. *@
+                                        <input type="hidden" name="ExpectedConcurrencyToken" value="@plan.ConcurrencyToken" />
+
+                                        <ol class="familiar-plan-items">
+                                            @{ var index = 0; }
+                                            @foreach (var item in plan.Items)
+                                            {
+                                                <li class="familiar-plan-item">
+                                                    <input type="hidden" name="Items[@index].ItemId" value="@item.ItemId" />
+
+                                                    @if (plan.IsPending)
                                                     {
-                                                        <span class="familiar-plan-role">starts a @role session</span>
+                                                        <label class="familiar-plan-include">
+                                                            @* The unchecked value is posted by the hidden field beside it,
+                                                               because a cleared checkbox posts nothing at all and would
+                                                               otherwise read as "left alone" rather than "excluded". *@
+                                                            <input type="hidden" name="Items[@index].IsIncluded" value="false" />
+                                                            <input type="checkbox" name="Items[@index].IsIncluded" value="true"
+                                                                   checked="@item.IsIncluded" />
+                                                            <span>Include</span>
+                                                        </label>
+
+                                                        <label class="familiar-plan-field">
+                                                            <span>Title</span>
+                                                            <input type="text" name="Items[@index].Title" value="@item.Title"
+                                                                   maxlength="@FamiliarPlanItem.MaxTitleLength" />
+                                                        </label>
+
+                                                        <label class="familiar-plan-field">
+                                                            <span>Requested outcome</span>
+                                                            <textarea name="Items[@index].RequestedOutcome" rows="2"
+                                                                      maxlength="@FamiliarPlanItem.MaxRequestedOutcomeLength">@item.RequestedOutcome</textarea>
+                                                        </label>
                                                     }
                                                     else
                                                     {
-                                                        <span class="familiar-plan-role is-quiet">records the work, starts nothing</span>
+                                                        <p class="familiar-plan-item-title">@item.Title</p>
+                                                        <p class="familiar-plan-item-outcome">@item.RequestedOutcome</p>
                                                     }
 
-                                                    @foreach (var evidence in item.Evidence)
-                                                    {
-                                                        <a class="familiar-citation" asp-page="/Demiplane" asp-route-id="@evidence.ProjectId"
-                                                           title="@evidence.Kind — @evidence.Title">@evidence.Kind.ToString().ToLowerInvariant(): @evidence.Title</a>
-                                                    }
-                                                </p>
-                                            </li>
+                                                    <p class="familiar-plan-item-meta">
+                                                        @if (item.Role is { } role)
+                                                        {
+                                                            <span class="familiar-plan-role">starts a @role session</span>
+                                                        }
+                                                        else
+                                                        {
+                                                            <span class="familiar-plan-role is-quiet">records the work, starts nothing</span>
+                                                        }
+
+                                                        @if (item.CreatedTaskId is { } createdTaskId)
+                                                        {
+                                                            <a class="familiar-citation" asp-page="/Tasks/Details" asp-route-id="@createdTaskId">created task</a>
+                                                        }
+                                                        else if (!plan.IsPending && !item.IsIncluded)
+                                                        {
+                                                            <span class="familiar-plan-role is-quiet">excluded — nothing created</span>
+                                                        }
+
+                                                        @foreach (var evidence in item.Evidence)
+                                                        {
+                                                            <a class="familiar-citation" asp-page="/Demiplane" asp-route-id="@evidence.ProjectId"
+                                                               title="@evidence.Kind — @evidence.Title">@evidence.Kind.ToString().ToLowerInvariant(): @evidence.Title</a>
+                                                        }
+                                                    </p>
+                                                </li>
+
+                                                index++;
+                                            }
+                                        </ol>
+
+                                        @* Stated before anything is pressed. The disclosure is what makes an
+                                           approval an act of reading rather than of trust. *@
+                                        <p class="familiar-plan-consequence">
+                                            @if (plan.IsPending)
+                                            {
+                                                <text>
+                                                    Approving this would create @plan.Included.Count task(s) in @plan.ProjectName@(plan.FirstSessionItem is { } first
+                                                        ? $" and start one {first.Role} session, on “{first.Title}”." : " and start no sessions.")
+                                                    The rest of the plan waits until you have seen what comes back.
+                                                    Nothing has been created yet.
+                                                </text>
+                                            }
+                                            else if (plan.Status == FamiliarPlanStatus.Approved)
+                                            {
+                                                <text>Approved. @plan.Items.Count(item => item.CreatedTaskId is not null) task(s) were created in @plan.ProjectName.</text>
+                                            }
+                                            else
+                                            {
+                                                <text>Declined. Nothing was created.</text>
+                                            }
+                                        </p>
+
+                                        @if (plan.IsPending)
+                                        {
+                                            @if (Model.PlanMessage is { } planMessage)
+                                            {
+                                                <p class="familiar-compose-error" role="alert">@planMessage</p>
+                                            }
+
+                                            <div class="familiar-compose-actions">
+                                                <button type="submit" name="Approve" value="true" class="familiar-compose-send">Approve this plan</button>
+                                                <button type="submit" name="Approve" value="false" class="familiar-compose-plan">Decline</button>
+                                            </div>
                                         }
-                                    </ol>
-
-                                    @* Stated before there is anything to press. The disclosure is what makes
-                                       an approval an act of reading rather than of trust, so it is written
-                                       and tested now rather than added beside the button later. *@
-                                    <p class="familiar-plan-consequence">
-                                        Approving this would create @plan.Included.Count task(s) in @plan.ProjectName@(plan.FirstSessionItem is { } first
-                                            ? $" and start one {first.Role} session, on “{first.Title}”." : " and start no sessions.")
-                                        Nothing has been created yet.
-                                    </p>
-
-                                    <p class="familiar-plan-note">
-                                        Approving a plan in the conversation is not built yet. This is a record of what was
-                                        proposed.
-                                    </p>
+                                    </form>
                                 </section>
                             }
 

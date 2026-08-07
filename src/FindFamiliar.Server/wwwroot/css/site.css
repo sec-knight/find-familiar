@@ -1117,3 +1117,43 @@ h2 {
 .familiar-compose-plan:focus-visible {
   background: var(--surface-muted);
 }
+
+/* An item's controls while its plan is undecided. Editing is expected rather than exceptional — the
+   human's wording is what gets created, not the model's — so the fields are plain and always open
+   instead of hidden behind an "edit" affordance. */
+.familiar-plan-include {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  font-size: 0.875rem;
+  font-weight: 650;
+}
+
+.familiar-plan-field {
+  display: block;
+  margin-top: 0.5rem;
+}
+
+.familiar-plan-field > span {
+  display: block;
+  margin-bottom: 0.25rem;
+  color: var(--text-secondary);
+  font-size: 0.8125rem;
+  font-weight: 650;
+}
+
+.familiar-plan-field input,
+.familiar-plan-field textarea {
+  width: 100%;
+  padding: 0.5rem 0.625rem;
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  background: var(--surface);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 0.9375rem;
+}
+
+.familiar-plan-field textarea {
+  resize: vertical;
+}

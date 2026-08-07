@@ -1,5 +1,6 @@
 using FindFamiliar.Server.Domain;
 using FindFamiliar.Server.Services.Familiar.Chat;
+using FindFamiliar.Server.Services.Familiar.Chat.Planning;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
 
@@ -16,9 +17,14 @@ namespace FindFamiliar.Server.Pages;
 /// closed the instant after sending without losing the answer, which is the property slice 1 exists
 /// to establish.
 ///
-/// <c>GET</c> writes nothing on any branch. The one write is <c>OnPostSend</c>, with antiforgery.
+/// <c>GET</c> writes nothing on any branch. The writes are <c>OnPostSend</c> and
+/// <c>OnPostDecidePlan</c>, both with antiforgery. Neither touches project state here: deciding a
+/// plan goes through <see cref="IFamiliarPlanApprovalService"/>, which re-checks every gate inside
+/// the transaction that applies it.
 /// </summary>
-public sealed class FamiliarChatModel(IFamiliarChatService chats) : PageModel
+public sealed class FamiliarChatModel(
+    IFamiliarChatService chats,
+    IFamiliarPlanApprovalService plans) : PageModel
 {
     /// <summary>
     /// How long the page waits before re-reading while a turn is in flight.
@@ -100,6 +106,114 @@ public sealed class FamiliarChatModel(IFamiliarChatService chats) : PageModel
                     "The database was busy and your message was not sent. Nothing was changed — try again.";
                 return RedirectToPage(new { chatId });
         }
+    }
+
+    // ---------------------------------------------------------------- deciding a plan
+
+    [BindProperty]
+    public Guid PlanId { get; set; }
+
+    [BindProperty]
+    public Guid ExpectedConcurrencyToken { get; set; }
+
+    /// <summary>True for Approve, false for Decline. Two buttons, one form, one decision.</summary>
+    [BindProperty]
+    public bool Approve { get; set; }
+
+    [BindProperty]
+    public List<PlanItemInput> Items { get; set; } = [];
+
+    /// <summary>Shown on the plan card when a decision was refused. Authored here, never by a model.</summary>
+    public string? PlanMessage { get; private set; }
+
+    /// <summary>One item as the form posted it, before the service is told about it.</summary>
+    public sealed class PlanItemInput
+    {
+        public Guid ItemId { get; set; }
+
+        public bool IsIncluded { get; set; }
+
+        public string? Title { get; set; }
+
+        public string? RequestedOutcome { get; set; }
+    }
+
+    /// <summary>
+    /// The one human gate of Sprint 13, answered in the conversation rather than on a task page.
+    ///
+    /// Post/redirect/get on success, so a refresh cannot resubmit — though a resubmission would be
+    /// harmless anyway: the service consumes the Pending row by token before any effect, and a replay
+    /// reports what the first decision created rather than creating a second copy.
+    /// </summary>
+    public async Task<IActionResult> OnPostDecidePlanAsync(Guid chatId, CancellationToken cancellationToken)
+    {
+        var request = new FamiliarPlanDecisionRequest(
+            PlanId,
+            ExpectedConcurrencyToken,
+            Items
+                .Select(item => new FamiliarPlanItemDecision(
+                    item.ItemId,
+                    item.IsIncluded,
+                    item.Title,
+                    item.RequestedOutcome))
+                .ToList());
+
+        var outcome = Approve
+            ? await plans.ApproveAsync(chatId, request, cancellationToken)
+            : await plans.DeclineAsync(chatId, request, cancellationToken);
+
+        switch (outcome.Status)
+        {
+            case FamiliarPlanOutcomeStatus.Approved:
+                TempData["StatusMessage"] = outcome.StartedSessionId is null
+                    ? $"Created {outcome.CreatedTaskCount} task(s). No session was started."
+                    : $"Created {outcome.CreatedTaskCount} task(s) and started one {outcome.StartedRole} session.";
+                return RedirectToPage(new { chatId });
+
+            case FamiliarPlanOutcomeStatus.Declined:
+                TempData["StatusMessage"] = "The plan was declined. Nothing was created.";
+                return RedirectToPage(new { chatId });
+
+            case FamiliarPlanOutcomeStatus.AlreadyApproved:
+                TempData["StatusMessage"] =
+                    $"This plan was already approved; {outcome.CreatedTaskCount} task(s) came from it. Nothing was created again.";
+                return RedirectToPage(new { chatId });
+
+            case FamiliarPlanOutcomeStatus.AlreadyDeclined:
+                TempData["StatusMessage"] = "This plan was already declined. Nothing was created.";
+                return RedirectToPage(new { chatId });
+
+            case FamiliarPlanOutcomeStatus.NotFound:
+                return NotFound();
+        }
+
+        // Everything below refused and created nothing, so the plan is re-rendered in place with the
+        // reason attached rather than the person being redirected away from what they were reading.
+        PlanMessage = outcome.Status switch
+        {
+            FamiliarPlanOutcomeStatus.StaleToken =>
+                "This plan changed since the page was loaded, so nothing was done. Reload and read it again.",
+
+            FamiliarPlanOutcomeStatus.ProjectInactive =>
+                "That project is no longer active, so nothing was created.",
+
+            FamiliarPlanOutcomeStatus.ContextMoved =>
+                "The project changed since this plan was drafted, so what you read is no longer what would be "
+                + "created. Nothing was done — ask for a fresh plan.",
+
+            FamiliarPlanOutcomeStatus.TaskAlreadyRunning =>
+                "A session is already running on that task, so nothing was started. Nothing was created.",
+
+            FamiliarPlanOutcomeStatus.NothingIncluded =>
+                "Every item was excluded, so there was nothing to create. The plan is still here — include at "
+                + "least one item, or decline it.",
+
+            FamiliarPlanOutcomeStatus.ValidationFailed => outcome.ValidationMessage,
+
+            _ => "The database was busy, so nothing was done. Nothing was changed — try again."
+        };
+
+        return await LoadAsync(chatId, cancellationToken) ? Page() : NotFound();
     }
 
     /// <summary>

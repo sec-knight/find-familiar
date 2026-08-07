@@ -134,6 +134,12 @@ else
 // so work confirmed from a conversation is indistinguishable from work created by hand.
 builder.Services.AddScoped<IFamiliarActionService, FamiliarActionService>();
 
+// The same bridge for a drafted plan: every effect goes through IWorkflowDispatchService with gates
+// re-checked inside the committing transaction, so work approved in conversation is
+// indistinguishable from work created by hand. Registered unconditionally — deciding a plan that
+// already exists must keep working even if the provider that drafted it is later unconfigured.
+builder.Services.AddScoped<IFamiliarPlanApprovalService, FamiliarPlanApprovalService>();
+
 builder.Services.Configure<FamiliarReasoningOptions>(
     builder.Configuration.GetSection(FamiliarReasoningOptions.SectionName));
 

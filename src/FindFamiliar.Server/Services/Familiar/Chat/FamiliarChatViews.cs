@@ -41,14 +41,19 @@ public sealed record FamiliarPlanItemView(
     string RequestedOutcome,
     AgentSessionRole? Role,
     IReadOnlyList<FamiliarChatCitationView> Evidence,
-    bool IsIncluded);
+    bool IsIncluded,
+    Guid? CreatedTaskId = null);
 
 /// <summary>
 /// A plan drafted in this conversation, rendered inline in the transcript.
 ///
-/// Carries no approve or decline affordance in slice 3 — the plan is durable and readable, and
-/// nothing can act on it yet. What it does carry is the disclosure that makes an approval honest when
-/// slice 4 adds one: how many tasks would be created, and which single session would start.
+/// Carries the disclosure that makes an approval honest: how many tasks would be created, and which
+/// single session would start. That text is rendered before the buttons, not beside them, because it
+/// is the thing that turns approving into an act of reading.
+///
+/// <see cref="ConcurrencyToken"/> travels to the client and back on the decision, so a plan decided
+/// or redrawn between the render and the click is refused rather than applied to something the person
+/// never read.
 /// </summary>
 public sealed record FamiliarPlanView(
     Guid PlanId,
@@ -58,7 +63,8 @@ public sealed record FamiliarPlanView(
     FamiliarPlanStatus Status,
     string Summary,
     IReadOnlyList<FamiliarPlanItemView> Items,
-    DateTime CreatedUtc)
+    DateTime CreatedUtc,
+    Guid ConcurrencyToken = default)
 {
     public bool IsPending => Status == FamiliarPlanStatus.Pending;
 
