@@ -26,17 +26,38 @@ public sealed class FindFamiliarWebApplicationFactory : WebApplicationFactory<Pr
 
     private const string ChatApiKeyVariable = "Familiar__Chat__ApiKeyVariable";
 
+    private const string GatewayEnabledVariable = "FamiliarGateway__Enabled";
+    private const string GatewayTokenVariable = "FamiliarGateway__Token";
+    private const string GatewayIdentityNameVariable = "Familiar__Identity__Name";
+
     /// <summary>
     /// Obviously-fake configured runner bridge credential, used only by tests. Never a real
     /// secret; deliberately labeled so it cannot be mistaken for one.
     /// </summary>
     public const string RunnerBridgeTestToken = "ffa-test-fixture-runner-bridge-token-not-a-real-secret";
 
+    /// <summary>
+    /// The gateway credential for the test host. A second obviously-fake token rather than a reuse of
+    /// the runner one, because the two are separate credentials in the product and a fixture that
+    /// shared them would let a test pass that the deployment would fail.
+    /// </summary>
+    public const string GatewayTestToken = "ffa-test-fixture-familiar-gateway-token-not-a-real-secret";
+
+    /// <summary>
+    /// The identity the test host reports. Not "Sakura": a fixture that used the operator's own
+    /// Familiar name would let an assertion pass on a hard-coded default rather than on configuration
+    /// actually being read.
+    /// </summary>
+    public const string GatewayTestIdentityName = "Testwarden";
+
     private readonly string? _previousDataDirectory;
     private readonly string? _previousConnectionString;
     private readonly string? _previousRunnerBridgeToken;
     private readonly string? _previousChatProvider;
     private readonly string? _previousChatApiKeyVariable;
+    private readonly string? _previousGatewayEnabled;
+    private readonly string? _previousGatewayToken;
+    private readonly string? _previousGatewayIdentityName;
 
     public string TempDirectory { get; }
 
@@ -58,6 +79,16 @@ public sealed class FindFamiliarWebApplicationFactory : WebApplicationFactory<Pr
         _previousRunnerBridgeToken = Environment.GetEnvironmentVariable(RunnerBridgeTokenVariable);
         _previousChatProvider = Environment.GetEnvironmentVariable(ChatProviderVariable);
         _previousChatApiKeyVariable = Environment.GetEnvironmentVariable(ChatApiKeyVariable);
+        _previousGatewayEnabled = Environment.GetEnvironmentVariable(GatewayEnabledVariable);
+        _previousGatewayToken = Environment.GetEnvironmentVariable(GatewayTokenVariable);
+        _previousGatewayIdentityName = Environment.GetEnvironmentVariable(GatewayIdentityNameVariable);
+
+        // The Summoning Gate is on for the test host, because the properties worth protecting are
+        // about what it refuses, and a gate that is not mapped refuses everything for the wrong
+        // reason. The gateway-disabled case has its own fixture.
+        Environment.SetEnvironmentVariable(GatewayEnabledVariable, "true");
+        Environment.SetEnvironmentVariable(GatewayTokenVariable, GatewayTestToken);
+        Environment.SetEnvironmentVariable(GatewayIdentityNameVariable, GatewayTestIdentityName);
 
         Environment.SetEnvironmentVariable(DataDirectoryVariable, TempDirectory);
         Environment.SetEnvironmentVariable(
@@ -91,6 +122,9 @@ public sealed class FindFamiliarWebApplicationFactory : WebApplicationFactory<Pr
         Environment.SetEnvironmentVariable(RunnerBridgeTokenVariable, _previousRunnerBridgeToken);
         Environment.SetEnvironmentVariable(ChatProviderVariable, _previousChatProvider);
         Environment.SetEnvironmentVariable(ChatApiKeyVariable, _previousChatApiKeyVariable);
+        Environment.SetEnvironmentVariable(GatewayEnabledVariable, _previousGatewayEnabled);
+        Environment.SetEnvironmentVariable(GatewayTokenVariable, _previousGatewayToken);
+        Environment.SetEnvironmentVariable(GatewayIdentityNameVariable, _previousGatewayIdentityName);
 
         // base.Dispose above tears down the host (and with it the DbContext pool); the shared
         // helper then releases SQLite's pooled handles before deleting, so a Windows teardown

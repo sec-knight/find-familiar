@@ -1,5 +1,6 @@
 using System.Text.Json.Serialization;
 using FindFamiliar.Server.Api.Familiar;
+using FindFamiliar.Server.Api.Gateway;
 using FindFamiliar.Server.Api.Repository;
 using FindFamiliar.Server.Api.Runner;
 using FindFamiliar.Server.Data;
@@ -13,6 +14,7 @@ using FindFamiliar.Server.Services.Familiar.Chat.Providers;
 using FindFamiliar.Server.Services.Familiar.Chat.Planning;
 using FindFamiliar.Server.Services.Familiar.Chat.Retrieval;
 using FindFamiliar.Server.Services.Familiar.Reasoning;
+using FindFamiliar.Server.Services.Familiar.Gateway;
 using FindFamiliar.Server.Services.Familiar.Repository;
 using FindFamiliar.Server.Services.Providers;
 using Microsoft.AspNetCore.DataProtection;
@@ -233,6 +235,37 @@ builder.Services.AddScoped<IProviderCapacityReader>(services => new UnknownProvi
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.Configure<RunnerBridgeOptions>(builder.Configuration.GetSection(RunnerBridgeOptions.SectionName));
 
+// ---- The Summoning Gate (ADR-0016) ----
+//
+// Find Familiar owns durable continuity; an external frontier client is one body that continuity can
+// speak through. This is the boundary that makes that structural: identity, memory, sensitivity and
+// bounds are decided in FamiliarGateway and below it, and MCP and REST are two adapters over it that
+// hold no policy of their own.
+//
+// Read-only in every direction. The gateway depends on the retrieval and brief services and on
+// nothing that can write, so exposing a mutation would take adding a dependency rather than
+// forgetting a check.
+builder.Services.Configure<FamiliarIdentityOptions>(
+    builder.Configuration.GetSection(FamiliarIdentityOptions.SectionName));
+builder.Services.Configure<FamiliarGatewayOptions>(
+    builder.Configuration.GetSection(FamiliarGatewayOptions.SectionName));
+builder.Services.AddScoped<IFamiliarGateway, FamiliarGateway>();
+
+// Registered unconditionally so the tool surface is identical whether or not this deployment has
+// turned the gate on; whether anything is reachable is decided by MapMcp and MapFamiliarGateway
+// below, and by the filter in front of both.
+builder.Services
+    .AddMcpServer(options =>
+    {
+        options.ServerInfo = new ModelContextProtocol.Protocol.Implementation
+        {
+            Name = "find-familiar",
+            Version = "14.0"
+        };
+    })
+    .WithHttpTransport()
+    .WithTools<FamiliarMcpTools>();
+
 var app = builder.Build();
 
 using (var scope = app.Services.CreateScope())
@@ -319,6 +352,12 @@ app.MapFamiliarChatStreamEndpoint();
 
 app.MapRunnerEndpoints();
 app.MapRepositorySnapshotEndpoints();
+
+// Both adapters over the same gateway, behind the same filter. Neither is mapped at all unless the
+// gate is enabled: a deployment that has not turned this on has no external surface to probe, and a
+// 404 is a more honest answer than a 401 about a gate that is not there.
+app.MapFamiliarGatewayEndpoints();
+app.MapFamiliarMcpEndpoint();
 
 app.Run();
 
