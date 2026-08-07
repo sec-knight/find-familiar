@@ -10,10 +10,25 @@ namespace FindFamiliar.Server.Services.Familiar.Chat.Retrieval;
 /// </summary>
 public interface IFamiliarContextRetrievalService
 {
+    /// <param name="focusProjectId">
+    /// The project the caller is looking at. By default this <i>weights</i> rather than restricts: the
+    /// native conversation wants "what should I work on?" to reach across projects, and a focus that
+    /// silently hid the rest would make the cross-project question unanswerable.
+    /// </param>
+    /// <param name="restrictToProject">
+    /// True to make <paramref name="focusProjectId"/> a filter instead of a preference.
+    ///
+    /// The Summoning Gate needs this: an external client asking about one project and receiving
+    /// another project's records has been answered a question it did not ask, and it has no way to
+    /// tell. Done here rather than by filtering the result afterwards, because the cap is applied
+    /// inside this method — a caller trimming the six rows it got back would silently lose the wanted
+    /// project's seventh-ranked entry and report that nothing was found.
+    /// </param>
     Task<FamiliarRetrievalResult> RetrieveAsync(
         string message,
         Guid? focusProjectId = null,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default,
+        bool restrictToProject = false);
 }
 
 /// <summary>
@@ -97,7 +112,8 @@ public sealed class FamiliarContextRetrievalService(
     public async Task<FamiliarRetrievalResult> RetrieveAsync(
         string message,
         Guid? focusProjectId = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        bool restrictToProject = false)
     {
         var terms = FamiliarQueryTerms.Extract(message);
 
@@ -117,6 +133,13 @@ public sealed class FamiliarContextRetrievalService(
                 && !entry.IsSensitive
                 && !entry.Project.IsSensitive
                 && !NeverRetrieved.Contains(entry.Kind));
+
+        // A scope, when the caller asked for one. In the query beside the sensitivity rules rather
+        // than applied to the results, so the entry cap is spent on the project that was asked about.
+        if (restrictToProject && focusProjectId is { } onlyProjectId)
+        {
+            visible = visible.Where(entry => entry.ProjectId == onlyProjectId);
+        }
 
         var withheld = await dbContext.ContextEntries
             .AsNoTracking()
