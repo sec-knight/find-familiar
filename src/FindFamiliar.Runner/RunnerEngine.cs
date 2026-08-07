@@ -57,13 +57,37 @@ public sealed class RunnerEngine(HttpClient httpClient, AdapterProcessExecutor a
         RunnerExecutionRequest request,
         CancellationToken cancellationToken)
     {
+        // The workspace is stated to the session before anything runs, and stated here rather than at
+        // either entry point so the explicit CLI invocation and the worker loop cannot diverge. A
+        // Reviewer that resolved its scope from ambient environment while an Implementer used the
+        // configured worktree is how correct work came to be reported as missing.
+        var workspace = request.Workspace ?? WorkspaceContract.TryResolve(
+            request.AdapterEnvironment,
+            name => Environment.GetEnvironmentVariable(name));
+
+        if (workspace is null)
+        {
+            // Fail closed. Letting the adapter inherit whatever the operator happened to export is
+            // precisely the silent divergence this slice exists to remove, and a session that cannot
+            // say where it is standing should not start.
+            diagnostics.WriteLine(
+                "runner: no authorized workspace could be resolved for this session. Configure a project "
+                + "mapping in worker.json, or set FAMILIAR_CLAUDE_WORKTREE for an explicit invocation.");
+
+            return RunnerExitCode.AssignmentInvalid;
+        }
+
+        var assignmentMarkdown = workspace.Augment(request.AssignmentMarkdown);
+
+        diagnostics.WriteLine($"runner: workspace contract applied (root={workspace.WorkspaceRoot}, mode={workspace.Mode}).");
+
         var stdinPayload = new AdapterInvocation(
             RunnerProtocol.ContractVersion,
             request.TaskId,
             request.SessionId,
             request.Role,
             request.RolePrompt,
-            request.AssignmentMarkdown);
+            assignmentMarkdown);
         var stdinJson = JsonSerializer.Serialize(stdinPayload, JsonOptions);
 
         var execution = await adapterExecutor.RunAsync(

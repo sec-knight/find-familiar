@@ -27,7 +27,10 @@
       "allowedRoot": "/absolute/path/to/parent-of-repository",
 
       "//mode": "read-only, or edit-worktree to let approved Implementer sessions change files here. Even then only the Implementer writes; Planner and Reviewer stay read-only. edit-worktree needs a clean LINKED git worktree and refuses to start otherwise.",
-      "mode": "read-only"
+      "mode": "read-only",
+
+      "//projectPath": "Optional. The canonical checkout this worktree mirrors. When an assignment names an absolute path under it, the runner restates that path relative to the workspace so an Implementer and a Reviewer resolve the same file; without it such a path is flagged as unreachable instead of guessed at. It grants nothing — containment is still decided by allowedRoot.",
+      "projectPath": "/absolute/path/to/canonical-checkout"
     }
   ]
 }

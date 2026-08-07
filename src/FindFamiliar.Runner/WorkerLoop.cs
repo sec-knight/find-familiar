@@ -135,7 +135,8 @@ public sealed class WorkerLoop(
                 claim.AssignmentMarkdown,
                 claim.Role,
                 mapping.ToAdapterEnvironment(claim.Role),
-                claim.ClaimId),
+                claim.ClaimId,
+                mapping.ToWorkspaceContract(claim.Role)),
             cancellationToken);
 
         if (exitCode is null)

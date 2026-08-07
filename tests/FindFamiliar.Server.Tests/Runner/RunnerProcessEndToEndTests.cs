@@ -241,10 +241,41 @@ public sealed class RunnerProcessEndToEndTests(FindFamiliarWebApplicationFactory
             [],
             TimeSpan.FromSeconds(10));
 
-        var exitCode = await RunEngineAsync(arguments);
+        // Wrapped so a workspace is stated: the run must reach the launch attempt and fail there,
+        // rather than being refused earlier for having no workspace, which would assert nothing about
+        // launch failure. The fake adapter mode is irrelevant — this executable does not exist.
+        var exitCode = await WithFakeAdapterModeAsync("success", () => RunEngineAsync(arguments));
 
         Assert.Equal(RunnerExitCode.CancelledAfterAdapterFailure, exitCode);
         await AssertDurablyCancelledWithOneHandoffAsync(session.Id);
+    }
+
+    /// <summary>
+    /// The other half of the 2026-08-07 README incident, asserted end to end.
+    ///
+    /// The explicit invocation path supplied no project mapping, so the adapter inherited whatever
+    /// workspace variables the operator had exported — which is how a Reviewer came to inspect the
+    /// live checkout while the Implementer worked in the linked worktree. A session that cannot say
+    /// where it is standing must not start, and must not reach the adapter at all.
+    /// </summary>
+    [Fact]
+    public async Task A_session_with_no_resolvable_workspace_is_refused_before_the_adapter_runs()
+    {
+        var (_, task, session) = await SeedStartedSessionAsync(AgentSessionRole.Reviewer);
+        var arguments = BuildArguments(task.Id, session.Id, TimeSpan.FromSeconds(15));
+
+        // Deliberately not wrapped: no workspace is exported.
+        var exitCode = await RunEngineAsync(arguments);
+
+        Assert.Equal(RunnerExitCode.AssignmentInvalid, exitCode);
+
+        using var scope = factory.Services.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<FamiliarDbContext>();
+
+        // Refused before anything ran, so the session is untouched: no result, no durable cancellation.
+        var refreshedSession = await dbContext.AgentSessions.SingleAsync(s => s.Id == session.Id);
+        Assert.Equal(AgentSessionStatus.Started, refreshedSession.Status);
+        Assert.Equal(0, await dbContext.ContextEntries.CountAsync(e => e.SourceSessionId == session.Id));
     }
 
     [Fact]
@@ -292,20 +323,55 @@ public sealed class RunnerProcessEndToEndTests(FindFamiliarWebApplicationFactory
         return await engine.RunAsync(arguments, CancellationToken.None);
     }
 
+    /// <summary>
+    /// Selects the fake adapter's behaviour, and states a workspace for the run.
+    ///
+    /// The workspace variables are not decoration. Since Slice 0 the runner refuses to launch a
+    /// session whose authorized workspace it cannot name, because a session that inherited whatever
+    /// the operator happened to export is how an Implementer and a Reviewer came to stand in
+    /// different trees. An explicit invocation must therefore export them, and this harness exports
+    /// them exactly as a real one would — these tests cover adapter process mechanics, and the
+    /// workspace contract itself is asserted in <c>WorkspaceContractTests</c>.
+    /// </summary>
     private static async Task<T> WithFakeAdapterModeAsync<T>(string mode, Func<Task<T>> action)
     {
-        const string variable = "FAKE_ADAPTER_MODE";
-        var previous = Environment.GetEnvironmentVariable(variable);
-        Environment.SetEnvironmentVariable(variable, mode);
+        var variables = new Dictionary<string, string?>(StringComparer.Ordinal)
+        {
+            ["FAKE_ADAPTER_MODE"] = mode,
+            ["FAMILIAR_CLAUDE_WORKTREE"] = WorkspaceRoot,
+            ["FAMILIAR_CLAUDE_ALLOWED_ROOT"] = WorkspaceRoot,
+            ["FAMILIAR_CLAUDE_MODE"] = "read-only"
+        };
+
+        var previous = variables.Keys.ToDictionary(
+            name => name,
+            Environment.GetEnvironmentVariable,
+            StringComparer.Ordinal);
+
+        foreach (var (name, value) in variables)
+        {
+            Environment.SetEnvironmentVariable(name, value);
+        }
+
         try
         {
             return await action();
         }
         finally
         {
-            Environment.SetEnvironmentVariable(variable, previous);
+            foreach (var (name, value) in previous)
+            {
+                Environment.SetEnvironmentVariable(name, value);
+            }
         }
     }
+
+    /// <summary>
+    /// An absolute path is all the contract needs; whether it exists is the adapter's question, and
+    /// the fake adapter does not touch the filesystem.
+    /// </summary>
+    private static readonly string WorkspaceRoot =
+        Path.Combine(Path.GetTempPath(), "FindFamiliar.Tests", "runner-workspace");
 
     private static RunnerArguments BuildArguments(Guid taskId, Guid sessionId, TimeSpan timeout) => new(
         new Uri("http://localhost/"),

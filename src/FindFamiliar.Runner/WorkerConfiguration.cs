@@ -162,7 +162,17 @@ public sealed record WorkerConfiguration(
                 return null;
             }
 
-            projects.Add(new WorkerProjectMapping(projectId, project.Worktree, project.AllowedRoot, mode));
+            // Optional, and validated when present: a relative projectPath could not anchor a
+            // translation, so it is rejected at load rather than producing silent non-translation later.
+            if (project.ProjectPath is not null
+                && (string.IsNullOrWhiteSpace(project.ProjectPath) || !Path.IsPathFullyQualified(project.ProjectPath)))
+            {
+                diagnostics.WriteLine("worker: projectPath, when present, must be an absolute path.");
+                return null;
+            }
+
+            projects.Add(new WorkerProjectMapping(
+                projectId, project.Worktree, project.AllowedRoot, mode, project.ProjectPath));
         }
 
         var pollSeconds = Clamp(file.PollSeconds ?? DefaultPollSeconds);
@@ -227,11 +237,30 @@ public sealed record WorkerConfiguration(
         string? ProjectId,
         string? Worktree,
         string? AllowedRoot,
-        string? Mode);
+        string? Mode,
+        string? ProjectPath);
 }
 
 /// <summary>Machine-local mapping from a Familiar project to a repository on this host.</summary>
-public sealed record WorkerProjectMapping(Guid ProjectId, string Worktree, string AllowedRoot, string Mode)
+/// <param name="ProjectPath">
+/// Optional. The canonical checkout this workspace mirrors — on this deployment, the live
+/// <c>/srv/familiar/apps/FindFamiliar</c> that <see cref="Worktree"/> is a linked worktree of.
+///
+/// It exists for one purpose: when an assignment names an absolute path under it, the Runner can
+/// restate that path relative to the workspace instead of leaving each role to guess. Without it such
+/// a path is flagged as unreachable rather than translated, because two absolute paths ending in the
+/// same filename may be different files and matching on the tail would invent a correspondence nobody
+/// configured.
+///
+/// It never widens what a session may reach. Containment is still decided by <see cref="AllowedRoot"/>
+/// in the adapter; this is a naming aid for reading the assignment, not a permission.
+/// </param>
+public sealed record WorkerProjectMapping(
+    Guid ProjectId,
+    string Worktree,
+    string AllowedRoot,
+    string Mode,
+    string? ProjectPath = null)
 {
     public const string ReadOnlyMode = "read-only";
     public const string EditWorktreeMode = "edit-worktree";
@@ -268,4 +297,15 @@ public sealed record WorkerProjectMapping(Guid ProjectId, string Worktree, strin
         ["FAMILIAR_CLAUDE_ALLOWED_ROOT"] = AllowedRoot,
         ["FAMILIAR_CLAUDE_MODE"] = ResolveMode(role)
     };
+
+    /// <summary>
+    /// The workspace contract for this project and role.
+    ///
+    /// Built from the same values as <see cref="ToAdapterEnvironment"/> so that what a session is told
+    /// and what actually bounds it cannot drift apart. Only the mode differs by role — every role on a
+    /// task gets the same workspace root, which is what makes an Implementer and a Reviewer describe
+    /// the same files.
+    /// </summary>
+    public WorkspaceContract ToWorkspaceContract(string role) =>
+        new(Worktree, AllowedRoot, ResolveMode(role), ProjectPath);
 }
