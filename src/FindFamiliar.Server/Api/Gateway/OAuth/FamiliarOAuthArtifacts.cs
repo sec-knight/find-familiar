@@ -108,7 +108,13 @@ public sealed class FamiliarOAuthArtifacts(IOptions<FamiliarGatewayOptions> opti
             ClientName = clientName
         });
 
-    public string IssueAuthorizationRequest(string clientId, string redirectUri, string codeChallenge, string? state) =>
+    /// <param name="scope">
+    /// What the human is about to be asked to grant. Carried on the signed request so the consent
+    /// screen and the code that follows it cannot disagree about what was approved — a form field the
+    /// browser could edit between the two would be a way to widen a grant after it was shown.
+    /// </param>
+    public string IssueAuthorizationRequest(
+        string clientId, string redirectUri, string codeChallenge, string? state, string scope) =>
         Sign(Purpose.Request, new Payload
         {
             Id = NewId(),
@@ -117,10 +123,11 @@ public sealed class FamiliarOAuthArtifacts(IOptions<FamiliarGatewayOptions> opti
             ClientId = clientId,
             RedirectUri = redirectUri,
             CodeChallenge = codeChallenge,
-            State = state
+            State = state,
+            Scope = scope
         });
 
-    public string IssueCode(string clientId, string redirectUri, string codeChallenge) =>
+    public string IssueCode(string clientId, string redirectUri, string codeChallenge, string scope) =>
         Sign(Purpose.Code, new Payload
         {
             Id = NewId(),
@@ -129,10 +136,16 @@ public sealed class FamiliarOAuthArtifacts(IOptions<FamiliarGatewayOptions> opti
             ClientId = clientId,
             RedirectUri = redirectUri,
             CodeChallenge = codeChallenge,
-            Audience = Options.ResolvedResource
+            Audience = Options.ResolvedResource,
+            Scope = scope
         });
 
-    public string IssueAccessToken(string clientId) =>
+    /// <param name="scope">
+    /// The scopes actually granted, never the scopes requested. Everything downstream reads permission
+    /// from this string, so a token that was issued for reading stays a reading token for its whole
+    /// life — including across a refresh, which may narrow a grant but never widen one.
+    /// </param>
+    public string IssueAccessToken(string clientId, string scope) =>
         Sign(Purpose.Access, new Payload
         {
             Id = NewId(),
@@ -140,10 +153,10 @@ public sealed class FamiliarOAuthArtifacts(IOptions<FamiliarGatewayOptions> opti
             ExpiresAt = Now() + Math.Max(60, Options.AccessTokenLifetimeSeconds),
             ClientId = clientId,
             Audience = Options.ResolvedResource,
-            Scope = FamiliarGatewayOptions.ReadScope
+            Scope = scope
         });
 
-    public string IssueRefreshToken(string clientId) =>
+    public string IssueRefreshToken(string clientId, string scope) =>
         Sign(Purpose.Refresh, new Payload
         {
             Id = NewId(),
@@ -151,8 +164,20 @@ public sealed class FamiliarOAuthArtifacts(IOptions<FamiliarGatewayOptions> opti
             ExpiresAt = Now() + ((long)Math.Max(1, Options.RefreshTokenLifetimeDays) * 86400),
             ClientId = clientId,
             Audience = Options.ResolvedResource,
-            Scope = FamiliarGatewayOptions.ReadScope
+            Scope = scope
         });
+
+    /// <summary>
+    /// The scopes a verified artifact actually carries.
+    ///
+    /// A payload with no scope is treated as <see cref="FamiliarGatewayOptions.ReadScope"/>, which is
+    /// what every token issued before scopes existed means. That default is safe in the only direction
+    /// that matters: it can never conjure a permission, only the one this server has always granted.
+    /// </summary>
+    public static IReadOnlyList<string> ScopesOf(Payload payload) =>
+        FamiliarGatewayOptions.TryParseScopes(payload.Scope, out var scopes)
+            ? scopes
+            : [FamiliarGatewayOptions.ReadScope];
 
     // ---------------------------------------------------------------- reading
 

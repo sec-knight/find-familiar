@@ -73,7 +73,7 @@ public static class FamiliarOAuthEndpoints
                 {
                     resource = current.ResolvedResource,
                     authorization_servers = new[] { current.ResolvedIssuer },
-                    scopes_supported = new[] { FamiliarGatewayOptions.ReadScope },
+                    scopes_supported = FamiliarGatewayOptions.SupportedScopes,
                     bearer_methods_supported = new[] { "header" }
                 }));
         }
@@ -94,7 +94,7 @@ public static class FamiliarOAuthEndpoints
                     authorization_endpoint = issuer + AuthorizeRoute,
                     token_endpoint = issuer + TokenRoute,
                     registration_endpoint = issuer + RegisterRoute,
-                    scopes_supported = new[] { FamiliarGatewayOptions.ReadScope },
+                    scopes_supported = FamiliarGatewayOptions.SupportedScopes,
                     response_types_supported = new[] { "code" },
                     grant_types_supported = new[] { "authorization_code", "refresh_token" },
 
@@ -185,7 +185,11 @@ public static class FamiliarOAuthEndpoints
                     token_endpoint_auth_method = "none",
                     grant_types = new[] { "authorization_code", "refresh_token" },
                     response_types = new[] { "code" },
-                    scope = FamiliarGatewayOptions.ReadScope,
+                    // What this client may ask for, not what it holds. Registration grants nothing —
+                    // only the consent screen does — so stating the read scope alone here would tell a
+                    // client it could never request a decision permission it is in fact allowed to ask
+                    // for.
+                    scope = FamiliarGatewayOptions.FormatScopes(FamiliarGatewayOptions.SupportedScopes),
 
                     // Echoed when supplied, absent when not. This is the name shown on the consent
                     // screen, so a client that sent one and got nothing back has reason to doubt the
@@ -252,17 +256,22 @@ public static class FamiliarOAuthEndpoints
                 return RedirectWithError(redirectUri, "invalid_target", state, settings);
             }
 
-            var scope = query["scope"].ToString();
-
-            if (!string.IsNullOrEmpty(scope) && !scope.Split(' ').Contains(FamiliarGatewayOptions.ReadScope))
+            // An unrecognised scope fails the request rather than being dropped. Silently reducing a
+            // request to what is understood would hand back a token that means less than the client
+            // believes it holds, and the client would discover that only when an operation failed.
+            if (!FamiliarGatewayOptions.TryParseScopes(query["scope"].ToString(), out var requestedScopes))
             {
                 return RedirectWithError(redirectUri, "invalid_scope", state, settings);
             }
 
-            var pending = artifacts.IssueAuthorizationRequest(
-                query["client_id"].ToString(), redirectUri, query["code_challenge"].ToString(), state);
+            var scope = FamiliarGatewayOptions.FormatScopes(requestedScopes);
 
-            return Html(ConsentPage(identity.Value, client.ClientName, pending, problem: null), StatusCodes.Status200OK);
+            var pending = artifacts.IssueAuthorizationRequest(
+                query["client_id"].ToString(), redirectUri, query["code_challenge"].ToString(), state, scope);
+
+            return Html(
+                ConsentPage(identity.Value, client.ClientName, pending, requestedScopes, problem: null),
+                StatusCodes.Status200OK);
         });
 
         app.MapPost(AuthorizeRoute, async (
@@ -306,11 +315,19 @@ public static class FamiliarOAuthEndpoints
                 logger.LogWarning("A Familiar OAuth approval was refused: the owner credential did not match.");
 
                 return Html(
-                    ConsentPage(identity.Value, clientName: null, form["request"].ToString(), "That was not the gateway token."),
+                    ConsentPage(
+                        identity.Value,
+                        clientName: null,
+                        form["request"].ToString(),
+                        FamiliarOAuthArtifacts.ScopesOf(pending),
+                        "That was not the gateway token."),
                     StatusCodes.Status401Unauthorized);
             }
 
-            var code = artifacts.IssueCode(pending.ClientId!, pending.RedirectUri!, pending.CodeChallenge!);
+            // The scope comes from the signed request, which is what the human was shown. Nothing the
+            // browser posts can change it.
+            var code = artifacts.IssueCode(
+                pending.ClientId!, pending.RedirectUri!, pending.CodeChallenge!, pending.Scope ?? FamiliarGatewayOptions.ReadScope);
 
             var separator = pending.RedirectUri!.Contains('?') ? "&" : "?";
             var location = pending.RedirectUri
@@ -492,7 +509,7 @@ public static class FamiliarOAuthEndpoints
             return InvalidGrant();
         }
 
-        return IssuedTokens(artifacts, settings, code.ClientId!);
+        return IssuedTokens(artifacts, settings, code.ClientId!, FamiliarOAuthArtifacts.ScopesOf(code));
     }
 
     private static IResult ExchangeRefreshToken(
@@ -521,18 +538,48 @@ public static class FamiliarOAuthEndpoints
             return InvalidGrant();
         }
 
-        return IssuedTokens(artifacts, settings, refresh.ClientId!);
+        var granted = FamiliarOAuthArtifacts.ScopesOf(refresh);
+
+        // RFC 6749 §6: a refresh may ask for less, never for more. A client that could widen its own
+        // grant here would make the consent screen decorative — it would need the human once and never
+        // again. Asking for something outside the original grant is refused rather than trimmed,
+        // because a client that thinks it holds a permission should learn otherwise now.
+        var requested = form["scope"].ToString();
+
+        if (!string.IsNullOrEmpty(requested))
+        {
+            if (!FamiliarGatewayOptions.TryParseScopes(requested, out var narrowed)
+                || narrowed.Any(scope => !granted.Contains(scope, StringComparer.Ordinal)))
+            {
+                return Error(StatusCodes.Status400BadRequest, "invalid_scope", "That scope was not granted.");
+            }
+
+            granted = narrowed;
+        }
+
+        return IssuedTokens(artifacts, settings, refresh.ClientId!, granted);
     }
 
-    private static IResult IssuedTokens(FamiliarOAuthArtifacts artifacts, FamiliarGatewayOptions settings, string clientId) =>
-        Results.Json(new
+    private static IResult IssuedTokens(
+        FamiliarOAuthArtifacts artifacts,
+        FamiliarGatewayOptions settings,
+        string clientId,
+        IReadOnlyList<string> scopes)
+    {
+        var scope = FamiliarGatewayOptions.FormatScopes(scopes);
+
+        return Results.Json(new
         {
-            access_token = artifacts.IssueAccessToken(clientId),
+            access_token = artifacts.IssueAccessToken(clientId, scope),
             token_type = "Bearer",
             expires_in = Math.Max(60, settings.AccessTokenLifetimeSeconds),
-            refresh_token = artifacts.IssueRefreshToken(clientId),
-            scope = FamiliarGatewayOptions.ReadScope
+            refresh_token = artifacts.IssueRefreshToken(clientId, scope),
+
+            // Stated back on every response, because the granted scope may be narrower than the one
+            // asked for and a client is entitled to know what it actually holds.
+            scope
         });
+    }
 
     // ---------------------------------------------------------------- helpers
 
@@ -633,6 +680,7 @@ public static class FamiliarOAuthEndpoints
         FamiliarIdentityOptions identity,
         string? clientName,
         string pendingRequest,
+        IReadOnlyList<string> scopes,
         string? problem)
     {
         var name = WebUtility.HtmlEncode(identity.ResolvedName);
@@ -640,6 +688,47 @@ public static class FamiliarOAuthEndpoints
         var notice = problem is null
             ? string.Empty
             : $"<p class=\"problem\">{WebUtility.HtmlEncode(problem)}</p>";
+
+        var decides = scopes.Contains(FamiliarGatewayOptions.DecideScope, StringComparer.Ordinal);
+
+        // The summary line must never overstate. It said "read-only" when read-only was all there was;
+        // it keeps saying exactly that, and says something different only when something different is
+        // being asked for.
+        var summary = decides
+            ? "This grants read access to your Familiar's context, and permission to submit decisions you make."
+            : "This grants read-only access to your Familiar's context.";
+
+        // Stated as what the client may carry, never as what it may decide. The distinction is the
+        // whole point of the scope: a model that could approve its own work would be the failure this
+        // architecture exists to prevent, and the screen a person reads should not blur it.
+        var decideBlock = decides
+            ? """
+              <div class="grant elevated">
+                <strong>Also requested: permission to submit your decisions</strong>
+                <p>
+                  This lets the client carry a decision <em>you</em> have explicitly made — such as approving a
+                  step that is waiting on you — back to Find Familiar, so you do not have to open the
+                  Demiplane to act on it.
+                </p>
+                <ul>
+                  <li>It does <strong>not</strong> let the AI approve work by itself, or decide anything on your behalf</li>
+                  <li>It does <strong>not</strong> grant general write access: nothing can be created, edited or deleted with it</li>
+                  <li>Find Familiar still checks every decision independently and refuses any that is not currently legal</li>
+                  <li>You remain the authority; the client only relays what you chose</li>
+                </ul>
+              </div>
+              """
+            : string.Empty;
+
+        // The "no writes" promise stays absolute where it is true, and becomes precise rather than
+        // false where it is not. A screen that kept claiming nothing can change while asking for the
+        // decision permission would be the exact misstatement this slice was told to avoid.
+        var notWritten = decides
+            ? "No general write access: nothing can be created, edited or deleted except as the direct result "
+              + "of a decision you explicitly make"
+            : "No writes: no tasks, sessions, plans or context entries can be created or changed";
+
+        var approveLabel = decides ? "Approve access" : "Approve read access";
 
         return $$"""
         <!doctype html>
@@ -659,11 +748,12 @@ public static class FamiliarOAuthEndpoints
             input { width: 100%; padding: .6rem; font: inherit; border-radius: .4rem; border: 1px solid currentColor; background: transparent; color: inherit; }
             button { margin-top: 1rem; padding: .6rem 1.1rem; font: inherit; border-radius: .4rem; cursor: pointer; }
             .problem { color: #b00020; font-weight: 600; }
+            .elevated { border-width: 2px; opacity: 1; }
           </style>
         </head>
         <body>
           <h1>Connect {{client}} to {{name}}</h1>
-          <p class="muted">This grants read-only access to your Familiar's context.</p>
+          <p class="muted">{{summary}}</p>
           <div class="grant">
             <strong>What is being granted</strong>
             <ul>
@@ -672,17 +762,18 @@ public static class FamiliarOAuthEndpoints
             </ul>
             <strong>What is not</strong>
             <ul>
-              <li>No writes: no tasks, sessions, plans or context entries can be created or changed</li>
+              <li>{{notWritten}}</li>
               <li>Nothing marked sensitive is returned or named</li>
             </ul>
           </div>
+          {{decideBlock}}
           {{notice}}
           <form method="post" action="{{AuthorizeRoute}}" autocomplete="off">
             <input type="hidden" name="request" value="{{WebUtility.HtmlEncode(pendingRequest)}}">
             <label for="owner_token">Gateway token</label>
             <input id="owner_token" name="owner_token" type="password" autocomplete="off" autofocus
                    placeholder="The value of FamiliarGateway__Token">
-            <button type="submit">Approve read access</button>
+            <button type="submit">{{approveLabel}}</button>
           </form>
         </body>
         </html>

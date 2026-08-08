@@ -23,7 +23,7 @@ public sealed class FamiliarOAuthArtifactsTests
         var clock = new FixedClock(DateTimeOffset.UtcNow);
         var artifacts = Build(clock, out var options);
 
-        var token = artifacts.IssueAccessToken("client-1");
+        var token = artifacts.IssueAccessToken("client-1", FamiliarGatewayOptions.ReadScope);
 
         Assert.True(artifacts.TryRead(FamiliarOAuthArtifacts.Purpose.Access, token, out var payload));
         Assert.Equal(options.ResolvedResource, payload.Audience);
@@ -38,7 +38,7 @@ public sealed class FamiliarOAuthArtifactsTests
         var clock = new FixedClock(DateTimeOffset.UtcNow);
         var artifacts = Build(clock, out var options);
 
-        var token = artifacts.IssueAccessToken("client-1");
+        var token = artifacts.IssueAccessToken("client-1", FamiliarGatewayOptions.ReadScope);
 
         clock.Advance(TimeSpan.FromSeconds(options.AccessTokenLifetimeSeconds - 5));
         Assert.True(artifacts.TryRead(FamiliarOAuthArtifacts.Purpose.Access, token, out _));
@@ -53,7 +53,7 @@ public sealed class FamiliarOAuthArtifactsTests
         var clock = new FixedClock(DateTimeOffset.UtcNow);
         var artifacts = Build(clock, out _);
 
-        var code = artifacts.IssueCode("client-1", "https://chatgpt.com/cb", "challenge");
+        var code = artifacts.IssueCode("client-1", "https://chatgpt.com/cb", "challenge", FamiliarGatewayOptions.ReadScope);
 
         clock.Advance(FamiliarOAuthArtifacts.AuthorizationCodeLifetime + TimeSpan.FromSeconds(1));
 
@@ -71,11 +71,11 @@ public sealed class FamiliarOAuthArtifactsTests
 
         var issued = new (FamiliarOAuthArtifacts.Purpose Purpose, string Value)[]
         {
-            (FamiliarOAuthArtifacts.Purpose.Access, artifacts.IssueAccessToken("c")),
-            (FamiliarOAuthArtifacts.Purpose.Refresh, artifacts.IssueRefreshToken("c")),
-            (FamiliarOAuthArtifacts.Purpose.Code, artifacts.IssueCode("c", "https://chatgpt.com/cb", "ch")),
+            (FamiliarOAuthArtifacts.Purpose.Access, artifacts.IssueAccessToken("c", FamiliarGatewayOptions.ReadScope)),
+            (FamiliarOAuthArtifacts.Purpose.Refresh, artifacts.IssueRefreshToken("c", FamiliarGatewayOptions.ReadScope)),
+            (FamiliarOAuthArtifacts.Purpose.Code, artifacts.IssueCode("c", "https://chatgpt.com/cb", "ch", FamiliarGatewayOptions.ReadScope)),
             (FamiliarOAuthArtifacts.Purpose.Client, artifacts.IssueClientId(["https://chatgpt.com/cb"], "ChatGPT")),
-            (FamiliarOAuthArtifacts.Purpose.Request, artifacts.IssueAuthorizationRequest("c", "https://chatgpt.com/cb", "ch", null))
+            (FamiliarOAuthArtifacts.Purpose.Request, artifacts.IssueAuthorizationRequest("c", "https://chatgpt.com/cb", "ch", null, FamiliarGatewayOptions.ReadScope))
         };
 
         foreach (var (purpose, value) in issued)
@@ -99,7 +99,7 @@ public sealed class FamiliarOAuthArtifactsTests
     {
         var clock = new FixedClock(DateTimeOffset.UtcNow);
         var before = Build(clock, out _);
-        var token = before.IssueAccessToken("client-1");
+        var token = before.IssueAccessToken("client-1", FamiliarGatewayOptions.ReadScope);
 
         var after = Build(clock, out _, secret: OtherSecret);
 
@@ -116,7 +116,7 @@ public sealed class FamiliarOAuthArtifactsTests
         var clock = new FixedClock(DateTimeOffset.UtcNow);
         var elsewhere = Build(clock, out _, publicBaseUrl: "https://somewhere-else.test");
 
-        var token = elsewhere.IssueAccessToken("client-1");
+        var token = elsewhere.IssueAccessToken("client-1", FamiliarGatewayOptions.ReadScope);
         var here = Build(clock, out _);
 
         Assert.False(here.TryRead(FamiliarOAuthArtifacts.Purpose.Access, token, out _));

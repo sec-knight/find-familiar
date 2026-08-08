@@ -60,10 +60,15 @@ public sealed class FamiliarGatewayAuthenticationFilter(
 
         var header = context.HttpContext.Request.Headers.Authorization.ToString();
 
-        if (!TryExtractBearerToken(header, out var supplied) || !IsAcceptedCredential(configured, supplied))
+        if (!TryExtractBearerToken(header, out var supplied)
+            || !TryAuthenticate(configured, supplied, out var caller))
         {
             return Unauthorized(context.HttpContext, configured);
         }
+
+        // Established once, here, and read by every operation behind this filter. What a credential
+        // permits is decided at the point it is verified rather than wherever it is later used.
+        caller!.AttachTo(context.HttpContext);
 
         return await next(context);
     }
@@ -79,17 +84,29 @@ public sealed class FamiliarGatewayAuthenticationFilter(
     /// The static comparison runs first and unconditionally, so the time this method takes does not say
     /// which of the two a caller was attempting.
     /// </summary>
-    private bool IsAcceptedCredential(FamiliarGatewayOptions configured, string supplied)
+    private bool TryAuthenticate(FamiliarGatewayOptions configured, string supplied, out FamiliarGatewayCaller? caller)
     {
+        caller = null;
+
         var matchesStaticToken = FixedTimeTokenEquals(configured.Token!.Trim(), supplied);
 
         if (matchesStaticToken)
         {
+            // Read-only by construction, not by a check elsewhere that could be relaxed.
+            caller = FamiliarGatewayCaller.StaticToken();
             return true;
         }
 
-        return configured.IsOAuthConfigured()
-            && artifacts.TryRead(FamiliarOAuthArtifacts.Purpose.Access, supplied, out _);
+        if (configured.IsOAuthConfigured()
+            && artifacts.TryRead(FamiliarOAuthArtifacts.Purpose.Access, supplied, out var accessToken))
+        {
+            // The scopes come from the signed token, so they are whatever the human approved at the
+            // consent screen and cannot be influenced by the request carrying it.
+            caller = FamiliarGatewayCaller.OAuth(accessToken);
+            return true;
+        }
+
+        return false;
     }
 
     /// <summary>

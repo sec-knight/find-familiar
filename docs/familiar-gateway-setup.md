@@ -199,6 +199,39 @@ Optional, with sensible defaults:
 unauthenticated caller nominate where an authorization code is delivered; this is what stops that
 being anywhere. Widen it only for a host you intend to hand your context to.
 
+### Scopes
+
+Two, and they are deliberately not one grant.
+
+| Scope | What it permits |
+|---|---|
+| `familiar.read` | Read projects, their state, and recorded context. Nothing else. |
+| `familiar.decide` | Relay a decision **you** have explicitly made to a workflow gate that already exists. |
+
+**Why separate.** A conversational client reads constantly and decides rarely, and those deserve
+different answers from the person granting them. Folded into one grant, every read connection would
+silently carry the ability to act, and the consent screen could no longer honestly say "read-only" to
+anyone.
+
+**What `familiar.decide` is not.** It is not write access, and it does not make the client or the
+model an authority. It is permission to *ask* — to carry your stated choice, against one identified
+object at one observed revision, to the same service the Demiplane posts to. Find Familiar
+re-validates legality inside the transaction regardless, so a client holding this scope is a courier,
+never a decision-maker. There is no `familiar.write`, and no scope grants arbitrary task mutation,
+workflow dispatch, or filesystem access.
+
+**The static gateway token is read-only, permanently.** It does not expire, it is bound to no browser
+flow, and nobody approved a consent screen to obtain it — so it cannot be evidence that a human
+decided anything. It satisfies `familiar.read` and can never satisfy `familiar.decide`.
+
+**A grant cannot widen itself.** A refresh may narrow the scopes it holds and may never add one; a
+request naming a scope this server does not issue is refused outright rather than quietly reduced.
+Raising a grant requires going through consent again.
+
+**As of Slice 1 no operation accepts `familiar.decide`.** The boundary exists so it can be reviewed
+before anything consequential stands behind it; the decision tools are a later slice. A client may
+request and be granted the scope today, and will find nothing that consumes it.
+
 ### What the flow looks like
 
 1. ChatGPT fetches `/.well-known/oauth-protected-resource/mcp` (or is pointed at it by the
@@ -206,6 +239,8 @@ being anywhere. Widen it only for a host you intend to hand your context to.
 2. It fetches `/.well-known/oauth-authorization-server` and registers itself at `/oauth/register`.
 3. It opens `/oauth/authorize` in your browser. **You paste the gateway token into the consent
    screen** — that is the one moment the secret is used, and it goes to this server, not to ChatGPT.
+   The screen states exactly which scopes are being requested; if `familiar.decide` is among them it
+   says so separately and explains that it lets the client relay your decisions, not make them.
 4. It exchanges the code at `/oauth/token` with PKCE, and gets an access token bound to this server
    as its audience.
 
@@ -259,10 +294,11 @@ compel it.
   without being recorded is invisible, and an external model should be told to say so.
 - **Repository awareness is a listing, not the code.** The snapshot carries branch, head, recent
   commit subjects and tracked paths — never file contents or diffs.
-- **Still all-or-nothing.** OAuth added a standards-compliant way to obtain a credential; it did not
-  add partial grants. There is one scope, `familiar.read`, and anyone holding either credential can
-  read everything non-sensitive. Splitting it needs a reason to, and ADR-0017 records that none exists
-  while there is one user and one client.
+- **Reading is still all-or-nothing.** `familiar.read` grants everything non-sensitive; there is no
+  per-project or per-category read grant. What Slice 1 split off is the ability to act, not the ability
+  to read.
+- **`familiar.decide` grants no operation yet.** It can be requested and granted today and nothing
+  consumes it. The decision tools are a later slice.
 - **A restart forgets spent refresh tokens.** Replay protection is in memory, so a refresh token
   captured before a restart could be redeemed once after it. ADR-0017 §4 records why that trade is
   taken and what would reverse it.

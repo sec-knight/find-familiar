@@ -98,8 +98,83 @@ public sealed class FamiliarGatewayOptions
     /// </summary>
     public bool LogOAuthRequests { get; set; }
 
-    /// <summary>The one scope this Familiar issues. There is exactly one thing to grant: reading.</summary>
+    /// <summary>
+    /// Reading what the Familiar holds: projects, their state, and recorded context. This is the whole
+    /// of Sprint 14's grant and it remains exactly that — a token carrying only this scope can change
+    /// nothing, and no later slice may quietly add to what it permits.
+    /// </summary>
     public const string ReadScope = "familiar.read";
+
+    /// <summary>
+    /// Relaying a decision the human has explicitly made, to a workflow gate that already exists.
+    ///
+    /// <b>What this is not.</b> It is not write access, it is not "the model may approve work", and it
+    /// is not a licence to mutate a task. It is permission to <em>ask</em> — to carry a person's stated
+    /// choice, against one identified object at one observed revision, to the same service the
+    /// Demiplane posts to. Find Familiar re-decides legality inside the transaction either way, so a
+    /// client holding this scope is a courier, never an authority.
+    ///
+    /// <b>Separate from <see cref="ReadScope"/> on purpose.</b> A conversational client is asked to
+    /// read constantly and to decide rarely, and those two deserve different answers from the person
+    /// granting them. Folding them into one grant would mean every read connection silently carried
+    /// the ability to act, and the consent screen could no longer honestly say "read-only" to anyone.
+    ///
+    /// As of Slice 1 no operation accepts this scope. It exists so that the boundary is established
+    /// and reviewable before anything consequential stands behind it.
+    /// </summary>
+    public const string DecideScope = "familiar.decide";
+
+    /// <summary>
+    /// Every scope this server will issue. An authorization request naming anything else is refused
+    /// rather than silently reduced to what is understood: a client that asked for a permission this
+    /// server does not have should be told so, not handed a token that quietly means less.
+    /// </summary>
+    public static readonly IReadOnlyList<string> SupportedScopes = [ReadScope, DecideScope];
+
+    /// <summary>
+    /// Parses a space-delimited scope string into the grant it represents.
+    ///
+    /// An absent or empty request means <see cref="ReadScope"/> — the historical default, so a client
+    /// written against Sprint 14.1 keeps working and keeps getting exactly what it used to get. An
+    /// unrecognised scope fails the whole request; duplicates collapse; order is not significant.
+    /// </summary>
+    public static bool TryParseScopes(string? requested, out IReadOnlyList<string> scopes)
+    {
+        scopes = [];
+
+        if (string.IsNullOrWhiteSpace(requested))
+        {
+            scopes = [ReadScope];
+            return true;
+        }
+
+        var parsed = new List<string>();
+
+        foreach (var candidate in requested.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            if (!SupportedScopes.Contains(candidate, StringComparer.Ordinal))
+            {
+                return false;
+            }
+
+            if (!parsed.Contains(candidate, StringComparer.Ordinal))
+            {
+                parsed.Add(candidate);
+            }
+        }
+
+        if (parsed.Count == 0)
+        {
+            return false;
+        }
+
+        scopes = parsed;
+        return true;
+    }
+
+    /// <summary>Canonical wire form: the granted scopes, space-delimited, in declaration order.</summary>
+    public static string FormatScopes(IEnumerable<string> scopes) =>
+        string.Join(' ', SupportedScopes.Where(supported => scopes.Contains(supported, StringComparer.Ordinal)));
 
     /// <summary>
     /// The issuer, or null when this deployment has not opted into OAuth or configured it wrongly.

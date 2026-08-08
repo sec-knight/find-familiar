@@ -196,7 +196,11 @@ public sealed class FamiliarOAuthEndpointTests(FindFamiliarWebApplicationFactory
             document.GetProperty("response_types").EnumerateArray().Select(value => value.GetString()));
         Assert.Equal("none", document.GetProperty("token_endpoint_auth_method").GetString());
         Assert.Equal("ChatGPT", document.GetProperty("client_name").GetString());
-        Assert.Equal(FamiliarGatewayOptions.ReadScope, document.GetProperty("scope").GetString());
+        // Registration states what this client may ask for, not what it holds — a registration grants
+        // nothing, and only the consent screen does. Since Slice 1 that is both scopes.
+        Assert.Equal(
+            FamiliarGatewayOptions.FormatScopes(FamiliarGatewayOptions.SupportedScopes),
+            document.GetProperty("scope").GetString());
     }
 
     /// <summary>

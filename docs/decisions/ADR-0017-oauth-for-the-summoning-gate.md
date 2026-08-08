@@ -129,6 +129,34 @@ tailscaled before they reach Kestrel.
 The REST adapter over the gateway is deliberately *not* published. It is the surface that makes the
 gateway verifiable with `curl` from the tailnet, and it has no reason to be reachable from outside.
 
+## Amendment (Slice 1): a second scope
+
+This ADR was written when there was one scope, and said so. There are now two.
+
+`familiar.decide` is permission to **relay a decision the human has explicitly made** to a workflow
+gate that already exists — not write access, and not authority. Find Familiar re-decides legality
+inside the transaction regardless, so a client holding the scope is a courier.
+
+The split is what keeps consent honest. One combined grant would mean every read connection silently
+carried the ability to act, and the consent screen could no longer truthfully say "read-only" to
+anyone. With two, the screen says exactly what is being asked for, and the elevated request is
+described as relaying the person's choice rather than the model acquiring judgement.
+
+Three properties hold the boundary:
+
+- **The static token can never satisfy it.** No consent screen was read to obtain that secret, so it
+  cannot be evidence a human decided anything. It is read-only permanently.
+- **A grant cannot widen itself.** A refresh may narrow and never add; an unrecognised scope is
+  refused rather than trimmed. Raising a grant means going through consent again.
+- **Enforcement is declared in one place.** `FamiliarGatewayCaller` records what the credential
+  permits at the point it is verified, and `RequireFamiliarScope` states a requirement on a route or
+  group. MCP puts every tool behind one route, so a future decision tool cannot inherit authorization
+  from routing — and the alternative, each tool checking for itself, is how the tenth tool ships
+  without the check.
+
+As of Slice 1 no operation consumes `familiar.decide`. The boundary was built and reviewed before
+anything consequential was placed behind it.
+
 ## Consequences
 
 - ChatGPT can connect as a standards-compliant MCP client, discovering everything it needs from the
