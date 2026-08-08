@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using FindFamiliar.Server.Services.Familiar.Gateway;
+using ModelContextProtocol;
 using ModelContextProtocol.Server;
 
 namespace FindFamiliar.Server.Api.Gateway;
@@ -30,15 +31,48 @@ namespace FindFamiliar.Server.Api.Gateway;
 /// write, and neither can what it depends on.
 /// </summary>
 [McpServerToolType]
-public sealed class FamiliarMcpTools(IFamiliarGateway gateway)
+public sealed class FamiliarMcpTools(
+    IFamiliarGateway gateway,
+    IFamiliarDecisionGateway decisions,
+    IHttpContextAccessor httpContext)
 {
+    /// <summary>
+    /// The permission this tool needs, checked before it does anything.
+    ///
+    /// One implementation for every tool, because the alternative is four copies of an authorization
+    /// check and a fifth tool whose author forgot. It reads the caller established by
+    /// <see cref="FamiliarGatewayAuthenticationFilter"/> when the credential was verified, so nothing
+    /// in the request can influence what it finds.
+    ///
+    /// It lives here rather than on the route group because MapMcp puts every tool behind one route:
+    /// a group-level scope is necessarily the same answer for all of them, and reading and deciding
+    /// are deliberately not the same answer.
+    /// </summary>
+    private void Require(string scope)
+    {
+        var caller = FamiliarGatewayCaller.From(httpContext.HttpContext!);
+
+        if (caller is null || !caller.Has(scope))
+        {
+            // No detail about the credential, and none about what it does carry. A caller learns which
+            // permission the operation needed, which is protocol, and nothing about itself.
+            throw new McpException(
+                $"This connection does not carry the '{scope}' permission that operation requires.");
+        }
+    }
+
     [McpServerTool(Name = "familiar_manifest", ReadOnly = true, Destructive = false, Idempotent = true)]
     [Description(
         "Identify which Familiar you are speaking for: its name, what it is, and which read "
         + "capabilities it offers. Call this once at the start of a conversation where the user "
         + "refers to their Familiar by name or asks what you can remember for them. It returns no "
         + "project data, so it is never a substitute for searching context.")]
-    public FamiliarManifest FamiliarManifest() => gateway.GetManifest();
+    public FamiliarManifest FamiliarManifest()
+    {
+        Require(FamiliarGatewayOptions.ReadScope);
+
+        return gateway.GetManifest();
+    }
 
     [McpServerTool(Name = "open_decisions", ReadOnly = true, Destructive = false, Idempotent = true)]
     [Description(
@@ -54,8 +88,14 @@ public sealed class FamiliarMcpTools(IFamiliarGateway gateway)
         + "This tool only reports. You cannot approve, decline, or otherwise act on any of these "
         + "decisions; if the user tells you to act, say plainly that you can see the decision but "
         + "cannot submit it, and that they must use Find Familiar directly.")]
-    public Task<FamiliarOpenDecisionList> OpenDecisions(CancellationToken cancellationToken) =>
-        gateway.ListOpenDecisionsAsync(cancellationToken);
+    public Task<FamiliarOpenDecisionList> OpenDecisions(CancellationToken cancellationToken)
+    {
+        // Reading what needs the human is a read. Submitting the answer is not, and requires the other
+        // scope entirely — see SubmitFamiliarDecision below.
+        Require(FamiliarGatewayOptions.ReadScope);
+
+        return gateway.ListOpenDecisionsAsync(cancellationToken);
+    }
 
     [McpServerTool(Name = "search_familiar_context", ReadOnly = true, Destructive = false, Idempotent = true)]
     [Description(
@@ -78,8 +118,12 @@ public sealed class FamiliarMcpTools(IFamiliarGateway gateway)
         Guid? projectId = null,
         [Description("Optional. How many records to return, 1 to 6. Defaults to 6.")]
         int? maxItems = null,
-        CancellationToken cancellationToken = default) =>
-        gateway.SearchContextAsync(query, projectId, maxItems, cancellationToken);
+        CancellationToken cancellationToken = default)
+    {
+        Require(FamiliarGatewayOptions.ReadScope);
+
+        return gateway.SearchContextAsync(query, projectId, maxItems, cancellationToken);
+    }
 
     [McpServerTool(Name = "list_familiar_projects", ReadOnly = true, Destructive = false, Idempotent = true)]
     [Description(
@@ -87,8 +131,12 @@ public sealed class FamiliarMcpTools(IFamiliarGateway gateway)
         + "the user. Call this when you need a project id for another tool, or when the user asks "
         + "what they are working on across everything. Projects the user has marked sensitive are "
         + "absent and counted, never named.")]
-    public Task<FamiliarProjectList> ListFamiliarProjects(CancellationToken cancellationToken = default) =>
-        gateway.ListProjectsAsync(cancellationToken);
+    public Task<FamiliarProjectList> ListFamiliarProjects(CancellationToken cancellationToken = default)
+    {
+        Require(FamiliarGatewayOptions.ReadScope);
+
+        return gateway.ListProjectsAsync(cancellationToken);
+    }
 
     [McpServerTool(Name = "get_project_context", ReadOnly = true, Destructive = false, Idempotent = true)]
     [Description(
@@ -103,11 +151,47 @@ public sealed class FamiliarMcpTools(IFamiliarGateway gateway)
         Guid projectId,
         CancellationToken cancellationToken = default)
     {
+        Require(FamiliarGatewayOptions.ReadScope);
+
         var project = await gateway.GetProjectContextAsync(projectId, cancellationToken);
 
         // A project that is sensitive and a project that does not exist answer identically. Telling
         // them apart here would disclose the existence of a record the user chose to withhold, which
         // is precisely what the sensitivity rule protects.
         return project ?? (object)new FamiliarGatewayError("No readable project has that id.");
+    }
+
+
+    [McpServerTool(Name = "submit_familiar_decision", ReadOnly = false, Destructive = false, Idempotent = true)]
+    [Description(
+        "Submit a decision THE USER HAS EXPLICITLY MADE about one item from open_decisions. "
+        + "Call this only after the user has been told what the decision is and has clearly stated "
+        + "which way they want it — an instruction like \"approve it\" or \"decline that\" in reply to "
+        + "you describing the decision. "
+        + "NEVER call it on your own judgement, to be helpful, to unblock work, or because approving "
+        + "looks like the obvious next step. You are relaying the user's choice, not making one. If "
+        + "you are not certain what the user chose, ask them instead of guessing. "
+        + "Pass decisionId and expectedConcurrencyToken exactly as open_decisions returned them, and "
+        + "choice as either approve or decline — nothing else is accepted. If the result says the "
+        + "decision was stale, call open_decisions again and ask the user to confirm against the "
+        + "current state rather than retrying with the old token. "
+        + "Find Familiar checks independently whether the decision is legal and may refuse it; report "
+        + "the result you get back rather than describing the outcome you expected.")]
+    public Task<FamiliarDecisionResult> SubmitFamiliarDecision(
+        [Description("The decisionId from open_decisions. Not a task id and not a project id.")]
+        Guid decisionId,
+        [Description(
+            "The expectedConcurrencyToken from the same open_decisions result. It fences the decision "
+            + "against changes made since the user was shown it.")]
+        Guid expectedConcurrencyToken,
+        [Description("The user's explicit choice: approve or decline.")]
+        FamiliarDecisionChoice choice,
+        CancellationToken cancellationToken = default)
+    {
+        // The other scope, and only this tool asks for it. A connection granted familiar.read alone
+        // reaches this line and stops here.
+        Require(FamiliarGatewayOptions.DecideScope);
+
+        return decisions.SubmitAsync(decisionId, expectedConcurrencyToken, choice, cancellationToken);
     }
 }

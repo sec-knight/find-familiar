@@ -20,8 +20,9 @@ namespace FindFamiliar.Server.Tests.Http;
 /// being the deployment's own static token, not by refreshing, not by asking for a scope the server
 /// does not know.
 ///
-/// Slice 1 deliberately adds no operation that consumes the scope. These tests therefore assert the
-/// boundary itself, and one of them asserts that nothing consequential appeared.
+/// Slice 1 added no operation that consumes the scope; Slice 3 added exactly one, the decision relay.
+/// These tests assert the boundary itself, and one of them asserts that nothing else appeared beside
+/// it.
 /// </summary>
 [Collection(IntegrationTestCollection.Name)]
 public sealed class FamiliarOAuthScopeTests(FindFamiliarWebApplicationFactory factory)
@@ -322,11 +323,15 @@ public sealed class FamiliarOAuthScopeTests(FindFamiliarWebApplicationFactory fa
     // ---------------------------------------------------------------- nothing consequential shipped
 
     /// <summary>
-    /// The boundary exists; the operation does not. A decision-scoped token must still find no tool
-    /// that will act on it — this is the assertion that catches Slice 2 arriving early.
+    /// Exactly one operation consumes the decision scope, and it is the relay.
+    ///
+    /// Slice 1 asserted that none did, which was the point while the boundary was being reviewed
+    /// before anything stood behind it. Slice 3 put one thing there. The assertion that survives is
+    /// the one that matters longer: the scope buys a client the ability to carry a human's choice, and
+    /// nothing else appeared alongside it.
     /// </summary>
     [Fact]
-    public async Task No_operation_yet_accepts_the_decision_scope()
+    public async Task Exactly_one_operation_consumes_the_decision_scope()
     {
         using var client = NonRedirectingClient();
         var tokens = await CompleteFlowAsync(client, $"{Read} {Decide}");
@@ -349,18 +354,22 @@ public sealed class FamiliarOAuthScopeTests(FindFamiliarWebApplicationFactory fa
         // open_decisions reports what a human is being asked; it is still a read. The list is exactly
         // the read surface, with nothing that acts.
         Assert.Equal(
-            ["familiar_manifest", "get_project_context", "list_familiar_projects", "open_decisions", "search_familiar_context"],
+            [
+                "familiar_manifest", "get_project_context", "list_familiar_projects", "open_decisions",
+                "search_familiar_context", "submit_familiar_decision"
+            ],
             names.Order());
 
-        // Named for the verbs that would mean acting. "decisions" is a noun and is allowed; "decide",
-        // "submit" and "approve" are the words a tool that consumed familiar.decide would carry.
-        foreach (var forbidden in new[] { "submit", "approve", "decline", "start", "create", "_decide" })
+        // Nothing that creates work, edits a record, or runs anything. The relay submits a choice; it
+        // performs none of these.
+        foreach (var forbidden in new[] { "create", "start", "delete", "update", "write", "run" })
         {
             Assert.DoesNotContain(names, name => name.Contains(forbidden, StringComparison.OrdinalIgnoreCase));
         }
 
-        // Every advertised tool still declares itself read-only.
-        Assert.Equal(names.Count, System.Text.RegularExpressions.Regex.Matches(body, "\"readOnlyHint\":true").Count);
+        // Five of the six are read-only. The sixth is the relay, and there is exactly one of it.
+        Assert.Equal(5, System.Text.RegularExpressions.Regex.Matches(body, "\"readOnlyHint\":true").Count);
+        Assert.Single(names, name => name == "submit_familiar_decision");
     }
 
     // ---------------------------------------------------------------- helpers

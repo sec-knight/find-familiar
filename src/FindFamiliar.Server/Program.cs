@@ -253,6 +253,14 @@ builder.Services.Configure<FamiliarGatewayOptions>(
     builder.Configuration.GetSection(FamiliarGatewayOptions.SectionName));
 builder.Services.AddScoped<IFamiliarGateway, FamiliarGateway>();
 
+// The one write an external client can reach, behind its own type so the read gateway above stays
+// provably read-only. It decides nothing: it resolves what the caller may see, then hands the human's
+// choice to the same approval transaction the Demiplane posts to.
+builder.Services.AddScoped<IFamiliarDecisionGateway, FamiliarDecisionGateway>();
+
+// The MCP tools read the authenticated caller from the request to enforce per-tool scope.
+builder.Services.AddHttpContextAccessor();
+
 // The one supported way to record durable project context. Scoped like every other write service, and
 // registered unconditionally: the Razor pages and the trusted machine-local route are both callers of
 // it, so the invariants have exactly one implementation rather than one per entry point.

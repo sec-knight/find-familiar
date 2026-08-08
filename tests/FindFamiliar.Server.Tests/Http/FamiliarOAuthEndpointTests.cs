@@ -670,10 +670,23 @@ public sealed class FamiliarOAuthEndpointTests(FindFamiliarWebApplicationFactory
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
 
-        foreach (var forbidden in new[] { "\"create", "\"start", "\"approve", "\"delete", "\"update" })
+        // Asserted on tool names rather than on the whole document: since Slice 3 a tool description
+        // legitimately contains words like "approve", because it describes the choice a human may
+        // relay. What must not exist is a tool that performs one.
+        var names = System.Text.RegularExpressions.Regex
+            .Matches(body, "\"name\":\"(?<name>[a-z_]+)\"")
+            .Select(match => match.Groups["name"].Value)
+            .Distinct()
+            .ToList();
+
+        foreach (var forbidden in new[] { "create", "start", "delete", "update", "write" })
         {
-            Assert.DoesNotContain(forbidden, body, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain(names, name => name.Contains(forbidden, StringComparison.OrdinalIgnoreCase));
         }
+
+        // This token carries only familiar.read, so the relay is present but refuses it — asserted in
+        // FamiliarSubmitDecisionTests. What it must never do is grant a second way to act.
+        Assert.Single(names, name => name == "submit_familiar_decision");
     }
 
     // ---------------------------------------------------------------- helpers

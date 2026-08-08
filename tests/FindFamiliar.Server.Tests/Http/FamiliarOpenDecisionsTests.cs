@@ -323,42 +323,56 @@ public sealed class FamiliarOpenDecisionsTests(FindFamiliarWebApplicationFactory
     }
 
     /// <summary>
-    /// Holding the identifiers is not authority. There is no operation on this surface that accepts
-    /// them — which is the whole of what Slice 2 promises and Slice 3 will change.
+    /// Holding the identifiers is not authority.
+    ///
+    /// Slice 2 could assert this by noting that no submission surface existed. Slice 3 built one, so
+    /// the claim is now the sharper one: a connection that can read decisions still cannot act on
+    /// them. open_decisions requires familiar.read; submitting requires familiar.decide, and this
+    /// caller holds only the first.
     /// </summary>
     [Fact]
-    public async Task Nothing_on_the_gateway_accepts_a_decision_submission()
+    public async Task Reading_a_decision_grants_no_ability_to_act_on_it()
     {
         await ClearPendingHandoffsAsync();
         var seeded = await SeedPendingHandoffAsync();
 
+        // The static token reads everything and can decide nothing, permanently.
         using var client = Authenticated();
-        var body = new { handoffId = seeded.HandoffId, expectedConcurrencyToken = seeded.Token, choice = "approve" };
+        var body = new { decisionId = seeded.HandoffId, expectedConcurrencyToken = seeded.Token, choice = "approve" };
 
-        foreach (var route in new[]
-                 {
-                     "/api/gateway/decisions", "/api/gateway/decisions/submit",
-                     "/api/gateway/handoffs/approve", "/api/gateway/decide"
-                 })
+        using var rest = await client.PostAsJsonAsync("/api/gateway/decisions/submit", body);
+        Assert.Equal(HttpStatusCode.Forbidden, rest.StatusCode);
+
+        var mcp = await CallMcpRawAsync(client, new
         {
-            using var response = await client.PostAsJsonAsync(route, body);
+            name = "submit_familiar_decision",
+            arguments = body
+        });
 
-            // Never 2xx: the route does not exist, or does not accept POST.
-            Assert.False(response.IsSuccessStatusCode, route);
-        }
-
-        // And no MCP tool will take it either.
-        var tools = await CallMcpAsync(client, "tools/list", new { });
-        var names = tools.GetProperty("tools").EnumerateArray()
-            .Select(tool => tool.GetProperty("name").GetString()!).ToList();
-
-        Assert.DoesNotContain(names, name => name.Contains("submit", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(FamiliarGatewayOptions.DecideScope, mcp, StringComparison.Ordinal);
 
         using var scope = factory.Services.CreateScope();
         var dbContext = scope.ServiceProvider.GetRequiredService<FamiliarDbContext>();
         Assert.Equal(
             SessionHandoffStatus.Pending,
             (await dbContext.SessionHandoffs.AsNoTracking().SingleAsync(h => h.Id == seeded.HandoffId)).Status);
+    }
+
+    private static async Task<string> CallMcpRawAsync(HttpClient client, object toolCall)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/mcp")
+        {
+            Content = new StringContent(
+                JsonSerializer.Serialize(new { jsonrpc = "2.0", id = 1, method = "tools/call", @params = toolCall }),
+                Encoding.UTF8,
+                "application/json")
+        };
+
+        request.Headers.TryAddWithoutValidation("Accept", "application/json, text/event-stream");
+
+        using var response = await client.SendAsync(request);
+
+        return await response.Content.ReadAsStringAsync();
     }
 
     // ---------------------------------------------------------------- helpers

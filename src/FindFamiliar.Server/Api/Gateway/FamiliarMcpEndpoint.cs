@@ -33,16 +33,21 @@ public static class FamiliarMcpEndpoint
         // Mounted inside a filtered group rather than filtered afterwards. MapMcp returns the
         // non-generic convention builder, and putting the credential check on the group means every
         // route the transport adds — now or in a later SDK version — is behind it by construction.
-        // The credential check, then the read scope. Every tool this transport carries is a read, and
-        // requiring the scope on the group rather than inside each tool is what keeps the guarantee
-        // from depending on the author of the next tool having remembered.
+        // Authentication on the group; the scope on each tool.
         //
-        // When a decision tool arrives it will not belong in this group: it will require
-        // familiar.decide, and that is a deliberate second mapping rather than a widening of this one.
+        // Slice 2 put the read scope here, which was right while every tool was a read. It stops being
+        // right the moment two tools need different permissions: MapMcp puts the whole tool set behind
+        // one route, so a group-level scope is necessarily the same answer for all of them — and the
+        // decision tool must require familiar.decide while the read tools must not.
+        //
+        // So the requirement moved one level down, to a single helper every tool calls as its first
+        // statement (see FamiliarMcpTools.Require). That is still one implementation rather than four,
+        // and a tool that forgets it is a tool that reaches the gateway with no permission checked —
+        // which is why the test asserting every tool refuses a credential lacking its scope is not
+        // optional.
         var group = app
             .MapGroup(Route)
-            .AddEndpointFilter<FamiliarGatewayAuthenticationFilter>()
-            .RequireFamiliarScope(FamiliarGatewayOptions.ReadScope);
+            .AddEndpointFilter<FamiliarGatewayAuthenticationFilter>();
 
         group.MapMcp();
     }

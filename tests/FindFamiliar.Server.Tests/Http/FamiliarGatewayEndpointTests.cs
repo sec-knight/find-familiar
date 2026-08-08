@@ -288,18 +288,22 @@ public sealed class FamiliarGatewayEndpointTests(FindFamiliarWebApplicationFacto
         var result = await CallMcpAsync(client, "tools/list", new { });
         var tools = result.GetProperty("tools").EnumerateArray().ToList();
 
-        // Five since Slice 2 added open_decisions, which reports decision points and cannot decide one.
-        Assert.Equal(5, tools.Count);
+        // Six since Slice 3: five reads, and one relay that carries a decision the human already made.
+        Assert.Equal(6, tools.Count);
 
         foreach (var tool in tools)
         {
             var name = tool.GetProperty("name").GetString()!;
             var annotations = tool.GetProperty("annotations");
 
-            Assert.True(annotations.GetProperty("readOnlyHint").GetBoolean(), name);
+            // Exactly one tool may declare itself mutating, and it is the relay. Everything else is a
+            // read, and nothing anywhere is destructive.
+            Assert.Equal(name != "submit_familiar_decision", annotations.GetProperty("readOnlyHint").GetBoolean());
             Assert.False(annotations.GetProperty("destructiveHint").GetBoolean(), name);
 
-            foreach (var forbidden in new[] { "create", "start", "approve", "delete", "update", "write" })
+            // No tool creates work, edits a record, or runs anything. "submit" is permitted only on
+            // the relay, which submits a choice rather than performing one.
+            foreach (var forbidden in new[] { "create", "start", "delete", "update", "write" })
             {
                 Assert.DoesNotContain(forbidden, name, StringComparison.OrdinalIgnoreCase);
             }

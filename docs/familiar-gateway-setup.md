@@ -7,8 +7,10 @@ The architecture and the reasoning behind it are in
 product-specific setup and deliberately kept apart from it: the gateway is provider-neutral, and only
 the last section is about ChatGPT.
 
-**Sprint 14 is read-only.** Nothing described here can create a task, start a session, approve a
-plan, or write a memory.
+**Almost everything here is read-only.** One operation is not: `submit_familiar_decision` relays a
+decision the human has explicitly made, to a workflow gate Find Familiar itself raised. It requires
+its own OAuth scope, it accepts no free text, and Find Familiar re-decides legality independently.
+Nothing here can create a task, start arbitrary work, edit a record, or write a memory.
 
 ---
 
@@ -121,6 +123,8 @@ Expect four tools, each with `readOnlyHint: true`.
 | `search_familiar_context` | `POST /api/gateway/context/search` | Up to 6 recorded items with ids, excerpts, dates, and a disclosure sentence |
 | `list_familiar_projects` | `GET /api/gateway/projects` | Readable projects and a count of withheld ones |
 | `get_project_context` | `GET /api/gateway/projects/{id}` | One project's shape, tasks needing attention, newest record date |
+| `open_decisions` | `GET /api/gateway/decisions` | What is waiting on the human: task, reason, evidence, legal choices, and the identifiers a decision needs |
+| `submit_familiar_decision` | `POST /api/gateway/decisions/submit` | Relays a decision the human explicitly made. **Requires `familiar.decide`.** |
 
 Every response is bounded, carries stable ids, and states what it could not show. A search that finds
 nothing says so explicitly, and says whether near-misses existed — a client that is handed an empty
@@ -228,9 +232,11 @@ decided anything. It satisfies `familiar.read` and can never satisfy `familiar.d
 request naming a scope this server does not issue is refused outright rather than quietly reduced.
 Raising a grant requires going through consent again.
 
-**As of Slice 1 no operation accepts `familiar.decide`.** The boundary exists so it can be reviewed
-before anything consequential stands behind it; the decision tools are a later slice. A client may
-request and be granted the scope today, and will find nothing that consumes it.
+**Exactly one operation accepts `familiar.decide`:** `submit_familiar_decision`. It takes a decision
+id, the concurrency token from `open_decisions`, and a choice of `approve` or `decline` — no free
+text, no note, nothing a model could fill with words the human never said. It delegates to the same
+approval transaction the Demiplane's own button posts to, which re-decides legality independently and
+may refuse. A token from a view that has since moved is rejected rather than applied.
 
 ### What the flow looks like
 
@@ -297,8 +303,9 @@ compel it.
 - **Reading is still all-or-nothing.** `familiar.read` grants everything non-sensitive; there is no
   per-project or per-category read grant. What Slice 1 split off is the ability to act, not the ability
   to read.
-- **`familiar.decide` grants no operation yet.** It can be requested and granted today and nothing
-  consumes it. The decision tools are a later slice.
+- **`familiar.decide` grants exactly one operation**, and only for decisions Find Familiar is already
+  waiting on a human for. It cannot create a task, start arbitrary work, edit a record, or take any
+  decision the workflow has not itself raised.
 - **A restart forgets spent refresh tokens.** Replay protection is in memory, so a refresh token
   captured before a restart could be redeemed once after it. ADR-0017 §4 records why that trade is
   taken and what would reverse it.

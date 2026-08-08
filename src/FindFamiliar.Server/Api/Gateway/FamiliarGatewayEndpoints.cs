@@ -58,6 +58,32 @@ public static class FamiliarGatewayEndpoints
                 request.MaxItems,
                 cancellationToken)));
 
+        // The one write, in its own group with its own scope. Not added to the read group above: a
+        // route that required familiar.decide while sitting in a group that required familiar.read
+        // would have made the two grants indistinguishable in practice.
+        var decisionGroup = app
+            .MapGroup("/api/gateway/decisions")
+            .AddEndpointFilter<FamiliarGatewayAuthenticationFilter>()
+            .RequireFamiliarScope(FamiliarGatewayOptions.DecideScope);
+
+        decisionGroup.MapPost("/submit", async (
+            FamiliarDecisionSubmission submission,
+            IFamiliarDecisionGateway decisions,
+            CancellationToken cancellationToken) =>
+        {
+            // A choice this server does not implement is refused rather than interpreted. "yes",
+            // "approve if it looks fine" and an empty string are all the same answer here: no.
+            if (!Enum.TryParse<FamiliarDecisionChoice>(submission.Choice, ignoreCase: true, out var choice))
+            {
+                return Results.Json(
+                    new FamiliarGatewayError("Choice must be exactly 'approve' or 'decline'."),
+                    statusCode: StatusCodes.Status400BadRequest);
+            }
+
+            return Results.Ok(await decisions.SubmitAsync(
+                submission.DecisionId, submission.ExpectedConcurrencyToken, choice, cancellationToken));
+        });
+
         group.MapGet("/projects", async (IFamiliarGateway gateway, CancellationToken cancellationToken) =>
             Results.Ok(await gateway.ListProjectsAsync(cancellationToken)));
 
@@ -84,3 +110,15 @@ public static class FamiliarGatewayEndpoints
 /// deserialization failure the client cannot interpret.
 /// </summary>
 public sealed record FamiliarContextSearchRequest(string? Query, Guid? ProjectId, int? MaxItems);
+
+/// <summary>
+/// A human's decision, as an external client relays it.
+///
+/// Three fields, and none of them is free text. There is no note, no reason, no instruction — nothing
+/// a model could fill with prose that a person never said. The only expressive field is
+/// <see cref="Choice"/>, and it is parsed against a two-member enum or refused.
+/// </summary>
+public sealed record FamiliarDecisionSubmission(
+    Guid DecisionId,
+    Guid ExpectedConcurrencyToken,
+    string? Choice);
