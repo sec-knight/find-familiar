@@ -197,3 +197,76 @@ public sealed record FamiliarOpenDecisionList(
     /// <summary>A person cannot act on twenty decisions in a conversation turn; they can act on a few.</summary>
     public const int MaxDecisions = 10;
 }
+
+// ---------------------------------------------------------------- runtime: why work is or is not moving
+
+/// <summary>
+/// One worker, as the Familiar is shown it — the same facts the Demiplane's Workers page renders.
+///
+/// <b>Enough to explain, not merely to report.</b> A task that says "Waiting for an available Planner"
+/// is only half an answer; the other half is whether a Planner-capable worker exists, is enabled, has
+/// heartbeated recently, and is already busy. Those are four different problems with four different
+/// fixes, and a client that cannot tell them apart can only repeat the display string back.
+/// </summary>
+/// <param name="SecondsSinceHeartbeat">
+/// Derived at read time, and included because "last heartbeat 02:14" means nothing to a reader that
+/// does not know what time it is now.
+/// </param>
+/// <param name="ActiveWork">What this worker is running, or null when it is idle.</param>
+public sealed record FamiliarWorker(
+    string WorkerKey,
+    string DisplayName,
+    bool Enabled,
+    IReadOnlyList<string> Capabilities,
+    string Availability,
+    double SecondsSinceHeartbeat,
+    FamiliarWorkerActiveWork? ActiveWork);
+
+/// <param name="TaskTitle">
+/// Null when the claimed task belongs to a project this caller may not read. The claim itself is
+/// still reported — a worker being busy is a fact about the machine — but what it is busy with is
+/// not disclosed, exactly as a sensitive project is never named anywhere else.
+/// </param>
+public sealed record FamiliarWorkerActiveWork(
+    string Role,
+    string? TaskTitle,
+    bool LeaseExpired);
+
+/// <summary>
+/// Whether a role can actually run right now, and if not, which of the several possible reasons
+/// applies. This is the field that turns "waiting for a Planner" into something a person can act on.
+/// </summary>
+/// <param name="Blocked">
+/// True when no enabled worker declares this role at all. The task cannot progress until a worker is
+/// registered or enabled, which is an operator action rather than something waiting will fix.
+/// </param>
+public sealed record FamiliarRoleReadiness(
+    string Role,
+    int WorkersDeclaringRole,
+    int EnabledAndOnline,
+    int IdleAndReady,
+    bool Blocked,
+    string Explanation);
+
+/// <summary>
+/// The runtime the Familiar's work actually executes on: who can run what, what they are running, and
+/// what the providers behind them report.
+///
+/// This exists because of a specific failure. The Demiplane could show that a task was waiting for a
+/// Planner while the Familiar could only repeat that sentence — it had no way to inspect the worker
+/// pool and say whether the Planner was missing, disabled, offline, or simply busy. Peer frontends
+/// over the same state should not differ in what they can find out (ADR-0019).
+/// </summary>
+public sealed record FamiliarRuntimeState(
+    IReadOnlyList<FamiliarWorker> Workers,
+    IReadOnlyList<FamiliarRoleReadiness> Roles,
+    IReadOnlyList<FamiliarProviderCapacity> Providers,
+    int ActiveClaims,
+    string Disclosure);
+
+/// <param name="Detail">The provider's own explanation where it gave one. Never a credential, never a key.</param>
+public sealed record FamiliarProviderCapacity(
+    string Provider,
+    string Status,
+    string Confidence,
+    string? Detail);

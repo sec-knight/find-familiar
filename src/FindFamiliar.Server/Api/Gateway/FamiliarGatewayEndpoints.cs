@@ -44,6 +44,10 @@ public static class FamiliarGatewayEndpoints
 
         group.MapGet("/manifest", (IFamiliarGateway gateway) => Results.Ok(gateway.GetManifest()));
 
+        // The runtime the work runs on: workers, role readiness, providers. Read-only.
+        group.MapGet("/runtime", async (IFamiliarGateway gateway, CancellationToken cancellationToken) =>
+            Results.Ok(await gateway.InspectRuntimeAsync(cancellationToken)));
+
         // What is waiting on the human. Read-only: it reports decision points and cannot decide one.
         group.MapGet("/decisions", async (IFamiliarGateway gateway, CancellationToken cancellationToken) =>
             Results.Ok(await gateway.ListOpenDecisionsAsync(cancellationToken)));

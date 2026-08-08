@@ -97,6 +97,26 @@ public sealed class FamiliarMcpTools(
         return gateway.ListOpenDecisionsAsync(cancellationToken);
     }
 
+    [McpServerTool(Name = "inspect_familiar_runtime", ReadOnly = true, Destructive = false, Idempotent = true)]
+    [Description(
+        "Inspect the workers and providers the user's automated work actually runs on. Call this when "
+        + "work is not progressing and the user asks why — for example when a task says it is waiting "
+        + "for a Planner, Implementer or Reviewer, or when they ask whether anything is running, why "
+        + "something is stuck, or whether a worker is online. "
+        + "Do NOT call it for the state of a task or project; use get_project_context or "
+        + "open_decisions for those. This describes the machine, not the work. "
+        + "Each role reports whether any worker declares it, how many are enabled and online, how many "
+        + "are idle, and a plain explanation. Use that explanation rather than guessing: 'no worker "
+        + "declares this role', 'they are all disabled', 'none is online' and 'they are all busy' are "
+        + "four different problems with four different fixes, and only one of them is solved by "
+        + "waiting. A worker's current task is named only when the user may see that project.")]
+    public Task<FamiliarRuntimeState> InspectFamiliarRuntime(CancellationToken cancellationToken = default)
+    {
+        Require(FamiliarGatewayOptions.ReadScope);
+
+        return gateway.InspectRuntimeAsync(cancellationToken);
+    }
+
     [McpServerTool(Name = "search_familiar_context", ReadOnly = true, Destructive = false, Idempotent = true)]
     [Description(
         "Search the user's Find Familiar durable project memory. Call this when the answer depends "

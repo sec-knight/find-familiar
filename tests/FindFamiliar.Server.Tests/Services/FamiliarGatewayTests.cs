@@ -1,5 +1,6 @@
 using FindFamiliar.Server.Data;
 using FindFamiliar.Server.Domain;
+using FindFamiliar.Server.Services;
 using FindFamiliar.Server.Services.Demiplane;
 using FindFamiliar.Server.Services.Familiar.Chat.Brief;
 using FindFamiliar.Server.Services.Familiar.Chat.Retrieval;
@@ -64,7 +65,10 @@ public sealed class FamiliarGatewayTests
         var manifest = NewGateway(dbContext).GetManifest();
 
         Assert.Equal(
-            ["get_project_context", "list_familiar_projects", "open_decisions", "search_familiar_context"],
+            [
+                "get_project_context", "inspect_familiar_runtime", "list_familiar_projects",
+                "open_decisions", "search_familiar_context"
+            ],
             manifest.Capabilities.Order());
     }
 
@@ -122,7 +126,7 @@ public sealed class FamiliarGatewayTests
         string[] reachable =
         [
             "search_familiar_context", "get_project_context", "list_familiar_projects",
-            "open_decisions", "submit_familiar_decision"
+            "open_decisions", "inspect_familiar_runtime", "submit_familiar_decision"
         ];
 
         Assert.All(
@@ -520,6 +524,11 @@ public sealed class FamiliarGatewayTests
             new FamiliarContextRetrievalService(dbContext, Options.Create(new FamiliarRetrievalOptions())),
             new FamiliarStandingBriefService(dbContext, projections, clock),
             projections,
+
+            // The real worker projection, for the same reason the retrieval service is real: the
+            // runtime answer's whole claim is that it reports what the Demiplane's own page reports.
+            new WorkerOverviewService(dbContext, clock),
+            new NoProviderCapacityService(),
             Options.Create(new FamiliarIdentityOptions { Name = name, Guidance = guidance }));
     }
 

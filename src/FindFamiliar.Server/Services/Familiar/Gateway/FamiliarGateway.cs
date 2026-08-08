@@ -1,4 +1,6 @@
+using FindFamiliar.Server.Domain;
 using FindFamiliar.Server.Services.Demiplane;
+using FindFamiliar.Server.Services.Providers;
 using FindFamiliar.Server.Services.Familiar.Chat.Brief;
 using FindFamiliar.Server.Services.Familiar.Chat.Retrieval;
 using Microsoft.Extensions.Options;
@@ -32,6 +34,12 @@ public interface IFamiliarGateway
     /// Read-only, like everything else here. It reports decision points; it cannot decide one.
     /// </summary>
     Task<FamiliarOpenDecisionList> ListOpenDecisionsAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// The worker pool and the providers behind it: who can run which role, what they are running,
+    /// and why a role that work is waiting on cannot currently start.
+    /// </summary>
+    Task<FamiliarRuntimeState> InspectRuntimeAsync(CancellationToken cancellationToken = default);
 }
 
 /// <summary>
@@ -70,6 +78,8 @@ public sealed class FamiliarGateway(
     IFamiliarContextRetrievalService retrieval,
     IFamiliarStandingBriefService briefs,
     IDemiplaneProjectionService projections,
+    IWorkerOverviewService workers,
+    IProviderCapacityService providers,
     IOptions<FamiliarIdentityOptions> identity) : IFamiliarGateway
 {
     /// <summary>
@@ -109,7 +119,8 @@ public sealed class FamiliarGateway(
         "search_familiar_context",
         "get_project_context",
         "list_familiar_projects",
-        "open_decisions"
+        "open_decisions",
+        "inspect_familiar_runtime"
     ];
 
     /// <summary>
@@ -329,6 +340,134 @@ public sealed class FamiliarGateway(
             brief.SensitiveProjectsWithheld,
             omitted,
             Disclose(decisions.Count, brief.SensitiveProjectsWithheld, omitted));
+    }
+
+    /// <summary>
+    /// The runtime the work runs on, assembled from the same two services the Demiplane's own pages
+    /// render: the worker overview and provider capacity.
+    ///
+    /// <b>Why this exists.</b> A task could say "Waiting for an available Planner" on the Demiplane
+    /// while the Familiar could only repeat that sentence back — it had no way to see whether a
+    /// Planner-capable worker was missing, disabled, offline, or merely busy. Those are four
+    /// different problems with four different fixes, and the distinction is exactly what a person
+    /// asking "why?" wants. Peer frontends over one authoritative system should not differ in what
+    /// they can find out (ADR-0019).
+    ///
+    /// <b>The one sensitivity boundary here.</b> Workers are machine state and belong to no project,
+    /// so the pool itself is not withheld. What a worker is <em>busy with</em> can belong to a
+    /// project this caller may not read, so the claimed task is named only when it appears in a
+    /// project the standing brief was willing to show. The claim is still reported — a busy worker is
+    /// a fact about the machine, and hiding it would misexplain why a role is unavailable.
+    /// </summary>
+    public async Task<FamiliarRuntimeState> InspectRuntimeAsync(CancellationToken cancellationToken = default)
+    {
+        var pool = await workers.GetWorkersAsync(cancellationToken);
+        var capacity = await providers.GetAllAsync(cancellationToken);
+        var readableTasks = await ReadableTaskTitlesAsync(cancellationToken);
+
+        var reported = pool
+            .Select(worker => new FamiliarWorker(
+                worker.WorkerKey,
+                worker.DisplayName,
+                worker.Enabled,
+                worker.Capabilities.Select(role => role.ToString()).ToList(),
+                worker.Availability.ToString(),
+                Math.Round((DateTime.UtcNow - worker.LastHeartbeatUtc).TotalSeconds, 1),
+                worker.ActiveClaim is { } claim
+                    ? new FamiliarWorkerActiveWork(
+                        claim.Role.ToString(),
+                        readableTasks.TryGetValue(claim.TaskId, out var title) ? title : null,
+                        claim.LeaseExpired)
+                    : null))
+            .ToList();
+
+        var roles = Enum.GetValues<AgentSessionRole>()
+            .Select(role => DescribeRole(role, pool))
+            .ToList();
+
+        return new FamiliarRuntimeState(
+            reported,
+            roles,
+            capacity
+                .Select(snapshot => new FamiliarProviderCapacity(
+                    snapshot.Provider,
+                    snapshot.Status.ToString(),
+                    snapshot.Confidence.ToString(),
+                    snapshot.Detail))
+                .ToList(),
+            reported.Count(worker => worker.ActiveWork is not null),
+            DiscloseRuntime(reported, roles));
+    }
+
+    /// <summary>
+    /// Whether a role can start now, and which of the several reasons applies when it cannot.
+    ///
+    /// The ordering matters: "nobody declares this role" is a different message from "the only worker
+    /// that does is offline", and a reader given the second when the first is true will wait for
+    /// something that is never coming.
+    /// </summary>
+    private static FamiliarRoleReadiness DescribeRole(AgentSessionRole role, IReadOnlyList<WorkerOverviewItem> pool)
+    {
+        var declaring = pool.Where(worker => worker.Capabilities.Contains(role)).ToList();
+        var enabledOnline = declaring
+            .Where(worker => worker.Enabled && worker.Availability == WorkerAvailability.Online)
+            .ToList();
+        var idle = enabledOnline.Where(worker => worker.ActiveClaim is null).ToList();
+
+        var (blocked, explanation) = declaring.Count switch
+        {
+            0 => (true, $"No registered worker declares the {role} role, so {role} work cannot start "
+                + "until one is registered or an existing worker is configured to run it."),
+
+            _ when declaring.All(worker => !worker.Enabled) => (true,
+                $"Every worker that can run {role} is disabled, so {role} work cannot start until one "
+                + "is enabled."),
+
+            _ when enabledOnline.Count == 0 => (true,
+                $"No enabled worker that can run {role} is currently online — the most recent heartbeat "
+                + "is stale or absent, which usually means the worker process is not running."),
+
+            _ when idle.Count == 0 => (false,
+                $"Every online {role} worker is already running something, so {role} work will start "
+                + "when one of them finishes."),
+
+            _ => (false, $"{idle.Count} online {role} worker(s) are idle and able to pick work up now.")
+        };
+
+        return new FamiliarRoleReadiness(
+            role.ToString(), declaring.Count, enabledOnline.Count, idle.Count, blocked, explanation);
+    }
+
+    /// <summary>
+    /// The titles of tasks in projects this caller may read, so a worker's current claim can be named
+    /// where that is permitted and left unnamed where it is not.
+    /// </summary>
+    private async Task<IReadOnlyDictionary<Guid, string>> ReadableTaskTitlesAsync(CancellationToken cancellationToken)
+    {
+        var brief = await briefs.GetBriefAsync(null, cancellationToken);
+
+        return brief.Projects
+            .SelectMany(project => project.Tasks)
+            .GroupBy(task => task.TaskId)
+            .ToDictionary(group => group.Key, group => group.First().Title);
+    }
+
+    private static string DiscloseRuntime(
+        IReadOnlyList<FamiliarWorker> reported,
+        IReadOnlyList<FamiliarRoleReadiness> roles)
+    {
+        if (reported.Count == 0)
+        {
+            return "No workers are registered, so no automated work can run at all. Nothing here is "
+                + "waiting on a decision — it is waiting on a worker.";
+        }
+
+        var blocked = roles.Where(role => role.Blocked).Select(role => role.Role).ToList();
+
+        return blocked.Count == 0
+            ? "Every role has at least one enabled, online worker."
+            : $"These roles cannot start work at all right now: {string.Join(", ", blocked)}. The "
+              + "per-role explanation says which of registration, enablement or liveness is missing.";
     }
 
     /// <summary>

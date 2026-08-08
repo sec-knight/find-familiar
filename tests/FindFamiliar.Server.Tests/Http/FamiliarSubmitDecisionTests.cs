@@ -356,10 +356,12 @@ public sealed class FamiliarSubmitDecisionTests(FindFamiliarWebApplicationFactor
             .ToList();
 
         Assert.Equal(["submit_familiar_decision"], mutating);
-        Assert.Equal(6, listed.Count);
+        Assert.Equal(7, listed.Count);
 
-        // Nothing that creates work, edits records, or runs anything.
-        foreach (var forbidden in new[] { "create", "start", "delete", "update", "write", "record", "run" })
+        // Nothing that creates work, edits records, or dispatches anything. "run" is not in this list:
+        // "runtime" is a noun, and inspect_familiar_runtime reports the machine rather than driving it.
+        // The readOnly assertion above is what actually proves nothing here acts.
+        foreach (var forbidden in new[] { "create", "start", "delete", "update", "write", "record", "dispatch" })
         {
             Assert.DoesNotContain(
                 listed.Select(tool => tool.GetProperty("name").GetString()!),
