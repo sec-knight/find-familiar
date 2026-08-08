@@ -1,5 +1,6 @@
 using System.Text.Json.Serialization;
 using FindFamiliar.Server.Api.Familiar;
+using FindFamiliar.Server.Api.Context;
 using FindFamiliar.Server.Api.Gateway;
 using FindFamiliar.Server.Api.Gateway.OAuth;
 using FindFamiliar.Server.Api.Repository;
@@ -252,6 +253,11 @@ builder.Services.Configure<FamiliarGatewayOptions>(
     builder.Configuration.GetSection(FamiliarGatewayOptions.SectionName));
 builder.Services.AddScoped<IFamiliarGateway, FamiliarGateway>();
 
+// The one supported way to record durable project context. Scoped like every other write service, and
+// registered unconditionally: the Razor pages and the trusted machine-local route are both callers of
+// it, so the invariants have exactly one implementation rather than one per entry point.
+builder.Services.AddScoped<IProjectContextRecordingService, ProjectContextRecordingService>();
+
 // The authorization server behind the gate (ADR-0017). Singletons because both are stateless but for
 // one short-lived set of spent identifiers, which must be shared across requests to mean anything.
 // Registered unconditionally; whether any OAuth route exists is decided by MapFamiliarOAuthEndpoints,
@@ -360,6 +366,7 @@ app.MapFamiliarChatStreamEndpoint();
 
 app.MapRunnerEndpoints();
 app.MapRepositorySnapshotEndpoints();
+app.MapProjectContextEndpoints();
 
 // Both adapters over the same gateway, behind the same filter. Neither is mapped at all unless the
 // gate is enabled: a deployment that has not turned this on has no external surface to probe, and a

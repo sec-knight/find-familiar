@@ -10,7 +10,8 @@ namespace FindFamiliar.Server.Pages.Projects;
 
 public sealed class DetailsModel(
     FamiliarDbContext dbContext,
-    IWorkflowDispatchService workflowDispatch) : PageModel
+    IWorkflowDispatchService workflowDispatch,
+    IProjectContextRecordingService contextRecording) : PageModel
 {
     public FamiliarProject? Project { get; private set; }
 
@@ -69,29 +70,40 @@ public sealed class DetailsModel(
             return Page();
         }
 
-        var project = await dbContext.Projects.SingleOrDefaultAsync(candidate => candidate.Id == id, cancellationToken);
-        if (project is null)
+        // Through the recording service rather than writing the rows here. The page used to own the
+        // lookup, the insert and the revision bump inline, which meant those invariants existed once
+        // for browsers and nowhere else — and anything that was not a browser wrote the database
+        // directly. One implementation, every caller.
+        var outcome = await contextRecording.RecordAsync(
+            new RecordProjectContextRequest(
+                id,
+                NewProjectContext.Kind,
+                NewProjectContext.Title,
+                NewProjectContext.Content,
+
+                // A person typed this into the Demiplane, so that is what it is. The page does not
+                // offer a provenance picker: the honest value here is not one the author chooses.
+                ContextProvenance.HumanReported,
+                RecordedBy: "demiplane"),
+            cancellationToken);
+
+        switch (outcome.Status)
         {
-            return NotFound();
+            case RecordProjectContextStatus.Recorded:
+                TempData["StatusMessage"] =
+                    $"Recorded {NewProjectContext.Kind.ToString().ToLowerInvariant()} context.";
+                return RedirectToPage(new { id });
+
+            case RecordProjectContextStatus.ProjectNotFound:
+                return NotFound();
+
+            default:
+                ModelState.AddModelError(
+                    string.Empty,
+                    outcome.ValidationMessage ?? "That context could not be recorded.");
+                await LoadProjectAsync(id, cancellationToken);
+                return Page();
         }
-
-        var entry = new ContextEntry
-        {
-            Id = Guid.NewGuid(),
-            ProjectId = project.Id,
-            Kind = NewProjectContext.Kind,
-            Title = NewProjectContext.Title.Trim(),
-            Content = NewProjectContext.Content.Trim(),
-            State = ContextEntryState.Active,
-            CreatedUtc = DateTime.UtcNow
-        };
-
-        project.IncrementContextRevision();
-        dbContext.ContextEntries.Add(entry);
-        await dbContext.SaveChangesAsync(cancellationToken);
-
-        TempData["StatusMessage"] = $"Recorded {entry.Kind.ToString().ToLowerInvariant()} context.";
-        return RedirectToPage(new { id });
     }
 
     private async Task<bool> LoadProjectAsync(Guid id, CancellationToken cancellationToken)

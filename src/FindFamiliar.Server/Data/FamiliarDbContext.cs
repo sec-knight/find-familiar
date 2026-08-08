@@ -506,6 +506,8 @@ public sealed class FamiliarDbContext(DbContextOptions<FamiliarDbContext> option
             entity.Property(entry => entry.Title).HasMaxLength(200).IsRequired();
             entity.Property(entry => entry.Content).HasMaxLength(12_000).IsRequired();
             entity.Property(entry => entry.State).HasConversion<string>().HasMaxLength(32);
+            entity.Property(entry => entry.Provenance).HasConversion<string>().HasMaxLength(32);
+            entity.Property(entry => entry.RecordedBy).HasMaxLength(ContextEntry.MaxRecordedByLength);
             entity.HasIndex(entry => new { entry.ProjectId, entry.TaskId, entry.State, entry.CreatedUtc });
             entity.HasOne(entry => entry.SupersedesContextEntry)
                 .WithMany()

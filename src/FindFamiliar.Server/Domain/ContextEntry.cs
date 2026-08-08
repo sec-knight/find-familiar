@@ -43,6 +43,25 @@ public sealed class ContextEntry
     /// </summary>
     public bool IsSensitive { get; set; }
 
+    /// <summary>
+    /// How this record was established. See <see cref="ContextProvenance"/>.
+    ///
+    /// <see cref="ContextProvenance.Unspecified"/> on everything written before provenance existed;
+    /// the recording service requires an explicit value, so a new entry never carries it.
+    /// </summary>
+    public ContextProvenance Provenance { get; set; } = ContextProvenance.Unspecified;
+
+    /// <summary>
+    /// Who reported it — an agent, a worker key, an operator, a tool name. Free text because the set of
+    /// possible reporters is open, and short because it is a label rather than an account.
+    ///
+    /// It answers "who said this" where <see cref="Provenance"/> answers "how well is it known". Null
+    /// where nobody recorded it, which is every entry predating this column.
+    /// </summary>
+    public string? RecordedBy { get; set; }
+
+    public const int MaxRecordedByLength = 100;
+
     public Guid? SupersedesContextEntryId { get; set; }
 
     public ContextEntry? SupersedesContextEntry { get; set; }
