@@ -49,7 +49,8 @@ public sealed class ContextProjectionService(FamiliarDbContext dbContext) : ICon
                 entry.Title,
                 entry.Content,
                 entry.CreatedUtc,
-                entry.SourceSessionId))
+                entry.SourceSessionId,
+                entry.IsSensitive))
             .ToList();
 
         var taskEntries = entries
@@ -60,7 +61,8 @@ public sealed class ContextProjectionService(FamiliarDbContext dbContext) : ICon
                 entry.Title,
                 entry.Content,
                 entry.CreatedUtc,
-                entry.SourceSessionId))
+                entry.SourceSessionId,
+                entry.IsSensitive))
             .ToList();
 
         return new TaskContextDocument(

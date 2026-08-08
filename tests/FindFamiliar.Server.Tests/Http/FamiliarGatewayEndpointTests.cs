@@ -335,8 +335,8 @@ public sealed class FamiliarGatewayEndpointTests(FindFamiliarWebApplicationFacto
         var result = await CallMcpAsync(client, "tools/list", new { });
         var tools = result.GetProperty("tools").EnumerateArray().ToList();
 
-        // Seven: six reads, and one relay that carries a decision the human already made.
-        Assert.Equal(7, tools.Count);
+        // Eight: seven reads, and one relay that carries a decision the human already made.
+        Assert.Equal(8, tools.Count);
 
         foreach (var tool in tools)
         {

@@ -40,6 +40,12 @@ public interface IFamiliarGateway
     /// and why a role that work is waiting on cannot currently start.
     /// </summary>
     Task<FamiliarRuntimeState> InspectRuntimeAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// One task in full: its state and why, the sessions that ran on it, the records they produced,
+    /// and the decision it is waiting on if any. Null when no readable task has that id.
+    /// </summary>
+    Task<FamiliarTaskDetail?> GetTaskDetailAsync(Guid taskId, CancellationToken cancellationToken = default);
 }
 
 /// <summary>
@@ -80,6 +86,7 @@ public sealed class FamiliarGateway(
     IDemiplaneProjectionService projections,
     IWorkerOverviewService workers,
     IProviderCapacityService providers,
+    IContextProjectionService taskContext,
     IOptions<FamiliarIdentityOptions> identity) : IFamiliarGateway
 {
     /// <summary>
@@ -120,7 +127,8 @@ public sealed class FamiliarGateway(
         "get_project_context",
         "list_familiar_projects",
         "open_decisions",
-        "inspect_familiar_runtime"
+        "inspect_familiar_runtime",
+        "get_task_detail"
     ];
 
     /// <summary>
@@ -340,6 +348,149 @@ public sealed class FamiliarGateway(
             brief.SensitiveProjectsWithheld,
             omitted,
             Disclose(decisions.Count, brief.SensitiveProjectsWithheld, omitted));
+    }
+
+    /// <summary>
+    /// One task, in the detail the Demiplane's task page shows.
+    ///
+    /// <b>Visibility first, and by the same route as everywhere else.</b> The context projection this
+    /// leans on serves assignment packets, where the reader is a worker on the owner's own machine, so
+    /// it applies no sensitivity rule at all. That is correct for its purpose and wrong for this one.
+    /// The task is therefore resolved through the standing brief — the same filter that decides which
+    /// projects may be listed — and a task in a project this caller may not read answers exactly as a
+    /// task that does not exist. Naming which of the two applied would be the disclosure the
+    /// sensitivity rule exists to withhold.
+    ///
+    /// <b>Two record filters, matching retrieval exactly.</b> Entries marked sensitive are removed,
+    /// and <c>Prompt</c> and <c>RawOutput</c> are removed — raw provider input and output are excluded
+    /// from every external answer this system gives, including the native conversation's, so this is
+    /// not an asymmetry between frontends but a rule both sides of the boundary share (ADR-0019).
+    /// What was removed is counted rather than hidden.
+    /// </summary>
+    public async Task<FamiliarTaskDetail?> GetTaskDetailAsync(
+        Guid taskId,
+        CancellationToken cancellationToken = default)
+    {
+        var brief = await briefs.GetBriefAsync(null, cancellationToken);
+
+        var owningProject = brief.Projects
+            .FirstOrDefault(project => project.Tasks.Any(task => task.TaskId == taskId));
+
+        if (owningProject is null)
+        {
+            return null;
+        }
+
+        var document = await taskContext.GetTaskContextAsync(taskId, cancellationToken);
+        var projection = await projections.GetProjectionAsync(owningProject.ProjectId, cancellationToken);
+        var task = projection?.Tasks.SingleOrDefault(candidate => candidate.TaskId == taskId);
+
+        if (document is null || task is null)
+        {
+            // The brief listed it a moment ago and it is gone now, or the two projections disagree.
+            // Answering null is honest; inventing a partial task from whichever half survived is not.
+            return null;
+        }
+
+        var visible = document.TaskEntries
+            .Where(entry => !entry.IsSensitive && !ExcludedRecordKinds.Contains(entry.Kind))
+            .ToList();
+
+        var records = visible
+            .OrderByDescending(entry => entry.CreatedUtc)
+            .Take(FamiliarTaskDetail.MaxRecords)
+            .Select(entry => new FamiliarTaskRecord(
+                entry.Id,
+                entry.Kind.ToString(),
+                entry.Title,
+                Excerpt(entry.Content),
+                entry.CreatedUtc,
+                entry.SourceSessionId))
+            .ToList();
+
+        var awaiting = task.PendingHandoffId is { } handoffId
+            && task.PendingHandoffToken is { } token
+            && task.ProposedRole is { } proposedRole
+            && task.ProposedKind is { } proposedKind
+                ? new FamiliarOpenDecision(
+                    handoffId,
+                    "SessionHandoff",
+                    owningProject.ProjectId,
+                    owningProject.Name,
+                    task.TaskId,
+                    task.Title,
+                    task.ReasonText,
+                    proposedRole.ToString(),
+                    proposedKind.ToString(),
+                    task.Summary.WhatHappened,
+                    Bound(task.Summary.OutcomeDetail ?? task.Summary.NeedsAttention),
+                    ["approve", "decline"],
+                    token,
+                    task.UpdatedUtc)
+                : null;
+
+        return new FamiliarTaskDetail(
+            document.Task.Id,
+            document.Task.Title,
+            document.Task.RequestedOutcome,
+            document.Task.Status.ToString(),
+            task.DisplayState.ToString(),
+            task.ReasonText,
+            task.NeedsHumanAttention,
+            owningProject.ProjectId,
+            owningProject.Name,
+            document.Sessions
+                .OrderBy(session => session.StartedUtc)
+                .Select(session => new FamiliarTaskSession(
+                    session.Id,
+                    session.Role.ToString(),
+                    session.Status.ToString(),
+                    session.Provider,
+                    session.StartedUtc,
+                    session.CompletedUtc))
+                .ToList(),
+            records,
+            document.TaskEntries.Count - records.Count,
+            awaiting,
+            document.Task.CreatedUtc,
+            document.Task.UpdatedUtc,
+            DiscloseTask(records.Count, document.TaskEntries.Count - records.Count, awaiting is not null));
+    }
+
+    /// <summary>
+    /// Raw provider prompts and output, excluded from every external answer. The same two kinds the
+    /// retrieval path excludes, for the same reason: they are the model's working material rather than
+    /// the user's recorded history, and they are where an unreviewed instruction would hide.
+    /// </summary>
+    private static readonly ContextEntryKind[] ExcludedRecordKinds =
+        [ContextEntryKind.Prompt, ContextEntryKind.RawOutput];
+
+    private static string DiscloseTask(int shown, int withheld, bool awaitingDecision)
+    {
+        var disclosure = shown == 0
+            ? "Nothing has been recorded about this task yet."
+            : $"Showing the {shown} most recent record{(shown == 1 ? "" : "s")} about this task.";
+
+        if (withheld > 0)
+        {
+            disclosure += $" {withheld} further record{(withheld == 1 ? " was" : "s were")} not shown — "
+                + "older, marked sensitive, or raw provider input and output, which is never returned.";
+        }
+
+        disclosure += awaitingDecision
+            ? " This task is waiting on a decision from you."
+            : " Nothing on this task is waiting on a decision from you.";
+
+        return disclosure;
+    }
+
+    private static string Excerpt(string content)
+    {
+        var trimmed = (content ?? string.Empty).Trim();
+
+        return trimmed.Length <= FamiliarTaskDetail.MaxExcerptLength
+            ? trimmed
+            : trimmed[..FamiliarTaskDetail.MaxExcerptLength] + "… (truncated)";
     }
 
     /// <summary>

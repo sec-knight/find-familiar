@@ -25,13 +25,23 @@ public sealed record TaskContextTaskDocument(
     DateTime CreatedUtc,
     DateTime UpdatedUtc);
 
+/// <param name="IsSensitive">
+/// Whether the user marked this entry as never leaving the machine.
+///
+/// Carried rather than filtered here on purpose. This document serves assignment packets, whose
+/// reader is a worker running on the owner's own hardware and is entitled to the whole record; and it
+/// serves the Familiar gateway, whose reader is a credential a vendor holds and is not. A projection
+/// that dropped the flag would force the second caller to enforce a rule it had no way to evaluate —
+/// which is exactly the bug this field was added to fix.
+/// </param>
 public sealed record ContextEntryDocument(
     Guid Id,
     ContextEntryKind Kind,
     string Title,
     string Content,
     DateTime CreatedUtc,
-    Guid? SourceSessionId);
+    Guid? SourceSessionId,
+    bool IsSensitive = false);
 
 public sealed record AgentSessionDocument(
     Guid Id,

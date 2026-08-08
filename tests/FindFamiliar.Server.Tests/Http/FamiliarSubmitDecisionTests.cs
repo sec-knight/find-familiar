@@ -356,7 +356,7 @@ public sealed class FamiliarSubmitDecisionTests(FindFamiliarWebApplicationFactor
             .ToList();
 
         Assert.Equal(["submit_familiar_decision"], mutating);
-        Assert.Equal(7, listed.Count);
+        Assert.Equal(8, listed.Count);
 
         // Nothing that creates work, edits records, or dispatches anything. "run" is not in this list:
         // "runtime" is a noun, and inspect_familiar_runtime reports the machine rather than driving it.

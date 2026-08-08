@@ -66,8 +66,8 @@ public sealed class FamiliarGatewayTests
 
         Assert.Equal(
             [
-                "get_project_context", "inspect_familiar_runtime", "list_familiar_projects",
-                "open_decisions", "search_familiar_context"
+                "get_project_context", "get_task_detail", "inspect_familiar_runtime",
+                "list_familiar_projects", "open_decisions", "search_familiar_context"
             ],
             manifest.Capabilities.Order());
     }
@@ -126,7 +126,8 @@ public sealed class FamiliarGatewayTests
         string[] reachable =
         [
             "search_familiar_context", "get_project_context", "list_familiar_projects",
-            "open_decisions", "inspect_familiar_runtime", "submit_familiar_decision"
+            "open_decisions", "inspect_familiar_runtime", "get_task_detail",
+            "submit_familiar_decision"
         ];
 
         Assert.All(
@@ -529,6 +530,10 @@ public sealed class FamiliarGatewayTests
             // runtime answer's whole claim is that it reports what the Demiplane's own page reports.
             new WorkerOverviewService(dbContext, clock),
             new NoProviderCapacityService(),
+
+            // The real context projection, for the same reason: task detail's claim is that it shows
+            // the same document the Demiplane's task page shows, minus what this boundary filters.
+            new ContextProjectionService(dbContext),
             Options.Create(new FamiliarIdentityOptions { Name = name, Guidance = guidance }));
     }
 

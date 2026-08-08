@@ -88,6 +88,18 @@ public static class FamiliarGatewayEndpoints
                 submission.DecisionId, submission.ExpectedConcurrencyToken, choice, cancellationToken));
         });
 
+        group.MapGet("/tasks/{taskId:guid}", async (
+            Guid taskId,
+            IFamiliarGateway gateway,
+            CancellationToken cancellationToken) =>
+        {
+            var detail = await gateway.GetTaskDetailAsync(taskId, cancellationToken);
+
+            return detail is null
+                ? Results.NotFound(new FamiliarGatewayError("No readable task has that id."))
+                : Results.Ok(detail);
+        });
+
         group.MapGet("/projects", async (IFamiliarGateway gateway, CancellationToken cancellationToken) =>
             Results.Ok(await gateway.ListProjectsAsync(cancellationToken)));
 

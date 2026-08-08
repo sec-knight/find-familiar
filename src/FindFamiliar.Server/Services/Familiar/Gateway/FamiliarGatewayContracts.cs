@@ -270,3 +270,74 @@ public sealed record FamiliarProviderCapacity(
     string Status,
     string Confidence,
     string? Detail);
+
+// ---------------------------------------------------------------- one task, in full
+
+/// <summary>One session that ran, or is running, on a task.</summary>
+/// <param name="Provider">
+/// Which provider executed it, where one was recorded. Identity only — never a credential, never a
+/// key, never an endpoint.
+/// </param>
+public sealed record FamiliarTaskSession(
+    Guid SessionId,
+    string Role,
+    string Status,
+    string? Provider,
+    DateTime StartedUtc,
+    DateTime? CompletedUtc);
+
+/// <summary>
+/// A record produced about this task, as an external client is shown it.
+///
+/// <see cref="SourceSessionId"/> is what links a result back to the session that produced it, so a
+/// reader can say "the Reviewer found X" rather than "something found X".
+/// </summary>
+public sealed record FamiliarTaskRecord(
+    Guid ContextId,
+    string Category,
+    string Title,
+    string Excerpt,
+    DateTime RecordedUtc,
+    Guid? SourceSessionId);
+
+/// <summary>
+/// Everything the Demiplane's task page shows about one task, for a caller entitled to see it.
+///
+/// <b>Assembled from the two services that already own these answers</b> — the Demiplane projection
+/// for what the task's state means, and the context projection for its sessions and records. Neither
+/// is re-derived here, because a second opinion about task state is exactly what ADR-0011 forbids and
+/// what would make the Familiar contradict the page about the same task.
+///
+/// <b>Two filters this boundary applies that the page does not.</b> The task page serves the owner of
+/// every project; this serves a credential a vendor holds. So entries marked sensitive are removed,
+/// and raw provider prompts and output are removed — the same two rules the retrieval path applies,
+/// applied here for the same reason and stated in <see cref="RecordsWithheld"/> rather than silently.
+/// </summary>
+/// <param name="RecordsWithheld">
+/// How many of this task's records were not shown. A count and never a hint: a reader that sees three
+/// records and no count will believe it has the whole history.
+/// </param>
+public sealed record FamiliarTaskDetail(
+    Guid TaskId,
+    string Title,
+    string RequestedOutcome,
+    string Status,
+    string DisplayState,
+    string Reason,
+    bool NeedsHumanAttention,
+    Guid ProjectId,
+    string ProjectName,
+    IReadOnlyList<FamiliarTaskSession> Sessions,
+    IReadOnlyList<FamiliarTaskRecord> Records,
+    int RecordsWithheld,
+    FamiliarOpenDecision? AwaitingDecision,
+    DateTime CreatedUtc,
+    DateTime UpdatedUtc,
+    string Disclosure)
+{
+    /// <summary>Records carried in one answer. A task's whole history is not a conversational unit.</summary>
+    public const int MaxRecords = 12;
+
+    /// <summary>Bound on one record's text, so a long session artifact cannot fill a context window.</summary>
+    public const int MaxExcerptLength = 1_200;
+}

@@ -124,6 +124,7 @@ Expect four tools, each with `readOnlyHint: true`.
 | `list_familiar_projects` | `GET /api/gateway/projects` | Readable projects and a count of withheld ones |
 | `get_project_context` | `GET /api/gateway/projects/{id}` | One project's shape, tasks needing attention, newest record date |
 | `open_decisions` | `GET /api/gateway/decisions` | What is waiting on the human: task, reason, evidence, legal choices, and the identifiers a decision needs |
+| `get_task_detail` | `GET /api/gateway/tasks/{id}` | One task in full: state and reason, the sessions that ran, the records they produced, and any decision it awaits |
 | `inspect_familiar_runtime` | `GET /api/gateway/runtime` | Workers, per-role readiness and provider capacity — why a role work is waiting on can or cannot start |
 | `submit_familiar_decision` | `POST /api/gateway/decisions/submit` | Relays a decision the human explicitly made. **Requires `familiar.decide`.** |
 

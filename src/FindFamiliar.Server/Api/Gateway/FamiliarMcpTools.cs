@@ -97,6 +97,33 @@ public sealed class FamiliarMcpTools(
         return gateway.ListOpenDecisionsAsync(cancellationToken);
     }
 
+    [McpServerTool(Name = "get_task_detail", ReadOnly = true, Destructive = false, Idempotent = true)]
+    [Description(
+        "Get everything known about one task: its current state and why, the sessions that have run "
+        + "on it with their roles and outcomes, the records those sessions produced, and whether it is "
+        + "waiting on a decision. Call this when the user asks what happened on a specific task, how a "
+        + "session went, whether implementation or review finished, or why one task in particular is "
+        + "stuck. "
+        + "Get the task id from get_project_context or open_decisions. "
+        + "Do NOT call it to survey a project or to find what needs the user — get_project_context and "
+        + "open_decisions answer those in one call, and this answers about one task. "
+        + "Read the disclosure: it says how many records were not shown. Sensitive records and raw "
+        + "provider input and output are never returned, so an absence here is not evidence that "
+        + "nothing happened.")]
+    public async Task<object> GetTaskDetail(
+        [Description("The task id, from get_project_context or open_decisions.")]
+        Guid taskId,
+        CancellationToken cancellationToken = default)
+    {
+        Require(FamiliarGatewayOptions.ReadScope);
+
+        var detail = await gateway.GetTaskDetailAsync(taskId, cancellationToken);
+
+        // A task in a project the user marked sensitive and a task that does not exist answer
+        // identically, exactly as get_project_context does.
+        return detail ?? (object)new FamiliarGatewayError("No readable task has that id.");
+    }
+
     [McpServerTool(Name = "inspect_familiar_runtime", ReadOnly = true, Destructive = false, Idempotent = true)]
     [Description(
         "Inspect the workers and providers the user's automated work actually runs on. Call this when "

@@ -355,9 +355,9 @@ public sealed class FamiliarOAuthScopeTests(FindFamiliarWebApplicationFactory fa
         // the read surface, with nothing that acts.
         Assert.Equal(
             [
-                "familiar_manifest", "get_project_context", "inspect_familiar_runtime",
-                "list_familiar_projects", "open_decisions", "search_familiar_context",
-                "submit_familiar_decision"
+                "familiar_manifest", "get_project_context", "get_task_detail",
+                "inspect_familiar_runtime", "list_familiar_projects", "open_decisions",
+                "search_familiar_context", "submit_familiar_decision"
             ],
             names.Order());
 
@@ -369,8 +369,8 @@ public sealed class FamiliarOAuthScopeTests(FindFamiliarWebApplicationFactory fa
             Assert.DoesNotContain(names, name => name.Contains(forbidden, StringComparison.OrdinalIgnoreCase));
         }
 
-        // Six of the seven are read-only. The seventh is the relay, and there is exactly one of it.
-        Assert.Equal(6, System.Text.RegularExpressions.Regex.Matches(body, "\"readOnlyHint\":true").Count);
+        // Seven of the eight are read-only. The eighth is the relay, and there is exactly one of it.
+        Assert.Equal(7, System.Text.RegularExpressions.Regex.Matches(body, "\"readOnlyHint\":true").Count);
         Assert.Single(names, name => name == "submit_familiar_decision");
     }
 
