@@ -107,6 +107,20 @@ public sealed record FamiliarProjectTask(
 /// What this snapshot could not see, in its own words. An external reader has no other way to learn
 /// the edges of what it was handed.
 /// </param>
+/// <param name="Records">
+/// The project's own recorded context — the entries written against the project rather than against
+/// any one task, newest first.
+///
+/// <b>Enumerated, not searched.</b> Search applies a relevance floor, which is right for a question
+/// and wrong for an inventory: a constraint nobody thinks to query for would be invisible, and a
+/// client cannot ask about a record whose existence it has no way to learn. This is the same list the
+/// project page shows, minus what this boundary filters.
+/// </param>
+/// <param name="RecordsWithheld">
+/// How many of the project's own records were not returned — older than the bound, marked sensitive,
+/// or raw provider input and output. A count and never a hint, so a reader is never left believing a
+/// short list is the whole of it.
+/// </param>
 public sealed record FamiliarProjectContext(
     Guid ProjectId,
     string Name,
@@ -117,7 +131,16 @@ public sealed record FamiliarProjectContext(
     IReadOnlyList<FamiliarProjectTask> Tasks,
     int TasksOmitted,
     DateTime? NewestRecordedActivityUtc,
-    IReadOnlyList<string> Limitations);
+    IReadOnlyList<string> Limitations,
+    IReadOnlyList<FamiliarTaskRecord> Records,
+    int RecordsWithheld)
+{
+    /// <summary>
+    /// Project records carried in one answer. A project's whole recorded history is not a
+    /// conversational unit, and the count of what was left out is what keeps the bound honest.
+    /// </summary>
+    public const int MaxRecords = 12;
+}
 
 /// <summary>
 /// The list an external client is shown when it has to choose a project.

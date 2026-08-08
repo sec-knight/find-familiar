@@ -6,6 +6,25 @@ namespace FindFamiliar.Server.Services;
 
 public sealed class ContextProjectionService(FamiliarDbContext dbContext) : IContextProjectionService
 {
+    public async Task<IReadOnlyList<ContextEntryDocument>> GetProjectEntriesAsync(
+        Guid projectId,
+        CancellationToken cancellationToken = default) =>
+        await dbContext.ContextEntries
+            .AsNoTracking()
+            .Where(entry => entry.ProjectId == projectId
+                && entry.TaskId == null
+                && entry.State == ContextEntryState.Active)
+            .OrderBy(entry => entry.CreatedUtc)
+            .Select(entry => new ContextEntryDocument(
+                entry.Id,
+                entry.Kind,
+                entry.Title,
+                entry.Content,
+                entry.CreatedUtc,
+                entry.SourceSessionId,
+                entry.IsSensitive))
+            .ToListAsync(cancellationToken);
+
     public async Task<TaskContextDocument?> GetTaskContextAsync(Guid taskId, CancellationToken cancellationToken = default)
     {
         var task = await dbContext.Tasks

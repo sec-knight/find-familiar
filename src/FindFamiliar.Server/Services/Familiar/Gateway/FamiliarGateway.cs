@@ -224,6 +224,8 @@ public sealed class FamiliarGateway(
             return null;
         }
 
+        var (records, withheld) = await ProjectRecordsAsync(project.ProjectId, cancellationToken);
+
         return new FamiliarProjectContext(
             project.ProjectId,
             project.Name,
@@ -242,7 +244,47 @@ public sealed class FamiliarGateway(
                 .ToList(),
             project.TasksOmitted,
             project.LastRecordedActivityUtc,
-            brief.Limitations);
+            brief.Limitations,
+            records,
+            withheld);
+    }
+
+    /// <summary>
+    /// A project's own recorded context, enumerated rather than searched.
+    ///
+    /// <b>Why enumeration is the point.</b> Retrieval applies a relevance floor, which is correct for
+    /// a question and wrong for an inventory — a constraint the user recorded once and never phrased
+    /// again would be invisible, and a client cannot ask about a record it has no way to learn exists.
+    /// The project page lists these; so must this.
+    ///
+    /// The same two subtractions the task surface makes, for the same reason and stated the same way:
+    /// sensitive entries and raw provider input and output are removed, and what was removed is
+    /// counted. The project itself has already been established as readable by the caller before this
+    /// runs, so project-level sensitivity is settled higher up.
+    /// </summary>
+    private async Task<(IReadOnlyList<FamiliarTaskRecord> Records, int Withheld)> ProjectRecordsAsync(
+        Guid projectId,
+        CancellationToken cancellationToken)
+    {
+        var entries = await taskContext.GetProjectEntriesAsync(projectId, cancellationToken);
+
+        var visible = entries
+            .Where(entry => !entry.IsSensitive && !ExcludedRecordKinds.Contains(entry.Kind))
+            .ToList();
+
+        var records = visible
+            .OrderByDescending(entry => entry.CreatedUtc)
+            .Take(FamiliarProjectContext.MaxRecords)
+            .Select(entry => new FamiliarTaskRecord(
+                entry.Id,
+                entry.Kind.ToString(),
+                entry.Title,
+                Excerpt(entry.Content),
+                entry.CreatedUtc,
+                entry.SourceSessionId))
+            .ToList();
+
+        return (records, entries.Count - records.Count);
     }
 
     public async Task<FamiliarProjectList> ListProjectsAsync(CancellationToken cancellationToken = default)

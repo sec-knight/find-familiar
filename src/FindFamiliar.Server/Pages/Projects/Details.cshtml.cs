@@ -11,13 +11,15 @@ namespace FindFamiliar.Server.Pages.Projects;
 public sealed class DetailsModel(
     FamiliarDbContext dbContext,
     IWorkflowDispatchService workflowDispatch,
-    IProjectContextRecordingService contextRecording) : PageModel
+    IProjectContextRecordingService contextRecording,
+    IContextProjectionService contextProjection) : PageModel
 {
     public FamiliarProject? Project { get; private set; }
 
     public IReadOnlyList<FamiliarTask> Tasks { get; private set; } = Array.Empty<FamiliarTask>();
 
-    public IReadOnlyList<ContextEntry> ProjectEntries { get; private set; } = Array.Empty<ContextEntry>();
+    public IReadOnlyList<ContextEntryDocument> ProjectEntries { get; private set; } =
+        Array.Empty<ContextEntryDocument>();
 
     public IReadOnlyList<ContextEntryKind> ContextEntryKinds { get; } = Enum.GetValues<ContextEntryKind>();
 
@@ -123,11 +125,10 @@ public sealed class DetailsModel(
             .OrderByDescending(task => task.UpdatedUtc)
             .ToListAsync(cancellationToken);
 
-        ProjectEntries = await dbContext.ContextEntries
-            .AsNoTracking()
-            .Where(entry => entry.ProjectId == id && entry.TaskId == null && entry.State == ContextEntryState.Active)
-            .OrderBy(entry => entry.CreatedUtc)
-            .ToListAsync(cancellationToken);
+        // Through the projection rather than a query of its own. "A project's own context" is one
+        // definition, and the Familiar gateway enumerates the same list — two queries that agree today
+        // are two queries that can disagree tomorrow.
+        ProjectEntries = await contextProjection.GetProjectEntriesAsync(id, cancellationToken);
 
         return true;
     }
