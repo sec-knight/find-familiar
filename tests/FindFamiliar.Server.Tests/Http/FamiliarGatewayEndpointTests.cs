@@ -108,7 +108,7 @@ public sealed class FamiliarGatewayEndpointTests(FindFamiliarWebApplicationFacto
     // ---------------------------------------------------------------- identity
 
     [Fact]
-    public async Task The_manifest_reports_the_configured_identity_and_no_writes()
+    public async Task The_manifest_reports_the_configured_identity_and_its_single_write()
     {
         using var client = Authenticated();
 
@@ -117,7 +117,54 @@ public sealed class FamiliarGatewayEndpointTests(FindFamiliarWebApplicationFacto
         Assert.Equal(
             FindFamiliarWebApplicationFactory.GatewayTestIdentityName,
             manifest.GetProperty("name").GetString());
-        Assert.Empty(manifest.GetProperty("writeCapabilities").EnumerateArray());
+
+        Assert.Equal(
+            ["submit_familiar_decision"],
+            manifest.GetProperty("writeCapabilities").EnumerateArray().Select(value => value.GetString()));
+    }
+
+    /// <summary>
+    /// The manifest and the tool surface must describe the same gateway.
+    ///
+    /// This is the test whose absence let the manifest go two slices stale: the capability list is an
+    /// allowlist maintained by hand — deliberately, so that adding a method cannot silently advertise
+    /// itself — and nothing compared it against what the transport actually offers. A client trusts
+    /// the manifest to say what this Familiar can do, and it was understating by two capabilities and
+    /// one whole category.
+    /// </summary>
+    [Fact]
+    public async Task The_manifest_declares_exactly_the_tools_the_transport_offers()
+    {
+        using var client = Authenticated();
+
+        var manifest = await client.GetFromJsonAsync<JsonElement>(ManifestRoute);
+        var declared = manifest.GetProperty("capabilities").EnumerateArray()
+            .Concat(manifest.GetProperty("writeCapabilities").EnumerateArray())
+            .Select(value => value.GetString()!)
+            .ToList();
+
+        var tools = await CallMcpAsync(client, "tools/list", new { });
+        var advertised = tools.GetProperty("tools").EnumerateArray()
+            .Select(tool => tool.GetProperty("name").GetString()!)
+            .ToList();
+
+        // familiar_manifest itself is excluded: it describes the gateway rather than being one of the
+        // things the gateway does, and listing itself would be the manifest claiming a capability
+        // whose only purpose is to report capabilities.
+        Assert.Equal(
+            advertised.Where(name => name != "familiar_manifest").Order(),
+            declared.Order());
+
+        // And the read/write split matches the protocol annotations, so a client reading either one
+        // reaches the same conclusion about what mutates.
+        var mutating = tools.GetProperty("tools").EnumerateArray()
+            .Where(tool => !tool.GetProperty("annotations").GetProperty("readOnlyHint").GetBoolean())
+            .Select(tool => tool.GetProperty("name").GetString()!)
+            .ToList();
+
+        Assert.Equal(
+            mutating.Order(),
+            manifest.GetProperty("writeCapabilities").EnumerateArray().Select(value => value.GetString()!).Order());
     }
 
     // ---------------------------------------------------------------- bounds and malformed input

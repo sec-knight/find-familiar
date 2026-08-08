@@ -90,12 +90,38 @@ public sealed class FamiliarGateway(
     private readonly FamiliarIdentityOptions _identity = identity.Value;
 
     /// <summary>
-    /// The capability names an external client is shown, which are the operations below and no
-    /// others. Written out rather than reflected over the interface so that adding a method cannot
-    /// silently advertise it.
+    /// The capability names an external client is shown, which are the operations it may actually
+    /// reach and no others.
+    ///
+    /// Written out rather than reflected over the registered tools, and deliberately so. Reflection
+    /// would mean that adding any method to this boundary silently makes the Familiar claim a new
+    /// public capability — an announcement nobody reviewed. An allowlist costs one line when a
+    /// capability is genuinely added, and the cost of forgetting that line is a manifest that
+    /// understates what exists, which is the safe direction to be wrong in.
+    ///
+    /// It has been wrong in that direction: this list was written in Sprint 14 and went two slices
+    /// stale, so a connected client was told the gateway offered three capabilities and no writes
+    /// while five reads and one write were live. Hence the test that compares this declaration
+    /// against the MCP tool surface.
     /// </summary>
     private static readonly string[] ReadCapabilities =
-        ["search_familiar_context", "get_project_context", "list_familiar_projects"];
+    [
+        "search_familiar_context",
+        "get_project_context",
+        "list_familiar_projects",
+        "open_decisions"
+    ];
+
+    /// <summary>
+    /// The one operation an external client can use to change anything, and what it is bounded to.
+    ///
+    /// <c>submit_familiar_decision</c> relays a decision the human has already made to a gate Find
+    /// Familiar itself raised. It requires the separate <c>familiar.decide</c> scope, it accepts no
+    /// free text, and legality is re-decided inside the approval transaction. It is not a general
+    /// write capability: nothing here creates a task, starts arbitrary work, edits a record, or
+    /// writes a memory.
+    /// </summary>
+    private static readonly string[] WriteCapabilities = ["submit_familiar_decision"];
 
     public FamiliarManifest GetManifest() => new(
         _identity.ResolvedName,
@@ -103,9 +129,7 @@ public sealed class FamiliarGateway(
         _identity.Description,
         _identity.ResolvedGuidance,
         ReadCapabilities,
-        // Stated empty rather than omitted. Sprint 14 exposes no mutation of any kind: no task
-        // creation, no session start, no proposal, no memory write-back.
-        []);
+        WriteCapabilities);
 
     public async Task<FamiliarContextResult> SearchContextAsync(
         string query,

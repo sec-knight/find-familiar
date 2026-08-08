@@ -47,25 +47,87 @@ public sealed class FamiliarGatewayTests
     }
 
     /// <summary>
-    /// The manifest advertises no writes, and says so with an empty list rather than by omission. A
-    /// client told nothing about writes has to guess whether the silence is a limitation or an
-    /// oversight; this is the field that would stop being empty if that ever changed.
+    /// The manifest declares what an external client may actually reach: four reads and one write.
+    ///
+    /// This replaces an assertion that the write list was empty, which was true when the gateway was
+    /// read-only and became false two slices later without anything noticing — a connected client was
+    /// told three capabilities and no writes while five reads and one write were live. The list is an
+    /// allowlist by design, so the failure mode is understatement, and these are the assertions that
+    /// make understatement visible.
     /// </summary>
     [Fact]
-    public async Task The_manifest_advertises_no_write_capability()
+    public async Task The_manifest_declares_the_read_capabilities_a_client_can_reach()
     {
         using var database = new TemporarySqliteDatabase();
         await using var dbContext = await database.CreateContextAsync();
 
         var manifest = NewGateway(dbContext).GetManifest();
 
-        Assert.Empty(manifest.WriteCapabilities);
-        Assert.NotEmpty(manifest.Capabilities);
+        Assert.Equal(
+            ["get_project_context", "list_familiar_projects", "open_decisions", "search_familiar_context"],
+            manifest.Capabilities.Order());
+    }
+
+    /// <summary>
+    /// The write list is no longer empty, and carries exactly the decision relay. A second entry here
+    /// would mean a second way for an external client to change something, which is a decision nobody
+    /// should be able to make by editing an array.
+    /// </summary>
+    [Fact]
+    public async Task The_manifest_declares_the_single_write_capability()
+    {
+        using var database = new TemporarySqliteDatabase();
+        await using var dbContext = await database.CreateContextAsync();
+
+        var manifest = NewGateway(dbContext).GetManifest();
+
+        Assert.Equal(["submit_familiar_decision"], manifest.WriteCapabilities);
+    }
+
+    /// <summary>
+    /// The write is not smuggled in as a read. A client that trusted the read list to be read-only
+    /// would be right to, and this keeps it right.
+    /// </summary>
+    [Fact]
+    public async Task The_write_capability_is_not_declared_as_a_read()
+    {
+        using var database = new TemporarySqliteDatabase();
+        await using var dbContext = await database.CreateContextAsync();
+
+        var manifest = NewGateway(dbContext).GetManifest();
+
+        Assert.DoesNotContain("submit_familiar_decision", manifest.Capabilities);
+        Assert.Empty(manifest.Capabilities.Intersect(manifest.WriteCapabilities));
+
+        // No read capability is named for something that acts.
         Assert.All(manifest.Capabilities, capability =>
             Assert.DoesNotContain(
                 capability,
-                new[] { "create", "start", "approve", "write", "update", "delete" },
+                new[] { "create", "start", "approve", "submit", "write", "update", "delete" },
                 StringComparer.OrdinalIgnoreCase));
+    }
+
+    /// <summary>
+    /// Nothing internal leaks out. The manifest is an allowlist, so the risk is not that it grows by
+    /// itself — it cannot — but that somebody adds a name to it that no external client can call.
+    /// </summary>
+    [Fact]
+    public async Task The_manifest_declares_nothing_a_client_cannot_call()
+    {
+        using var database = new TemporarySqliteDatabase();
+        await using var dbContext = await database.CreateContextAsync();
+
+        var manifest = NewGateway(dbContext).GetManifest();
+
+        string[] reachable =
+        [
+            "search_familiar_context", "get_project_context", "list_familiar_projects",
+            "open_decisions", "submit_familiar_decision"
+        ];
+
+        Assert.All(
+            manifest.Capabilities.Concat(manifest.WriteCapabilities),
+            capability => Assert.Contains(capability, reachable));
     }
 
     /// <summary>

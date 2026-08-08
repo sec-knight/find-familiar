@@ -119,7 +119,7 @@ Expect four tools, each with `readOnlyHint: true`.
 
 | MCP tool | REST | Returns |
 |---|---|---|
-| `familiar_manifest` | `GET /api/gateway/manifest` | Name, description, capabilities, empty write list |
+| `familiar_manifest` | `GET /api/gateway/manifest` | Name, description, and the read and write capabilities this gateway declares |
 | `search_familiar_context` | `POST /api/gateway/context/search` | Up to 6 recorded items with ids, excerpts, dates, and a disclosure sentence |
 | `list_familiar_projects` | `GET /api/gateway/projects` | Readable projects and a count of withheld ones |
 | `get_project_context` | `GET /api/gateway/projects/{id}` | One project's shape, tasks needing attention, newest record date |
@@ -287,9 +287,11 @@ compel it.
 
 ## 8. Limitations
 
-- **Read and fetch only.** No write-back memory, no action execution, no task creation, no session
-  start. ChatGPT Pro does not currently support MCP writes, and this server would refuse them if it
-  did.
+- **One narrow write, and no others.** `submit_familiar_decision` relays a decision the human has
+  already made to a gate Find Familiar itself raised. Everything else is read-only: no write-back
+  memory, no task creation, no session start, no arbitrary action execution, and no way for the model
+  to decide anything on its own — it requires the separate `familiar.decide` scope and accepts no
+  free text.
 - **ChatGPT decides when to retrieve.** The tool descriptions say when to call and when not to, and
   the model may still call too often or not at all.
 - **Behaviour varies by body.** The same Familiar and the same context produce different answers
