@@ -33,7 +33,16 @@ public static class FamiliarMcpEndpoint
         // Mounted inside a filtered group rather than filtered afterwards. MapMcp returns the
         // non-generic convention builder, and putting the credential check on the group means every
         // route the transport adds — now or in a later SDK version — is behind it by construction.
-        var group = app.MapGroup(Route).AddEndpointFilter<FamiliarGatewayAuthenticationFilter>();
+        // The credential check, then the read scope. Every tool this transport carries is a read, and
+        // requiring the scope on the group rather than inside each tool is what keeps the guarantee
+        // from depending on the author of the next tool having remembered.
+        //
+        // When a decision tool arrives it will not belong in this group: it will require
+        // familiar.decide, and that is a deliberate second mapping rather than a widening of this one.
+        var group = app
+            .MapGroup(Route)
+            .AddEndpointFilter<FamiliarGatewayAuthenticationFilter>()
+            .RequireFamiliarScope(FamiliarGatewayOptions.ReadScope);
 
         group.MapMcp();
     }

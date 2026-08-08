@@ -449,12 +449,15 @@ public sealed class FamiliarGatewayTests
     {
         var clock = new TestTimeProvider(new DateTimeOffset(Now));
 
+        // One projection service, shared by the brief and the gateway. The real host wires it the same
+        // way, and sharing it here is the point: both must be reading the same classification of task
+        // state, because the gateway's whole claim is that it does not hold a second opinion.
+        var projections = new DemiplaneProjectionService(dbContext, new NoProviderCapacityService(), clock);
+
         return new FamiliarGateway(
             new FamiliarContextRetrievalService(dbContext, Options.Create(new FamiliarRetrievalOptions())),
-            new FamiliarStandingBriefService(
-                dbContext,
-                new DemiplaneProjectionService(dbContext, new NoProviderCapacityService(), clock),
-                clock),
+            new FamiliarStandingBriefService(dbContext, projections, clock),
+            projections,
             Options.Create(new FamiliarIdentityOptions { Name = name, Guidance = guidance }));
     }
 

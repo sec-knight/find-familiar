@@ -33,11 +33,20 @@ public static class FamiliarGatewayEndpoints
             return;
         }
 
+        // Authenticated, then required to carry the read scope. Every operation in this group is a
+        // read, so the requirement belongs on the group: a route added later is behind it by
+        // construction, and a credential granted only familiar.decide cannot read — the two scopes
+        // imply nothing about each other.
         var group = app
             .MapGroup("/api/gateway")
-            .AddEndpointFilter<FamiliarGatewayAuthenticationFilter>();
+            .AddEndpointFilter<FamiliarGatewayAuthenticationFilter>()
+            .RequireFamiliarScope(FamiliarGatewayOptions.ReadScope);
 
         group.MapGet("/manifest", (IFamiliarGateway gateway) => Results.Ok(gateway.GetManifest()));
+
+        // What is waiting on the human. Read-only: it reports decision points and cannot decide one.
+        group.MapGet("/decisions", async (IFamiliarGateway gateway, CancellationToken cancellationToken) =>
+            Results.Ok(await gateway.ListOpenDecisionsAsync(cancellationToken)));
 
         group.MapPost("/context/search", async (
             FamiliarContextSearchRequest request,

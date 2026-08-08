@@ -1,3 +1,4 @@
+using FindFamiliar.Server.Services.Demiplane;
 using FindFamiliar.Server.Services.Familiar.Chat.Brief;
 using FindFamiliar.Server.Services.Familiar.Chat.Retrieval;
 using Microsoft.Extensions.Options;
@@ -24,6 +25,13 @@ public interface IFamiliarGateway
         CancellationToken cancellationToken = default);
 
     Task<FamiliarProjectList> ListProjectsAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Everything currently waiting on a human decision, across every project this caller may read.
+    ///
+    /// Read-only, like everything else here. It reports decision points; it cannot decide one.
+    /// </summary>
+    Task<FamiliarOpenDecisionList> ListOpenDecisionsAsync(CancellationToken cancellationToken = default);
 }
 
 /// <summary>
@@ -61,6 +69,7 @@ public interface IFamiliarGateway
 public sealed class FamiliarGateway(
     IFamiliarContextRetrievalService retrieval,
     IFamiliarStandingBriefService briefs,
+    IDemiplaneProjectionService projections,
     IOptions<FamiliarIdentityOptions> identity) : IFamiliarGateway
 {
     /// <summary>
@@ -208,6 +217,136 @@ public sealed class FamiliarGateway(
                     project.LastRecordedActivityUtc))
                 .ToList(),
             brief.SensitiveProjectsWithheld);
+    }
+
+    /// <summary>
+    /// What is waiting on the human, assembled from the projection the Demiplane itself renders.
+    ///
+    /// <b>Two services, and neither is a new opinion.</b> The standing brief decides which projects
+    /// this caller may see — so sensitivity is filtered by the same rule as everywhere else, in the
+    /// query rather than after it — and the Demiplane projection decides what each task's state is and
+    /// whether a human is being asked. ADR-0011 settled that the Demiplane owns what a task's state
+    /// means; composing a second answer here is precisely how the Familiar would come to contradict
+    /// the page about the same task.
+    ///
+    /// <b>A decision exists only where a Pending handoff row does.</b> The projection surfaces the row
+    /// id and its concurrency token, and this reports them. Nothing here reads model prose, and there
+    /// is no path by which a decision could be invented for a task nobody proposed anything on.
+    /// </summary>
+    public async Task<FamiliarOpenDecisionList> ListOpenDecisionsAsync(CancellationToken cancellationToken = default)
+    {
+        var brief = await briefs.GetBriefAsync(null, cancellationToken);
+        var decisions = new List<FamiliarOpenDecision>();
+        var omitted = 0;
+
+        foreach (var briefProject in brief.Projects)
+        {
+            var projection = await projections.GetProjectionAsync(briefProject.ProjectId, cancellationToken);
+
+            if (projection is null)
+            {
+                continue;
+            }
+
+            foreach (var task in projection.Tasks)
+            {
+                // The row is the authority. A task can need attention for reasons that are not a
+                // decision anybody can take — a failed session, a declined step — and offering those
+                // as choices would be inventing an action the workflow does not support.
+                if (task.PendingHandoffId is not { } handoffId
+                    || task.PendingHandoffToken is not { } token
+                    || task.ProposedRole is not { } proposedRole
+                    || task.ProposedKind is not { } proposedKind)
+                {
+                    continue;
+                }
+
+                if (decisions.Count >= FamiliarOpenDecisionList.MaxDecisions)
+                {
+                    omitted++;
+                    continue;
+                }
+
+                decisions.Add(new FamiliarOpenDecision(
+                    handoffId,
+
+                    // Named rather than numbered, and one kind for now: this is the only decision the
+                    // workflow currently asks an external client about.
+                    DecisionKind: "SessionHandoff",
+                    projection.ProjectId,
+                    projection.ProjectName,
+                    task.TaskId,
+                    task.Title,
+
+                    // The Demiplane's own sentence, not a paraphrase of it.
+                    task.ReasonText,
+                    proposedRole.ToString(),
+                    proposedKind.ToString(),
+                    task.Summary.WhatHappened,
+
+                    // What the finished session found, where the projection has it: the outcome detail
+                    // first, then its account of why the human is needed.
+                    //
+                    // Null when neither exists, deliberately. CurrentState would always produce a
+                    // string — "Waiting for you." — and a field that is never empty is a field a
+                    // client will read as evidence when there is none. An absent evidence field is
+                    // honest; a filled one that says nothing is worse than silence.
+                    Evidence: Bound(task.Summary.OutcomeDetail ?? task.Summary.NeedsAttention),
+
+                    // Exactly what a Pending handoff accepts. Not a menu this layer chose.
+                    LegalChoices: ["approve", "decline"],
+                    token,
+                    task.UpdatedUtc));
+            }
+        }
+
+        return new FamiliarOpenDecisionList(
+            decisions,
+            brief.SensitiveProjectsWithheld,
+            omitted,
+            Disclose(decisions.Count, brief.SensitiveProjectsWithheld, omitted));
+    }
+
+    /// <summary>
+    /// What the list could not show. An empty list with no explanation is the one answer a client will
+    /// confidently misreport as "nothing needs you".
+    /// </summary>
+    private static string Disclose(int shown, int sensitiveWithheld, int omitted)
+    {
+        var disclosure = shown == 0
+            ? "Nothing is currently waiting on a human decision in the projects I can read."
+            : $"{shown} decision{(shown == 1 ? " is" : "s are")} waiting on a human.";
+
+        if (omitted > 0)
+        {
+            disclosure += $" {omitted} more were not listed to keep this answer bounded.";
+        }
+
+        if (sensitiveWithheld > 0)
+        {
+            disclosure += $" {sensitiveWithheld} project{(sensitiveWithheld == 1 ? " is" : "s are")} "
+                + "marked sensitive and was not examined.";
+        }
+
+        disclosure += " Reading this changes nothing; only the human can decide, and this client cannot "
+            + "submit that decision.";
+
+        return disclosure;
+    }
+
+    /// <summary>Evidence is an excerpt, and a truncated one says so — an unmarked cut reads as the whole.</summary>
+    private static string? Bound(string? evidence)
+    {
+        const int maximum = 1_200;
+
+        if (string.IsNullOrWhiteSpace(evidence))
+        {
+            return null;
+        }
+
+        var trimmed = evidence.Trim();
+
+        return trimmed.Length <= maximum ? trimmed : trimmed[..maximum] + "… (truncated)";
     }
 
     /// <summary>

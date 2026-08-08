@@ -136,3 +136,64 @@ public sealed record FamiliarProjectSummary(
     string Purpose,
     int NeedsAttentionCount,
     DateTime? NewestRecordedActivityUtc);
+
+/// <summary>
+/// One decision Find Familiar is currently waiting on a human for.
+///
+/// <b>Reported, never inferred.</b> Every field comes from the Demiplane's own projection of persisted
+/// rows — the same classification the human sees on the project page. Nothing here is composed from
+/// model prose, and a decision appears only when a real Pending handoff row exists. That matters
+/// because the next slice will let a client carry a person's answer back: a decision invented from
+/// prose would be an invitation to approve something that was never asked.
+/// </summary>
+/// <param name="DecisionId">
+/// The opaque identifier a later submission will name. It identifies the decision point, not the task.
+/// </param>
+/// <param name="ExpectedConcurrencyToken">
+/// The stale-decision fence. A client reads it here and presents it when submitting, so a decision
+/// taken against a view that has since moved is refused rather than applied.
+///
+/// Safe to disclose, and deliberately so: it is a fence, not a capability. Holding it with only
+/// <c>familiar.read</c> permits nothing — there is no operation it can be presented to, and when one
+/// exists it will require <c>familiar.decide</c> in its own right.
+/// </param>
+/// <param name="LegalChoices">
+/// What the workflow will actually accept for this decision right now. Never a superset: a client that
+/// offers a person a choice the domain would refuse has made the person's answer meaningless.
+/// </param>
+/// <param name="Evidence">
+/// What the finished session found, in the Familiar's own plain-language account of persisted history.
+/// This is what lets a client explain the decision rather than merely announce it.
+/// </param>
+public sealed record FamiliarOpenDecision(
+    Guid DecisionId,
+    string DecisionKind,
+    Guid ProjectId,
+    string ProjectName,
+    Guid TaskId,
+    string TaskTitle,
+    string Reason,
+    string ProposedRole,
+    string ProposedKind,
+    string? PriorOutcome,
+    string? Evidence,
+    IReadOnlyList<string> LegalChoices,
+    Guid ExpectedConcurrencyToken,
+    DateTime UpdatedUtc);
+
+/// <summary>
+/// Everything waiting on the human, across every project this caller may read.
+///
+/// <b>Bounded and counted, like every other gateway answer.</b> A caller is told how many decisions
+/// were withheld for sensitivity and how many were omitted for bounds, so an empty or short list is
+/// never mistaken for "nothing is waiting".
+/// </summary>
+public sealed record FamiliarOpenDecisionList(
+    IReadOnlyList<FamiliarOpenDecision> Decisions,
+    int SensitiveWithheld,
+    int Omitted,
+    string Disclosure)
+{
+    /// <summary>A person cannot act on twenty decisions in a conversation turn; they can act on a few.</summary>
+    public const int MaxDecisions = 10;
+}

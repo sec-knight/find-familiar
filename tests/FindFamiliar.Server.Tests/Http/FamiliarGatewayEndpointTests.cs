@@ -288,7 +288,8 @@ public sealed class FamiliarGatewayEndpointTests(FindFamiliarWebApplicationFacto
         var result = await CallMcpAsync(client, "tools/list", new { });
         var tools = result.GetProperty("tools").EnumerateArray().ToList();
 
-        Assert.Equal(4, tools.Count);
+        // Five since Slice 2 added open_decisions, which reports decision points and cannot decide one.
+        Assert.Equal(5, tools.Count);
 
         foreach (var tool in tools)
         {

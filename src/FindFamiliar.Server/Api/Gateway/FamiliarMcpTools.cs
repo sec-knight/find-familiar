@@ -40,6 +40,23 @@ public sealed class FamiliarMcpTools(IFamiliarGateway gateway)
         + "project data, so it is never a substitute for searching context.")]
     public FamiliarManifest FamiliarManifest() => gateway.GetManifest();
 
+    [McpServerTool(Name = "open_decisions", ReadOnly = true, Destructive = false, Idempotent = true)]
+    [Description(
+        "List what Find Familiar is currently waiting on the human to decide. Call this when the user "
+        + "asks what needs them, what is waiting, what is blocked on them, or what they should look at "
+        + "next — including phrasings like \"what needs me\" or \"anything waiting on me\". "
+        + "Do NOT call it to find out what a project is about or what was decided in the past; use "
+        + "search_familiar_context for those. "
+        + "Each result describes one decision point: which task it concerns, why the human is being "
+        + "asked, what the finished session found, and which choices the workflow will actually accept. "
+        + "Present those choices and no others, and read the disclosure sentence — it says what was "
+        + "withheld or omitted, and an empty list means nothing is waiting rather than nothing exists. "
+        + "This tool only reports. You cannot approve, decline, or otherwise act on any of these "
+        + "decisions; if the user tells you to act, say plainly that you can see the decision but "
+        + "cannot submit it, and that they must use Find Familiar directly.")]
+    public Task<FamiliarOpenDecisionList> OpenDecisions(CancellationToken cancellationToken) =>
+        gateway.ListOpenDecisionsAsync(cancellationToken);
+
     [McpServerTool(Name = "search_familiar_context", ReadOnly = true, Destructive = false, Idempotent = true)]
     [Description(
         "Search the user's Find Familiar durable project memory. Call this when the answer depends "

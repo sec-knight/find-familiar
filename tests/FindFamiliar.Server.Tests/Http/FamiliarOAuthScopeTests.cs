@@ -346,17 +346,21 @@ public sealed class FamiliarOAuthScopeTests(FindFamiliarWebApplicationFactory fa
             .Distinct()
             .ToList();
 
+        // open_decisions reports what a human is being asked; it is still a read. The list is exactly
+        // the read surface, with nothing that acts.
         Assert.Equal(
-            ["familiar_manifest", "get_project_context", "list_familiar_projects", "search_familiar_context"],
+            ["familiar_manifest", "get_project_context", "list_familiar_projects", "open_decisions", "search_familiar_context"],
             names.Order());
 
-        foreach (var forbidden in new[] { "decide", "decision", "submit", "approve", "start", "create" })
+        // Named for the verbs that would mean acting. "decisions" is a noun and is allowed; "decide",
+        // "submit" and "approve" are the words a tool that consumed familiar.decide would carry.
+        foreach (var forbidden in new[] { "submit", "approve", "decline", "start", "create", "_decide" })
         {
             Assert.DoesNotContain(names, name => name.Contains(forbidden, StringComparison.OrdinalIgnoreCase));
         }
 
-        // Every tool still declares itself read-only, and there are exactly four of them.
-        Assert.Equal(4, System.Text.RegularExpressions.Regex.Matches(body, "\"readOnlyHint\":true").Count);
+        // Every advertised tool still declares itself read-only.
+        Assert.Equal(names.Count, System.Text.RegularExpressions.Regex.Matches(body, "\"readOnlyHint\":true").Count);
     }
 
     // ---------------------------------------------------------------- helpers
