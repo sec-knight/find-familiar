@@ -441,8 +441,9 @@ public sealed class FamiliarLifecycleWriteTests(FindFamiliarWebApplicationFactor
             .ToList();
 
         Assert.Equal(
-            ["create_familiar_project", "create_familiar_task", "record_familiar_context",
-             "set_familiar_task_status", "submit_familiar_decision"],
+            ["cancel_familiar_session", "create_familiar_project", "create_familiar_task",
+             "record_familiar_context", "set_familiar_task_status", "start_familiar_session",
+             "submit_familiar_decision"],
             mutating);
 
         // Nothing destructive, on the whole surface.
@@ -673,5 +674,249 @@ public sealed class FamiliarLifecycleWriteTests(FindFamiliarWebApplicationFactor
         using var document = JsonDocument.Parse(payload);
 
         return document.RootElement.GetProperty("result").Clone();
+    }
+
+    // ---------------------------------------------------------------- workflow start and control
+
+    private const string Start = FamiliarGatewayOptions.WorkflowStartScope;
+    private const string Control = FamiliarGatewayOptions.WorkflowControlScope;
+
+    [Theory]
+    [InlineData("Planner")]
+    [InlineData("implementer")]
+    [InlineData("Reviewer")]
+    public async Task An_eligible_session_can_be_started_for_each_role(string role)
+    {
+        var seeded = await SeedTaskAsync();
+
+        using var client = factory.CreateClient();
+        client.DefaultRequestHeaders.TryAddWithoutValidation("Authorization", "Bearer " + await TokenAsync($"{Read} {Start}"));
+
+        var result = await PostAsync(client, "/api/gateway/workflow/sessions", new { taskId = seeded.TaskId, role });
+
+        Assert.Equal("Done", result.GetProperty("outcome").GetString());
+
+        using var scope = factory.Services.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<FamiliarDbContext>();
+        var session = await dbContext.AgentSessions.AsNoTracking()
+            .SingleAsync(s => s.Id == result.GetProperty("sessionId").GetGuid());
+
+        Assert.Equal(Enum.Parse<AgentSessionRole>(role, ignoreCase: true), session.Role);
+        Assert.Equal(AgentSessionStatus.Started, session.Status);
+
+        // The Familiar never chooses a worker: a session with no provider is claimed by whichever
+        // capable worker is free, exactly as one started by hand.
+        Assert.Null(session.Provider);
+    }
+
+    /// <summary>
+    /// One Started session per task, enforced by the partial unique index rather than by a check in
+    /// the gateway — so a second start loses to the database, which is what makes it safe under a
+    /// racing caller.
+    /// </summary>
+    [Fact]
+    public async Task A_second_start_is_refused_and_creates_no_second_session()
+    {
+        var seeded = await SeedTaskAsync();
+        using var client = await StarterAsync();
+
+        await PostAsync(client, "/api/gateway/workflow/sessions", new { taskId = seeded.TaskId, role = "Planner" });
+        var second = await PostAsync(client, "/api/gateway/workflow/sessions", new { taskId = seeded.TaskId, role = "Implementer" });
+
+        Assert.Equal("NotCurrentlyLegal", second.GetProperty("outcome").GetString());
+
+        using var scope = factory.Services.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<FamiliarDbContext>();
+        Assert.Equal(1, await dbContext.AgentSessions.CountAsync(s => s.TaskId == seeded.TaskId));
+    }
+
+    [Theory]
+    [InlineData("Architect")]
+    [InlineData("")]
+    public async Task An_unknown_role_is_refused_and_starts_nothing(string role)
+    {
+        var seeded = await SeedTaskAsync();
+        using var client = await StarterAsync();
+
+        var result = await PostAsync(client, "/api/gateway/workflow/sessions", new { taskId = seeded.TaskId, role });
+
+        Assert.Equal("Rejected", result.GetProperty("outcome").GetString());
+
+        using var scope = factory.Services.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<FamiliarDbContext>();
+        Assert.Equal(0, await dbContext.AgentSessions.CountAsync(s => s.TaskId == seeded.TaskId));
+    }
+
+    [Fact]
+    public async Task A_session_cannot_be_started_in_a_sensitive_project()
+    {
+        var seeded = await SeedTaskAsync(sensitive: true);
+        using var client = await StarterAsync();
+
+        var result = await PostAsync(client, "/api/gateway/workflow/sessions", new { taskId = seeded.TaskId, role = "Planner" });
+
+        Assert.Equal("NotFound", result.GetProperty("outcome").GetString());
+
+        using var scope = factory.Services.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<FamiliarDbContext>();
+        Assert.Equal(0, await dbContext.AgentSessions.CountAsync(s => s.TaskId == seeded.TaskId));
+    }
+
+    /// <summary>Starting is not deciding: a step waiting on the human stays waiting.</summary>
+    [Fact]
+    public async Task Starting_a_session_does_not_answer_a_pending_decision()
+    {
+        var seeded = await SeedTaskAsync(withPendingHandoff: true);
+        using var client = await StarterAsync();
+
+        await PostAsync(client, "/api/gateway/workflow/sessions", new { taskId = seeded.TaskId, role = "Reviewer" });
+
+        using var scope = factory.Services.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<FamiliarDbContext>();
+        Assert.Equal(
+            SessionHandoffStatus.Pending,
+            (await dbContext.SessionHandoffs.AsNoTracking().SingleAsync(h => h.Id == seeded.HandoffId)).Status);
+    }
+
+    [Fact]
+    public async Task A_running_session_can_be_cancelled_with_the_humans_reason()
+    {
+        var seeded = await SeedTaskAsync();
+        using var starter = await StarterAsync();
+        var started = await PostAsync(starter, "/api/gateway/workflow/sessions", new { taskId = seeded.TaskId, role = "Planner" });
+        var sessionId = started.GetProperty("sessionId").GetGuid();
+
+        using var client = factory.CreateClient();
+        client.DefaultRequestHeaders.TryAddWithoutValidation("Authorization", "Bearer " + await TokenAsync($"{Read} {Control}"));
+
+        var result = await PostAsync(client, "/api/gateway/workflow/control/cancel", new
+        {
+            taskId = seeded.TaskId,
+            sessionId,
+            reason = "I changed my mind about the approach."
+        });
+
+        Assert.Equal("Done", result.GetProperty("outcome").GetString());
+
+        using var scope = factory.Services.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<FamiliarDbContext>();
+        var session = await dbContext.AgentSessions.AsNoTracking().SingleAsync(s => s.Id == sessionId);
+
+        Assert.Equal(AgentSessionStatus.Cancelled, session.Status);
+
+        // The reason is durable, and it is the person's own words.
+        Assert.Contains(
+            await dbContext.ContextEntries.AsNoTracking()
+                .Where(e => e.SourceSessionId == sessionId).Select(e => e.Content).ToListAsync(),
+            content => content.Contains("changed my mind", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task Cancelling_requires_a_reason()
+    {
+        var seeded = await SeedTaskAsync();
+        using var starter = await StarterAsync();
+        var started = await PostAsync(starter, "/api/gateway/workflow/sessions", new { taskId = seeded.TaskId, role = "Planner" });
+
+        using var client = await ControllerAsync();
+
+        var result = await PostAsync(client, "/api/gateway/workflow/control/cancel", new
+        {
+            taskId = seeded.TaskId,
+            sessionId = started.GetProperty("sessionId").GetGuid(),
+            reason = ""
+        });
+
+        Assert.Equal("Rejected", result.GetProperty("outcome").GetString());
+
+        using var scope = factory.Services.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<FamiliarDbContext>();
+        Assert.Equal(
+            AgentSessionStatus.Started,
+            (await dbContext.AgentSessions.AsNoTracking().SingleAsync(s => s.Id == started.GetProperty("sessionId").GetGuid())).Status);
+    }
+
+    /// <summary>Cancelling twice is stable: the second finds nothing running and changes nothing.</summary>
+    [Fact]
+    public async Task Cancelling_twice_changes_nothing_the_second_time()
+    {
+        var seeded = await SeedTaskAsync();
+        using var starter = await StarterAsync();
+        var started = await PostAsync(starter, "/api/gateway/workflow/sessions", new { taskId = seeded.TaskId, role = "Planner" });
+        var sessionId = started.GetProperty("sessionId").GetGuid();
+
+        using var client = await ControllerAsync();
+        var body = new { taskId = seeded.TaskId, sessionId, reason = "Stopping it." };
+
+        await PostAsync(client, "/api/gateway/workflow/control/cancel", body);
+        var second = await PostAsync(client, "/api/gateway/workflow/control/cancel", body);
+
+        Assert.Equal("NotCurrentlyLegal", second.GetProperty("outcome").GetString());
+
+        using var scope = factory.Services.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<FamiliarDbContext>();
+        Assert.Equal(
+            AgentSessionStatus.Cancelled,
+            (await dbContext.AgentSessions.AsNoTracking().SingleAsync(s => s.Id == sessionId)).Status);
+    }
+
+    /// <summary>The three write scopes are mutually independent, asserted in every direction.</summary>
+    [Fact]
+    public async Task No_write_scope_implies_any_other()
+    {
+        var seeded = await SeedTaskAsync();
+        using var starter = await StarterAsync();
+        var started = await PostAsync(starter, "/api/gateway/workflow/sessions", new { taskId = seeded.TaskId, role = "Planner" });
+        var sessionId = started.GetProperty("sessionId").GetGuid();
+
+        var cancelBody = new { taskId = seeded.TaskId, sessionId, reason = "No." };
+        var startBody = new { taskId = seeded.TaskId, role = "Reviewer" };
+        var writeBody = new { projectId = seeded.ProjectId, title = "No", requestedOutcome = "x" };
+
+        foreach (var (scope, allowed) in new[]
+                 {
+                     (Write, "/api/gateway/lifecycle/tasks"),
+                     (Start, "/api/gateway/workflow/sessions"),
+                     (Control, "/api/gateway/workflow/control/cancel")
+                 })
+        {
+            using var client = factory.CreateClient();
+            client.DefaultRequestHeaders.TryAddWithoutValidation("Authorization", "Bearer " + await TokenAsync($"{Read} {scope}"));
+
+            foreach (var (route, body) in new (string, object)[]
+                     {
+                         ("/api/gateway/lifecycle/tasks", writeBody),
+                         ("/api/gateway/workflow/sessions", startBody),
+                         ("/api/gateway/workflow/control/cancel", cancelBody)
+                     })
+            {
+                using var response = await client.PostAsJsonAsync(route, body);
+
+                if (route == allowed)
+                {
+                    Assert.NotEqual(HttpStatusCode.Forbidden, response.StatusCode);
+                }
+                else
+                {
+                    Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+                }
+            }
+        }
+    }
+
+    private async Task<HttpClient> StarterAsync()
+    {
+        var client = factory.CreateClient();
+        client.DefaultRequestHeaders.TryAddWithoutValidation("Authorization", "Bearer " + await TokenAsync($"{Read} {Start}"));
+
+        return client;
+    }
+
+    private async Task<HttpClient> ControllerAsync()
+    {
+        var client = factory.CreateClient();
+        client.DefaultRequestHeaders.TryAddWithoutValidation("Authorization", "Bearer " + await TokenAsync($"{Read} {Control}"));
+
+        return client;
     }
 }

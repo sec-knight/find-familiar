@@ -126,6 +126,12 @@ Expect four tools, each with `readOnlyHint: true`.
 | `open_decisions` | `GET /api/gateway/decisions` | What is waiting on the human — session handoffs and plan proposals alike: reason, evidence, what a plan would create, legal choices, and the identifiers a decision needs |
 | `get_task_detail` | `GET /api/gateway/tasks/{id}` | One task in full: state and reason, the sessions that ran, the records they produced, and any decision it awaits |
 | `inspect_familiar_runtime` | `GET /api/gateway/runtime` | Workers, per-role readiness and provider capacity — why a role work is waiting on can or cannot start |
+| `create_familiar_project` | `POST /api/gateway/lifecycle/projects` | Creates a project. **Requires `familiar.project.write`.** |
+| `create_familiar_task` | `POST /api/gateway/lifecycle/tasks` | Creates a Ready task. Starts nothing. **Requires `familiar.project.write`.** |
+| `set_familiar_task_status` | `POST /api/gateway/lifecycle/tasks/{id}/status` | Blocks, unblocks or completes a task. **Requires `familiar.project.write`.** |
+| `record_familiar_context` | `POST /api/gateway/lifecycle/context` | Records a note against a project or task. **Requires `familiar.project.write`.** |
+| `start_familiar_session` | `POST /api/gateway/workflow/sessions` | Starts a Planner, Implementer or Reviewer session. **Requires `familiar.workflow.start`.** |
+| `cancel_familiar_session` | `POST /api/gateway/workflow/control/cancel` | Cancels a running session, with the human's reason. **Requires `familiar.workflow.control`.** |
 | `submit_familiar_decision` | `POST /api/gateway/decisions/submit` | Relays a decision the human explicitly made, for either decision kind. A plan is approved exactly as drafted — no item can be added, removed or reworded. **Requires `familiar.decide`.** |
 
 Every response is bounded, carries stable ids, and states what it could not show. A search that finds
@@ -213,6 +219,9 @@ Two, and they are deliberately not one grant.
 |---|---|
 | `familiar.read` | Read projects, their state, and recorded context. Nothing else. |
 | `familiar.decide` | Relay a decision **you** have explicitly made to a workflow gate that already exists. |
+| `familiar.project.write` | Create a project or task, change a task's status, record a note. Starts nothing. |
+| `familiar.workflow.start` | Start a Planner, Implementer or Reviewer session on a task you already have. |
+| `familiar.workflow.control` | Cancel a session that is running. |
 
 **Why separate.** A conversational client reads constantly and decides rarely, and those deserve
 different answers from the person granting them. Folded into one grant, every read connection would
@@ -233,6 +242,16 @@ decided anything. It satisfies `familiar.read` and can never satisfy `familiar.d
 **A grant cannot widen itself.** A refresh may narrow the scopes it holds and may never add one; a
 request naming a scope this server does not issue is refused outright rather than quietly reduced.
 Raising a grant requires going through consent again.
+
+**Each write scope is independent.** Holding one grants nothing about the others: a project-write
+token cannot start work or answer a decision, a start token cannot create a task or cancel one, and a
+control token cannot start anything. The consent screen shows one block per requested capability,
+each stating what it cannot do.
+
+**Deliberately not exposed at any scope:** enabling or disabling a worker, and capturing a session's
+result on a worker's behalf. The first is operator administration rather than project work; the second
+is the worker's own report, and a client writing it would be fabricating evidence the reviewer then
+reads.
 
 **Exactly one operation accepts `familiar.decide`:** `submit_familiar_decision`. It takes a decision
 id, the concurrency token from `open_decisions`, and a choice of `approve` or `decline` — no free

@@ -119,8 +119,9 @@ public sealed class FamiliarGatewayEndpointTests(FindFamiliarWebApplicationFacto
             manifest.GetProperty("name").GetString());
 
         Assert.Equal(
-            ["create_familiar_project", "create_familiar_task", "record_familiar_context",
-             "set_familiar_task_status", "submit_familiar_decision"],
+            ["cancel_familiar_session", "create_familiar_project", "create_familiar_task",
+             "record_familiar_context", "set_familiar_task_status", "start_familiar_session",
+             "submit_familiar_decision"],
             manifest.GetProperty("writeCapabilities").EnumerateArray().Select(value => value.GetString()).Order());
     }
 
@@ -337,7 +338,7 @@ public sealed class FamiliarGatewayEndpointTests(FindFamiliarWebApplicationFacto
         var tools = result.GetProperty("tools").EnumerateArray().ToList();
 
         // Twelve: seven reads, and five writes — the decision relay plus ordinary project work.
-        Assert.Equal(12, tools.Count);
+        Assert.Equal(14, tools.Count);
 
         foreach (var tool in tools)
         {
@@ -347,7 +348,8 @@ public sealed class FamiliarGatewayEndpointTests(FindFamiliarWebApplicationFacto
             // Exactly one tool may declare itself mutating, and it is the relay. Everything else is a
             // read, and nothing anywhere is destructive.
             var isWrite = name is "submit_familiar_decision" or "create_familiar_project"
-                or "create_familiar_task" or "set_familiar_task_status" or "record_familiar_context";
+                or "create_familiar_task" or "set_familiar_task_status" or "record_familiar_context"
+                or "start_familiar_session" or "cancel_familiar_session";
 
             Assert.Equal(!isWrite, annotations.GetProperty("readOnlyHint").GetBoolean());
             Assert.False(annotations.GetProperty("destructiveHint").GetBoolean(), name);
@@ -360,7 +362,7 @@ public sealed class FamiliarGatewayEndpointTests(FindFamiliarWebApplicationFacto
 
             if (!isWrite)
             {
-                foreach (var forbidden in new[] { "create", "start", "update", "write" })
+                foreach (var forbidden in new[] { "create", "start", "cancel", "update", "write" })
                 {
                     Assert.DoesNotContain(forbidden, name, StringComparison.OrdinalIgnoreCase);
                 }

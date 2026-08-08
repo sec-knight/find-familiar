@@ -148,7 +148,9 @@ public sealed class FamiliarGateway(
         "create_familiar_project",
         "create_familiar_task",
         "set_familiar_task_status",
-        "record_familiar_context"
+        "record_familiar_context",
+        "start_familiar_session",
+        "cancel_familiar_session"
     ];
 
     public FamiliarManifest GetManifest() => new(

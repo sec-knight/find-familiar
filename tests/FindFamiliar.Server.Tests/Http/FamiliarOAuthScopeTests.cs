@@ -368,10 +368,11 @@ public sealed class FamiliarOAuthScopeTests(FindFamiliarWebApplicationFactory fa
         // the read surface, with nothing that acts.
         Assert.Equal(
             [
-                "create_familiar_project", "create_familiar_task", "familiar_manifest",
-                "get_project_context", "get_task_detail", "inspect_familiar_runtime",
-                "list_familiar_projects", "open_decisions", "record_familiar_context",
-                "search_familiar_context", "set_familiar_task_status", "submit_familiar_decision"
+                "cancel_familiar_session", "create_familiar_project", "create_familiar_task",
+                "familiar_manifest", "get_project_context", "get_task_detail",
+                "inspect_familiar_runtime", "list_familiar_projects", "open_decisions",
+                "record_familiar_context", "search_familiar_context", "set_familiar_task_status",
+                "start_familiar_session", "submit_familiar_decision"
             ],
             names.Order());
 

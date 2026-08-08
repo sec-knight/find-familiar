@@ -50,6 +50,13 @@ public interface IFamiliarLifecycleGateway
 
     Task<FamiliarLifecycleResult> RecordProjectContextAsync(
         Guid projectId, string category, string title, string content, CancellationToken cancellationToken = default);
+
+    /// <summary>Starts a session for a role on a task the caller may read.</summary>
+    Task<FamiliarLifecycleResult> StartSessionAsync(Guid taskId, string role, CancellationToken cancellationToken = default);
+
+    /// <summary>Cancels a running session, with the human's stated reason.</summary>
+    Task<FamiliarLifecycleResult> CancelSessionAsync(
+        Guid taskId, Guid sessionId, string reason, CancellationToken cancellationToken = default);
 }
 
 /// <summary>
@@ -74,7 +81,10 @@ public interface IFamiliarLifecycleGateway
 public sealed class FamiliarLifecycleGateway(
     IFamiliarGateway gateway,
     IProjectLifecycleService lifecycle,
-    IProjectContextRecordingService projectContext) : IFamiliarLifecycleGateway
+    IProjectContextRecordingService projectContext,
+    IWorkflowDispatchService workflowDispatch,
+    ISessionCancellationService cancellation,
+    TimeProvider clock) : IFamiliarLifecycleGateway
 {
     /// <summary>
     /// What the Familiar records is reported, not asserted. A person told their Familiar to write
@@ -243,6 +253,112 @@ public sealed class FamiliarLifecycleGateway(
             _ => new FamiliarLifecycleResult(
                 FamiliarLifecycleOutcome.Rejected,
                 outcome.ValidationMessage ?? "That could not be recorded. Nothing was changed.")
+        };
+    }
+
+    /// <summary>
+    /// Starts a session, through the same dispatch service the task page's button calls.
+    ///
+    /// <b>It asks; the workflow decides.</b> One Started session per task is enforced by a partial
+    /// unique index, not by this method, so a second start loses to the index rather than to a check
+    /// here — which is what makes it safe under a racing caller. Provider and external reference stay
+    /// null: choosing a worker is not the Familiar's to do, and a session with no provider is claimed
+    /// by whichever capable worker is free, exactly as one started by hand.
+    /// </summary>
+    public async Task<FamiliarLifecycleResult> StartSessionAsync(
+        Guid taskId,
+        string role,
+        CancellationToken cancellationToken = default)
+    {
+        if (!Enum.TryParse<AgentSessionRole>(role, ignoreCase: true, out var parsed) || !Enum.IsDefined(parsed))
+        {
+            return new FamiliarLifecycleResult(
+                FamiliarLifecycleOutcome.Rejected,
+                $"'{role}' is not a role. Use one of: {string.Join(", ", Enum.GetNames<AgentSessionRole>())}.");
+        }
+
+        if (await gateway.GetTaskDetailAsync(taskId, cancellationToken) is null)
+        {
+            return Unreadable("task");
+        }
+
+        var outcome = await workflowDispatch.StartSessionForTaskAsync(
+            taskId, parsed, provider: null, externalSessionReference: null,
+            clock.GetUtcNow().UtcDateTime, cancellationToken);
+
+        return outcome.Status switch
+        {
+            StartSessionStatus.Started => new FamiliarLifecycleResult(
+                FamiliarLifecycleOutcome.Done,
+                $"A {parsed} session has started. It will be picked up by an available worker — ask me "
+                + "about the runtime if you want to know whether one is online.",
+                TaskId: taskId,
+                SessionId: outcome.Session?.Id),
+
+            // Not an error, and deliberately not reported as one: the task already has work running,
+            // which is usually what the person wanted to hear.
+            StartSessionStatus.AlreadyStarted => new FamiliarLifecycleResult(
+                FamiliarLifecycleOutcome.NotCurrentlyLegal,
+                "That task already has a session running, so another cannot start. Nothing was changed.",
+                TaskId: taskId),
+
+            StartSessionStatus.ProjectInactive => new FamiliarLifecycleResult(
+                FamiliarLifecycleOutcome.NotCurrentlyLegal,
+                "That project is not active. Nothing was changed."),
+
+            _ => Unreadable("task")
+        };
+    }
+
+    /// <summary>
+    /// Cancels a running session, through the same transaction the task page and the runner both use.
+    ///
+    /// <b>The reason is required and is the human's.</b> The cancellation service records it durably,
+    /// and a cancellation with no reason is a gap in the record somebody later has to guess at. It is
+    /// the one free-text field on this whole write surface, and it exists because the alternative is
+    /// worse: a model summarising why the person stopped something is more likely to be wrong than
+    /// their own sentence.
+    /// </summary>
+    public async Task<FamiliarLifecycleResult> CancelSessionAsync(
+        Guid taskId,
+        Guid sessionId,
+        string reason,
+        CancellationToken cancellationToken = default)
+    {
+        if (await gateway.GetTaskDetailAsync(taskId, cancellationToken) is null)
+        {
+            return Unreadable("task");
+        }
+
+        var outcome = await cancellation.CancelAsync(
+            new SessionCancellationRequest(taskId, sessionId, reason), cancellationToken);
+
+        return outcome.Status switch
+        {
+            SessionCancellationStatus.Success => new FamiliarLifecycleResult(
+                FamiliarLifecycleOutcome.Done,
+                $"The {outcome.Role} session was cancelled. Find Familiar has recorded why, and may now "
+                + "be asking whether to retry it.",
+                TaskId: taskId,
+                SessionId: sessionId),
+
+            // Already finished, already cancelled, or never started: nothing to stop.
+            SessionCancellationStatus.NotStarted => new FamiliarLifecycleResult(
+                FamiliarLifecycleOutcome.NotCurrentlyLegal,
+                "That session is not running, so there was nothing to cancel. Nothing was changed.",
+                TaskId: taskId),
+
+            SessionCancellationStatus.ClaimLost => new FamiliarLifecycleResult(
+                FamiliarLifecycleOutcome.Stale,
+                "That session moved while this was being sent. Nothing was changed.",
+                TaskId: taskId),
+
+            SessionCancellationStatus.ValidationFailed => new FamiliarLifecycleResult(
+                FamiliarLifecycleOutcome.Rejected,
+                "A reason is required to cancel a session, and it must be at most 2000 characters. "
+                + "Nothing was changed."),
+
+            _ => Unreadable("session")
         };
     }
 

@@ -87,8 +87,9 @@ public sealed class FamiliarGatewayTests
         var manifest = NewGateway(dbContext).GetManifest();
 
         Assert.Equal(
-            ["create_familiar_project", "create_familiar_task", "record_familiar_context",
-             "set_familiar_task_status", "submit_familiar_decision"],
+            ["cancel_familiar_session", "create_familiar_project", "create_familiar_task",
+             "record_familiar_context", "set_familiar_task_status", "start_familiar_session",
+             "submit_familiar_decision"],
             manifest.WriteCapabilities.Order());
     }
 
@@ -132,7 +133,8 @@ public sealed class FamiliarGatewayTests
             "search_familiar_context", "get_project_context", "list_familiar_projects",
             "open_decisions", "inspect_familiar_runtime", "get_task_detail",
             "submit_familiar_decision", "create_familiar_project", "create_familiar_task",
-            "set_familiar_task_status", "record_familiar_context"
+            "set_familiar_task_status", "record_familiar_context", "start_familiar_session",
+            "cancel_familiar_session"
         ];
 
         Assert.All(

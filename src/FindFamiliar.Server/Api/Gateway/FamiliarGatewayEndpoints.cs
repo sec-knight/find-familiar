@@ -138,6 +138,27 @@ public static class FamiliarGatewayEndpoints
                     body.ProjectId!.Value, body.Category ?? string.Empty, body.Title ?? string.Empty, body.Content ?? string.Empty, cancellationToken));
         });
 
+        // Starting work and stopping it are separate grants: the failure modes are opposite, and a
+        // person granting one has not thereby agreed to the other.
+        var startGroup = app
+            .MapGroup("/api/gateway/workflow")
+            .AddEndpointFilter<FamiliarGatewayAuthenticationFilter>()
+            .RequireFamiliarScope(FamiliarGatewayOptions.WorkflowStartScope);
+
+        startGroup.MapPost("/sessions", async (
+            StartSessionBody body, IFamiliarLifecycleGateway lifecycle, CancellationToken cancellationToken) =>
+            Results.Ok(await lifecycle.StartSessionAsync(body.TaskId, body.Role ?? string.Empty, cancellationToken)));
+
+        var controlGroup = app
+            .MapGroup("/api/gateway/workflow/control")
+            .AddEndpointFilter<FamiliarGatewayAuthenticationFilter>()
+            .RequireFamiliarScope(FamiliarGatewayOptions.WorkflowControlScope);
+
+        controlGroup.MapPost("/cancel", async (
+            CancelSessionBody body, IFamiliarLifecycleGateway lifecycle, CancellationToken cancellationToken) =>
+            Results.Ok(await lifecycle.CancelSessionAsync(
+                body.TaskId, body.SessionId, body.Reason ?? string.Empty, cancellationToken)));
+
         group.MapGet("/projects", async (IFamiliarGateway gateway, CancellationToken cancellationToken) =>
             Results.Ok(await gateway.ListProjectsAsync(cancellationToken)));
 
@@ -186,3 +207,7 @@ public sealed record SetTaskStatusBody(string? Status);
 
 public sealed record RecordContextBody(
     string? Category, string? Title, string? Content, Guid? ProjectId, Guid? TaskId);
+
+public sealed record StartSessionBody(Guid TaskId, string? Role);
+
+public sealed record CancelSessionBody(Guid TaskId, Guid SessionId, string? Reason);

@@ -330,4 +330,47 @@ public sealed class FamiliarMcpTools(
             ? lifecycle.RecordTaskContextAsync(task, category, title, content, cancellationToken)
             : lifecycle.RecordProjectContextAsync(projectId!.Value, category, title, content, cancellationToken);
     }
+
+    [McpServerTool(Name = "start_familiar_session", ReadOnly = false, Destructive = false, Idempotent = false)]
+    [Description(
+        "Start a Planner, Implementer or Reviewer session on a task, when the user tells you to run it. "
+        + "Running a session spends model time and does real work, so call this only when the user has "
+        + "asked for it in this turn — not because a task looks ready, not because a previous stage "
+        + "finished, and not to be helpful. If they have not said which role, ask. "
+        + "This is NOT how you answer a step that is already waiting on the user: if open_decisions "
+        + "shows a pending decision for this task, use submit_familiar_decision instead. "
+        + "A task can only have one session running; if one is already running you are told so and "
+        + "nothing starts. The session is picked up by whichever worker is free — use "
+        + "inspect_familiar_runtime if the user asks why nothing seems to be happening.")]
+    public Task<FamiliarLifecycleResult> StartFamiliarSession(
+        [Description("The task id, from get_project_context or get_task_detail.")] Guid taskId,
+        [Description("Planner, Implementer, or Reviewer.")] string role,
+        CancellationToken cancellationToken = default)
+    {
+        Require(FamiliarGatewayOptions.WorkflowStartScope);
+
+        return lifecycle.StartSessionAsync(taskId, role, cancellationToken);
+    }
+
+    [McpServerTool(Name = "cancel_familiar_session", ReadOnly = false, Destructive = false, Idempotent = true)]
+    [Description(
+        "Stop a session that is currently running, when the user tells you to stop it. Cancelling ends "
+        + "work in progress and cannot be undone. "
+        + "Only on the user's explicit instruction. Do NOT cancel because a session seems slow, stuck, "
+        + "or wrong — that is the user's call, and inspect_familiar_runtime usually explains a session "
+        + "that looks stuck without anything needing to be stopped. "
+        + "The reason is recorded permanently and should be the user's own words about why they are "
+        + "stopping it, not your summary. If they did not give one, ask rather than inventing it. "
+        + "Cancelling often causes Find Familiar to ask whether to retry the step; that question comes "
+        + "back through open_decisions and is the user's to answer.")]
+    public Task<FamiliarLifecycleResult> CancelFamiliarSession(
+        [Description("The task id the session belongs to.")] Guid taskId,
+        [Description("The session id, from get_task_detail.")] Guid sessionId,
+        [Description("Why the user is stopping it, in their own words. Required.")] string reason,
+        CancellationToken cancellationToken = default)
+    {
+        Require(FamiliarGatewayOptions.WorkflowControlScope);
+
+        return lifecycle.CancelSessionAsync(taskId, sessionId, reason, cancellationToken);
+    }
 }
