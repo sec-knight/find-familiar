@@ -262,6 +262,11 @@ builder.Services.AddScoped<IFamiliarGateway, FamiliarGateway>();
 // choice to the same approval transaction the Demiplane posts to.
 builder.Services.AddScoped<IFamiliarDecisionGateway, FamiliarDecisionGateway>();
 
+// Ordinary project lifecycle: one implementation of the rules, called by the Demiplane's handlers and
+// by the Familiar's write boundary alike.
+builder.Services.AddScoped<IProjectLifecycleService, ProjectLifecycleService>();
+builder.Services.AddScoped<IFamiliarLifecycleGateway, FamiliarLifecycleGateway>();
+
 // The MCP tools read the authenticated caller from the request to enforce per-tool scope.
 builder.Services.AddHttpContextAccessor();
 

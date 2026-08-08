@@ -125,11 +125,42 @@ public sealed class FamiliarGatewayOptions
     public const string DecideScope = "familiar.decide";
 
     /// <summary>
+    /// Creating and maintaining ordinary project work: a project, a task, a task's status, and the
+    /// context a person records against either.
+    ///
+    /// <b>What it is not.</b> It starts nothing and runs nothing. A task created with this scope sits
+    /// Ready until somebody decides to run it, and deciding that needs a different permission. It also
+    /// crosses no human decision gate — a step waiting on the person stays waiting, and only
+    /// <see cref="DecideScope"/> can answer it.
+    /// </summary>
+    public const string ProjectWriteScope = "familiar.project.write";
+
+    /// <summary>
+    /// Starting a session on work that already exists: asking a Planner, Implementer or Reviewer to
+    /// run on a task the user has.
+    ///
+    /// Separate from <see cref="ProjectWriteScope"/> because writing down a task and spending model
+    /// time on it are different sizes of consequence, and a person may reasonably want the first
+    /// without the second. Legality is still the workflow's to decide — this permits asking.
+    /// </summary>
+    public const string WorkflowStartScope = "familiar.workflow.start";
+
+    /// <summary>
+    /// Stopping work that is already running.
+    ///
+    /// Its own grant rather than part of starting, because the failure modes are opposite: starting
+    /// spends time that was not asked for, stopping destroys work in progress. A person granting one
+    /// has not thereby agreed to the other.
+    /// </summary>
+    public const string WorkflowControlScope = "familiar.workflow.control";
+
+    /// <summary>
     /// Every scope this server will issue. An authorization request naming anything else is refused
     /// rather than silently reduced to what is understood: a client that asked for a permission this
     /// server does not have should be told so, not handed a token that quietly means less.
     /// </summary>
-    public static readonly IReadOnlyList<string> SupportedScopes = [ReadScope, DecideScope];
+    public static readonly IReadOnlyList<string> SupportedScopes =
+        [ReadScope, DecideScope, ProjectWriteScope, WorkflowStartScope, WorkflowControlScope];
 
     /// <summary>
     /// Parses a space-delimited scope string into the grant it represents.

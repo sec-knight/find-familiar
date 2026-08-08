@@ -1,13 +1,16 @@
 using System.ComponentModel.DataAnnotations;
 using FindFamiliar.Server.Data;
 using FindFamiliar.Server.Domain;
+using FindFamiliar.Server.Services;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
 using Microsoft.EntityFrameworkCore;
 
 namespace FindFamiliar.Server.Pages.Projects;
 
-public sealed class IndexModel(FamiliarDbContext dbContext) : PageModel
+public sealed class IndexModel(
+    FamiliarDbContext dbContext,
+    IProjectLifecycleService lifecycle) : PageModel
 {
     public IReadOnlyList<ProjectListItem> Projects { get; private set; } = Array.Empty<ProjectListItem>();
 
@@ -27,30 +30,26 @@ public sealed class IndexModel(FamiliarDbContext dbContext) : PageModel
             return Page();
         }
 
-        var name = NewProject.Name.Trim();
-        if (await dbContext.Projects.AnyAsync(project => project.Name == name, cancellationToken))
+        // Through the shared lifecycle service. Name uniqueness is a rule, and a rule written here and
+        // again in the Familiar's write boundary is a rule that eventually differs between them.
+        var outcome = await lifecycle.CreateProjectAsync(
+            new CreateProjectRequest(NewProject.Name, NewProject.Purpose), cancellationToken);
+
+        if (outcome.Status == ProjectLifecycleStatus.NameTaken)
         {
             ModelState.AddModelError("NewProject.Name", "A project with this name already exists.");
             await LoadProjectsAsync(cancellationToken);
             return Page();
         }
 
-        var now = DateTime.UtcNow;
-        var project = new FamiliarProject
+        if (outcome.Status != ProjectLifecycleStatus.Succeeded)
         {
-            Id = Guid.NewGuid(),
-            Name = name,
-            Purpose = NewProject.Purpose.Trim(),
-            Status = ProjectStatus.Active,
-            CreatedUtc = now,
-            UpdatedUtc = now
-        };
+            ModelState.AddModelError(string.Empty, outcome.ValidationMessage ?? "That project could not be created.");
+            await LoadProjectsAsync(cancellationToken);
+            return Page();
+        }
 
-        dbContext.Projects.Add(project);
-        await dbContext.SaveChangesAsync(cancellationToken);
-
-        TempData["StatusMessage"] = $"Created project '{project.Name}'.";
-        return RedirectToPage("./Details", new { id = project.Id });
+        return RedirectToPage("Details", new { id = outcome.ProjectId });
     }
 
     private async Task LoadProjectsAsync(CancellationToken cancellationToken)

@@ -690,12 +690,16 @@ public static class FamiliarOAuthEndpoints
             : $"<p class=\"problem\">{WebUtility.HtmlEncode(problem)}</p>";
 
         var decides = scopes.Contains(FamiliarGatewayOptions.DecideScope, StringComparer.Ordinal);
+        var writesProjects = scopes.Contains(FamiliarGatewayOptions.ProjectWriteScope, StringComparer.Ordinal);
+        var startsWork = scopes.Contains(FamiliarGatewayOptions.WorkflowStartScope, StringComparer.Ordinal);
+        var controlsWork = scopes.Contains(FamiliarGatewayOptions.WorkflowControlScope, StringComparer.Ordinal);
+        var anyWrite = decides || writesProjects || startsWork || controlsWork;
 
         // The summary line must never overstate. It said "read-only" when read-only was all there was;
         // it keeps saying exactly that, and says something different only when something different is
         // being asked for.
-        var summary = decides
-            ? "This grants read access to your Familiar's context, and permission to submit decisions you make."
+        var summary = anyWrite
+            ? "This grants read access to your Familiar's context, and the specific abilities listed below."
             : "This grants read-only access to your Familiar's context.";
 
         // Stated as what the client may carry, never as what it may decide. The distinction is the
@@ -723,12 +727,59 @@ public static class FamiliarOAuthEndpoints
         // The "no writes" promise stays absolute where it is true, and becomes precise rather than
         // false where it is not. A screen that kept claiming nothing can change while asking for the
         // decision permission would be the exact misstatement this slice was told to avoid.
-        var notWritten = decides
-            ? "No general write access: nothing can be created, edited or deleted except as the direct result "
-              + "of a decision you explicitly make"
+        var notWritten = anyWrite
+            ? "No general write access: it can do the specific things listed below and nothing else — it "
+              + "cannot delete anything, change your settings, or reach any project you have marked sensitive"
             : "No writes: no tasks, sessions, plans or context entries can be created or changed";
 
-        var approveLabel = decides ? "Approve access" : "Approve read access";
+        var approveLabel = anyWrite ? "Approve access" : "Approve read access";
+
+        // One block per capability, so a person reads what they are actually granting rather than a
+        // single sentence covering four different sizes of consequence. Each says plainly what it
+        // cannot do, because that is the part somebody agreeing quickly will assume.
+        var projectBlock = writesProjects
+            ? """
+              <div class="grant elevated">
+                <strong>Also requested: create and update project work</strong>
+                <p>Lets the client write things down for you — a new project, a new task, a task's status,
+                   or a note recorded against a project or task.</p>
+                <ul>
+                  <li>It does <strong>not</strong> start or run anything: a task it creates sits waiting until you say to run it</li>
+                  <li>It does <strong>not</strong> delete anything</li>
+                  <li>It cannot answer a step that is waiting on your decision</li>
+                </ul>
+              </div>
+              """
+            : string.Empty;
+
+        var startBlock = startsWork
+            ? """
+              <div class="grant elevated">
+                <strong>Also requested: start work on a task</strong>
+                <p>Lets the client ask a Planner, Implementer or Reviewer to run on a task you already have,
+                   when you tell it to. Running work spends model time.</p>
+                <ul>
+                  <li>Only when you say so — it may not decide on its own that work should run</li>
+                  <li>Find Familiar still checks the step is legal and may refuse it</li>
+                  <li>It cannot approve a step that is already waiting on your decision</li>
+                </ul>
+              </div>
+              """
+            : string.Empty;
+
+        var controlBlock = controlsWork
+            ? """
+              <div class="grant elevated">
+                <strong>Also requested: stop work that is running</strong>
+                <p>Lets the client cancel a session you ask it to stop. Cancelling ends work in progress and
+                   cannot be undone.</p>
+                <ul>
+                  <li>Only when you say so</li>
+                  <li>It cannot stop anything that has already finished</li>
+                </ul>
+              </div>
+              """
+            : string.Empty;
 
         return $$"""
         <!doctype html>
@@ -767,6 +818,9 @@ public static class FamiliarOAuthEndpoints
             </ul>
           </div>
           {{decideBlock}}
+          {{projectBlock}}
+          {{startBlock}}
+          {{controlBlock}}
           {{notice}}
           <form method="post" action="{{AuthorizeRoute}}" autocomplete="off">
             <input type="hidden" name="request" value="{{WebUtility.HtmlEncode(pendingRequest)}}">

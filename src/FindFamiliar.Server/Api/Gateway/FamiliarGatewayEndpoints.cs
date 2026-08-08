@@ -100,6 +100,44 @@ public static class FamiliarGatewayEndpoints
                 : Results.Ok(detail);
         });
 
+        // Ordinary project work, in its own group with its own scope. Not in the read group and not in
+        // the decision group: three different permissions, three different mappings, so holding one
+        // never implies another.
+        var projectWriteGroup = app
+            .MapGroup("/api/gateway/lifecycle")
+            .AddEndpointFilter<FamiliarGatewayAuthenticationFilter>()
+            .RequireFamiliarScope(FamiliarGatewayOptions.ProjectWriteScope);
+
+        projectWriteGroup.MapPost("/projects", async (
+            CreateProjectBody body, IFamiliarLifecycleGateway lifecycle, CancellationToken cancellationToken) =>
+            Results.Ok(await lifecycle.CreateProjectAsync(body.Name ?? string.Empty, body.Purpose ?? string.Empty, cancellationToken)));
+
+        projectWriteGroup.MapPost("/tasks", async (
+            CreateTaskBody body, IFamiliarLifecycleGateway lifecycle, CancellationToken cancellationToken) =>
+            Results.Ok(await lifecycle.CreateTaskAsync(
+                body.ProjectId, body.Title ?? string.Empty, body.RequestedOutcome ?? string.Empty, cancellationToken)));
+
+        projectWriteGroup.MapPost("/tasks/{taskId:guid}/status", async (
+            Guid taskId, SetTaskStatusBody body, IFamiliarLifecycleGateway lifecycle, CancellationToken cancellationToken) =>
+            Results.Ok(await lifecycle.UpdateTaskStatusAsync(taskId, body.Status ?? string.Empty, cancellationToken)));
+
+        projectWriteGroup.MapPost("/context", async (
+            RecordContextBody body, IFamiliarLifecycleGateway lifecycle, CancellationToken cancellationToken) =>
+        {
+            if (body.ProjectId is null == body.TaskId is null)
+            {
+                return Results.Json(
+                    new FamiliarGatewayError("Supply exactly one of projectId or taskId."),
+                    statusCode: StatusCodes.Status400BadRequest);
+            }
+
+            return Results.Ok(body.TaskId is { } task
+                ? await lifecycle.RecordTaskContextAsync(
+                    task, body.Category ?? string.Empty, body.Title ?? string.Empty, body.Content ?? string.Empty, cancellationToken)
+                : await lifecycle.RecordProjectContextAsync(
+                    body.ProjectId!.Value, body.Category ?? string.Empty, body.Title ?? string.Empty, body.Content ?? string.Empty, cancellationToken));
+        });
+
         group.MapGet("/projects", async (IFamiliarGateway gateway, CancellationToken cancellationToken) =>
             Results.Ok(await gateway.ListProjectsAsync(cancellationToken)));
 
@@ -138,3 +176,13 @@ public sealed record FamiliarDecisionSubmission(
     Guid DecisionId,
     Guid ExpectedConcurrencyToken,
     string? Choice);
+
+/// <summary>Ordinary lifecycle bodies. Typed, nullable, and validated by the service beneath.</summary>
+public sealed record CreateProjectBody(string? Name, string? Purpose);
+
+public sealed record CreateTaskBody(Guid ProjectId, string? Title, string? RequestedOutcome);
+
+public sealed record SetTaskStatusBody(string? Status);
+
+public sealed record RecordContextBody(
+    string? Category, string? Title, string? Content, Guid? ProjectId, Guid? TaskId);

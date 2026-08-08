@@ -16,7 +16,8 @@ public sealed class DetailsModel(
     ISessionCancellationService cancellation,
     IWorkflowDispatchService workflowDispatch,
     ISessionHandoffApprovalService handoffApproval,
-    ISessionHandoffService handoffs) : PageModel
+    ISessionHandoffService handoffs,
+    IProjectLifecycleService lifecycle) : PageModel
 {
     public TaskContextDocument? Document { get; private set; }
 
@@ -253,41 +254,27 @@ public sealed class DetailsModel(
 
     public async Task<IActionResult> OnPostUpdateStatusAsync(Guid id, CancellationToken cancellationToken)
     {
-        var task = await dbContext.Tasks
-            .Include(candidate => candidate.Project)
-            .SingleOrDefaultAsync(candidate => candidate.Id == id, cancellationToken);
+        // Through the shared lifecycle service. The rules here — the revision bump, and retiring a step
+        // that a completed task has made unanswerable — are the same rules the Familiar's write
+        // boundary needs, and two implementations of "what closing a task means" would not stay
+        // identical to each other.
+        var outcome = await lifecycle.UpdateTaskStatusAsync(
+            new UpdateTaskStatusRequest(id, NewTaskStatus), cancellationToken);
 
-        if (task is null)
+        if (outcome.Status == ProjectLifecycleStatus.NotFound)
         {
             return NotFound();
         }
 
-        var nowUtc = DateTime.UtcNow;
+        if (outcome.Status != ProjectLifecycleStatus.Succeeded)
+        {
+            TempData["StatusMessage"] = outcome.ValidationMessage ?? "That status change was not applied.";
+            return RedirectToPage(new { id });
+        }
 
-        task.Status = NewTaskStatus;
-        task.UpdatedUtc = nowUtc;
-        task.Project.IncrementContextRevision();
-
-        // Closing a task settles any decision still pending on it. Without this the handoff stays
-        // Pending forever: it cannot be approved — SessionHandoffApprovalService refuses a closed
-        // task — and nothing retires it, so it sits in every "waiting for you" list being asked about
-        // and never answerable. Superseded is exactly the state for it: something newer replaced the
-        // decision point, and closing the task is that something.
-        //
-        // In one transaction with the status change, because a task that closed while its handoff
-        // stayed pending is precisely the state this exists to prevent.
-        await using var transaction = await dbContext.Database.BeginTransactionAsync(cancellationToken);
-
-        var retired = NewTaskStatus == FindFamiliar.Server.Domain.TaskStatus.Completed
-            ? await handoffs.SupersedePendingAsync(task.Id, nowUtc, cancellationToken)
-            : 0;
-
-        await dbContext.SaveChangesAsync(cancellationToken);
-        await transaction.CommitAsync(cancellationToken);
-
-        TempData["StatusMessage"] = retired > 0
-            ? $"Task status changed to {task.Status}. The step that was waiting on you no longer applies."
-            : $"Task status changed to {task.Status}.";
+        TempData["StatusMessage"] = outcome.RetiredDecisions > 0
+            ? $"Task status changed to {NewTaskStatus}. The step that was waiting on you no longer applies."
+            : $"Task status changed to {NewTaskStatus}.";
 
         return RedirectToPage(new { id });
     }

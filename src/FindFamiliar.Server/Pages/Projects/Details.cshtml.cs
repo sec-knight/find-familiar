@@ -12,7 +12,8 @@ public sealed class DetailsModel(
     FamiliarDbContext dbContext,
     IWorkflowDispatchService workflowDispatch,
     IProjectContextRecordingService contextRecording,
-    IContextProjectionService contextProjection) : PageModel
+    IContextProjectionService contextProjection,
+    IProjectLifecycleService lifecycle) : PageModel
 {
     public FamiliarProject? Project { get; private set; }
 
@@ -44,22 +45,26 @@ public sealed class DetailsModel(
             return Page();
         }
 
-        var project = await dbContext.Projects.SingleOrDefaultAsync(candidate => candidate.Id == id, cancellationToken);
-        if (project is null)
+        // Through the shared lifecycle service, which calls the same dispatch boundary this handler
+        // used to call directly — so the Familiar's write boundary and this page create a task the
+        // same way rather than each remembering to.
+        var outcome = await lifecycle.CreateTaskAsync(
+            new CreateTaskRequest(id, NewTask.Title, NewTask.RequestedOutcome), cancellationToken);
+
+        if (outcome.Status == ProjectLifecycleStatus.NotFound)
         {
             return NotFound();
         }
 
-        var task = workflowDispatch.CreateReadyTask(
-            project,
-            NewTask.Title,
-            NewTask.RequestedOutcome,
-            DateTime.UtcNow);
+        if (outcome.Status != ProjectLifecycleStatus.Succeeded)
+        {
+            ModelState.AddModelError(string.Empty, outcome.ValidationMessage ?? "That task could not be created.");
+            await LoadProjectAsync(id, cancellationToken);
+            return Page();
+        }
 
-        await dbContext.SaveChangesAsync(cancellationToken);
-
-        TempData["StatusMessage"] = $"Created task '{task.Title}'.";
-        return RedirectToPage("../Tasks/Details", new { id = task.Id });
+        TempData["StatusMessage"] = $"Created task '{NewTask.Title.Trim()}'.";
+        return RedirectToPage("../Tasks/Details", new { id = outcome.TaskId });
     }
 
     public async Task<IActionResult> OnPostCreateProjectContextAsync(Guid id, CancellationToken cancellationToken)

@@ -34,6 +34,7 @@ namespace FindFamiliar.Server.Api.Gateway;
 public sealed class FamiliarMcpTools(
     IFamiliarGateway gateway,
     IFamiliarDecisionGateway decisions,
+    IFamiliarLifecycleGateway lifecycle,
     IHttpContextAccessor httpContext)
 {
     /// <summary>
@@ -242,5 +243,91 @@ public sealed class FamiliarMcpTools(
         Require(FamiliarGatewayOptions.DecideScope);
 
         return decisions.SubmitAsync(decisionId, expectedConcurrencyToken, choice, cancellationToken);
+    }
+
+    [McpServerTool(Name = "create_familiar_project", ReadOnly = false, Destructive = false, Idempotent = false)]
+    [Description(
+        "Create a new project, when the user asks for one. A project is a container for tasks and "
+        + "recorded context; it starts empty. "
+        + "Only when the user asks for a new project — do not create one because work seems not to fit "
+        + "an existing project. If you are unsure which project something belongs in, ask, or use "
+        + "list_familiar_projects and suggest one. "
+        + "Names must be unique; if the name is taken you are told so and nothing is created.")]
+    public Task<FamiliarLifecycleResult> CreateFamiliarProject(
+        [Description("A short distinctive name. Must not match an existing project.")] string name,
+        [Description("One or two sentences on what this project is for, in the user's own terms.")] string purpose,
+        CancellationToken cancellationToken = default)
+    {
+        Require(FamiliarGatewayOptions.ProjectWriteScope);
+
+        return lifecycle.CreateProjectAsync(name, purpose, cancellationToken);
+    }
+
+    [McpServerTool(Name = "create_familiar_task", ReadOnly = false, Destructive = false, Idempotent = false)]
+    [Description(
+        "Create a task in a project, when the user asks for one. The task is created Ready and NOTHING "
+        + "runs on it — creating a task never starts a session. If the user wants work to begin, say "
+        + "that starting it is a separate step and use start_familiar_session after they confirm. "
+        + "Write the requested outcome as what should be true when the task is done, in the user's own "
+        + "terms, not as instructions to a model.")]
+    public Task<FamiliarLifecycleResult> CreateFamiliarTask(
+        [Description("The project id, from list_familiar_projects.")] Guid projectId,
+        [Description("A short title naming the work.")] string title,
+        [Description("What should be true when this is done.")] string requestedOutcome,
+        CancellationToken cancellationToken = default)
+    {
+        Require(FamiliarGatewayOptions.ProjectWriteScope);
+
+        return lifecycle.CreateTaskAsync(projectId, title, requestedOutcome, cancellationToken);
+    }
+
+    [McpServerTool(Name = "set_familiar_task_status", ReadOnly = false, Destructive = false, Idempotent = true)]
+    [Description(
+        "Change a task's status when the user tells you to — for example blocking a task, unblocking "
+        + "it, or marking it complete. "
+        + "Only on the user's explicit instruction. Do NOT mark a task complete because a session "
+        + "finished or a review passed: completing a task is the user's judgement, and a finished "
+        + "session is evidence for it rather than the decision itself. "
+        + "Completing a task also retires any step that was waiting on the user for it; the result "
+        + "says so when that happened, and you should pass that on.")]
+    public Task<FamiliarLifecycleResult> SetFamiliarTaskStatus(
+        [Description("The task id, from get_project_context or get_task_detail.")] Guid taskId,
+        [Description("One of: Draft, Ready, InProgress, InReview, Completed, Blocked.")] string status,
+        CancellationToken cancellationToken = default)
+    {
+        Require(FamiliarGatewayOptions.ProjectWriteScope);
+
+        return lifecycle.UpdateTaskStatusAsync(taskId, status, cancellationToken);
+    }
+
+    [McpServerTool(Name = "record_familiar_context", ReadOnly = false, Destructive = false, Idempotent = false)]
+    [Description(
+        "Record something durable against a project or a task, when the user asks you to remember it — "
+        + "a decision they made, a constraint, a goal, or a note they want kept. Supply exactly one of "
+        + "projectId or taskId. "
+        + "Record what the USER said or decided, in their terms. Do NOT record your own analysis, "
+        + "summaries of your reasoning, or things you inferred: this is their durable memory, and it is "
+        + "stored as reported by them. If you are unsure whether they want something kept, ask.")]
+    public Task<FamiliarLifecycleResult> RecordFamiliarContext(
+        [Description("The category: Goal, Constraint, Decision, Plan, Implementation, Review, Handoff, Summary, or OpenQuestion.")]
+        string category,
+        [Description("A short title for the record.")] string title,
+        [Description("The record itself, in the user's own terms.")] string content,
+        [Description("Record against this project. Supply this or taskId, not both.")] Guid? projectId = null,
+        [Description("Record against this task. Supply this or projectId, not both.")] Guid? taskId = null,
+        CancellationToken cancellationToken = default)
+    {
+        Require(FamiliarGatewayOptions.ProjectWriteScope);
+
+        if (projectId is null == taskId is null)
+        {
+            return Task.FromResult(new FamiliarLifecycleResult(
+                FamiliarLifecycleOutcome.Rejected,
+                "Supply exactly one of projectId or taskId — a record belongs to one or the other."));
+        }
+
+        return taskId is { } task
+            ? lifecycle.RecordTaskContextAsync(task, category, title, content, cancellationToken)
+            : lifecycle.RecordProjectContextAsync(projectId!.Value, category, title, content, cancellationToken);
     }
 }

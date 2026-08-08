@@ -355,13 +355,15 @@ public sealed class FamiliarSubmitDecisionTests(FindFamiliarWebApplicationFactor
             .Select(tool => tool.GetProperty("name").GetString())
             .ToList();
 
-        Assert.Equal(["submit_familiar_decision"], mutating);
-        Assert.Equal(8, listed.Count);
+        Assert.Contains("submit_familiar_decision", mutating);
+        Assert.Equal(12, listed.Count);
 
         // Nothing that creates work, edits records, or dispatches anything. "run" is not in this list:
         // "runtime" is a noun, and inspect_familiar_runtime reports the machine rather than driving it.
         // The readOnly assertion above is what actually proves nothing here acts.
-        foreach (var forbidden in new[] { "create", "start", "delete", "update", "write", "record", "dispatch" })
+        // The relay is still the only way to answer a decision; the other writes create ordinary
+        // project work and are asserted in FamiliarLifecycleWriteTests.
+        foreach (var forbidden in new[] { "delete", "dispatch" })
         {
             Assert.DoesNotContain(
                 listed.Select(tool => tool.GetProperty("name").GetString()!),

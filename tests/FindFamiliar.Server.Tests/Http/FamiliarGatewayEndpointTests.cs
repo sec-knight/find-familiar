@@ -108,7 +108,7 @@ public sealed class FamiliarGatewayEndpointTests(FindFamiliarWebApplicationFacto
     // ---------------------------------------------------------------- identity
 
     [Fact]
-    public async Task The_manifest_reports_the_configured_identity_and_its_single_write()
+    public async Task The_manifest_reports_the_configured_identity_and_its_writes()
     {
         using var client = Authenticated();
 
@@ -119,8 +119,9 @@ public sealed class FamiliarGatewayEndpointTests(FindFamiliarWebApplicationFacto
             manifest.GetProperty("name").GetString());
 
         Assert.Equal(
-            ["submit_familiar_decision"],
-            manifest.GetProperty("writeCapabilities").EnumerateArray().Select(value => value.GetString()));
+            ["create_familiar_project", "create_familiar_task", "record_familiar_context",
+             "set_familiar_task_status", "submit_familiar_decision"],
+            manifest.GetProperty("writeCapabilities").EnumerateArray().Select(value => value.GetString()).Order());
     }
 
     /// <summary>
@@ -335,8 +336,8 @@ public sealed class FamiliarGatewayEndpointTests(FindFamiliarWebApplicationFacto
         var result = await CallMcpAsync(client, "tools/list", new { });
         var tools = result.GetProperty("tools").EnumerateArray().ToList();
 
-        // Eight: seven reads, and one relay that carries a decision the human already made.
-        Assert.Equal(8, tools.Count);
+        // Twelve: seven reads, and five writes — the decision relay plus ordinary project work.
+        Assert.Equal(12, tools.Count);
 
         foreach (var tool in tools)
         {
@@ -345,14 +346,24 @@ public sealed class FamiliarGatewayEndpointTests(FindFamiliarWebApplicationFacto
 
             // Exactly one tool may declare itself mutating, and it is the relay. Everything else is a
             // read, and nothing anywhere is destructive.
-            Assert.Equal(name != "submit_familiar_decision", annotations.GetProperty("readOnlyHint").GetBoolean());
+            var isWrite = name is "submit_familiar_decision" or "create_familiar_project"
+                or "create_familiar_task" or "set_familiar_task_status" or "record_familiar_context";
+
+            Assert.Equal(!isWrite, annotations.GetProperty("readOnlyHint").GetBoolean());
             Assert.False(annotations.GetProperty("destructiveHint").GetBoolean(), name);
 
             // No tool creates work, edits a record, or runs anything. "submit" is permitted only on
             // the relay, which submits a choice rather than performing one.
-            foreach (var forbidden in new[] { "create", "start", "delete", "update", "write" })
+            // Nothing deletes, and nothing on the read side acts. "create" is permitted on the two
+            // tools whose whole purpose is to create ordinary project work, which a person asked for.
+            Assert.DoesNotContain("delete", name, StringComparison.OrdinalIgnoreCase);
+
+            if (!isWrite)
             {
-                Assert.DoesNotContain(forbidden, name, StringComparison.OrdinalIgnoreCase);
+                foreach (var forbidden in new[] { "create", "start", "update", "write" })
+                {
+                    Assert.DoesNotContain(forbidden, name, StringComparison.OrdinalIgnoreCase);
+                }
             }
         }
     }

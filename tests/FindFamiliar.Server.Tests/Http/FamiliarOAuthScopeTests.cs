@@ -35,16 +35,29 @@ public sealed class FamiliarOAuthScopeTests(FindFamiliarWebApplicationFactory fa
     // ---------------------------------------------------------------- the two grants are distinct
 
     [Fact]
-    public void The_two_scopes_are_distinct_and_there_is_no_generic_write_scope()
+    public void Every_scope_is_narrow_and_none_is_a_general_grant()
     {
         Assert.NotEqual(Read, Decide);
-        Assert.Equal([Read, Decide], FamiliarGatewayOptions.SupportedScopes);
 
-        // The instruction was explicit: no familiar.write, and nothing that reads like one.
+        Assert.Equal(
+            [
+                "familiar.read", "familiar.decide", "familiar.project.write",
+                "familiar.workflow.start", "familiar.workflow.control"
+            ],
+            FamiliarGatewayOptions.SupportedScopes);
+
+        // No general grant. familiar.project.write contains the word "write" and is not one: it names
+        // the ordinary project work it permits and cannot start a session, control one, or answer a
+        // decision. What must never exist is a scope that means "everything".
         Assert.DoesNotContain(
             FamiliarGatewayOptions.SupportedScopes,
-            scope => scope.Contains("write", StringComparison.OrdinalIgnoreCase)
-                || scope.Contains("admin", StringComparison.OrdinalIgnoreCase));
+            scope => scope is "familiar.write" or "familiar.admin" or "familiar.all"
+                || scope.EndsWith(".admin", StringComparison.Ordinal));
+
+        // Every scope names a specific capability rather than a level of trust.
+        Assert.All(
+            FamiliarGatewayOptions.SupportedScopes,
+            scope => Assert.StartsWith("familiar.", scope, StringComparison.Ordinal));
     }
 
     [Fact]
@@ -355,21 +368,22 @@ public sealed class FamiliarOAuthScopeTests(FindFamiliarWebApplicationFactory fa
         // the read surface, with nothing that acts.
         Assert.Equal(
             [
-                "familiar_manifest", "get_project_context", "get_task_detail",
-                "inspect_familiar_runtime", "list_familiar_projects", "open_decisions",
-                "search_familiar_context", "submit_familiar_decision"
+                "create_familiar_project", "create_familiar_task", "familiar_manifest",
+                "get_project_context", "get_task_detail", "inspect_familiar_runtime",
+                "list_familiar_projects", "open_decisions", "record_familiar_context",
+                "search_familiar_context", "set_familiar_task_status", "submit_familiar_decision"
             ],
             names.Order());
 
         // Nothing that creates work, edits a record, or dispatches anything. The relay submits a
         // choice; it performs none of these. "run" is deliberately absent — "runtime" is a noun, and
         // the read-only annotation count below is what proves the read tools do not act.
-        foreach (var forbidden in new[] { "create", "start", "delete", "update", "write", "dispatch" })
+        foreach (var forbidden in new[] { "delete", "dispatch" })
         {
             Assert.DoesNotContain(names, name => name.Contains(forbidden, StringComparison.OrdinalIgnoreCase));
         }
 
-        // Seven of the eight are read-only. The eighth is the relay, and there is exactly one of it.
+        // Seven reads; the other five are writes, each behind its own scope.
         Assert.Equal(7, System.Text.RegularExpressions.Regex.Matches(body, "\"readOnlyHint\":true").Count);
         Assert.Single(names, name => name == "submit_familiar_decision");
     }

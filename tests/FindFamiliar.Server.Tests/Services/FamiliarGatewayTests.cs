@@ -79,14 +79,17 @@ public sealed class FamiliarGatewayTests
     /// should be able to make by editing an array.
     /// </summary>
     [Fact]
-    public async Task The_manifest_declares_the_single_write_capability()
+    public async Task The_manifest_declares_the_write_capabilities()
     {
         using var database = new TemporarySqliteDatabase();
         await using var dbContext = await database.CreateContextAsync();
 
         var manifest = NewGateway(dbContext).GetManifest();
 
-        Assert.Equal(["submit_familiar_decision"], manifest.WriteCapabilities);
+        Assert.Equal(
+            ["create_familiar_project", "create_familiar_task", "record_familiar_context",
+             "set_familiar_task_status", "submit_familiar_decision"],
+            manifest.WriteCapabilities.Order());
     }
 
     /// <summary>
@@ -128,7 +131,8 @@ public sealed class FamiliarGatewayTests
         [
             "search_familiar_context", "get_project_context", "list_familiar_projects",
             "open_decisions", "inspect_familiar_runtime", "get_task_detail",
-            "submit_familiar_decision"
+            "submit_familiar_decision", "create_familiar_project", "create_familiar_task",
+            "set_familiar_task_status", "record_familiar_context"
         ];
 
         Assert.All(

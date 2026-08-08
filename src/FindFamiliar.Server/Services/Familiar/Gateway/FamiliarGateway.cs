@@ -142,7 +142,14 @@ public sealed class FamiliarGateway(
     /// write capability: nothing here creates a task, starts arbitrary work, edits a record, or
     /// writes a memory.
     /// </summary>
-    private static readonly string[] WriteCapabilities = ["submit_familiar_decision"];
+    private static readonly string[] WriteCapabilities =
+    [
+        "submit_familiar_decision",
+        "create_familiar_project",
+        "create_familiar_task",
+        "set_familiar_task_status",
+        "record_familiar_context"
+    ];
 
     public FamiliarManifest GetManifest() => new(
         _identity.ResolvedName,

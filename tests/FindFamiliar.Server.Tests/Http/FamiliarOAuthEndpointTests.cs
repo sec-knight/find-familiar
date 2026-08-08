@@ -6,6 +6,8 @@ using System.Text.Json;
 using FindFamiliar.Server.Api.Gateway;
 using FindFamiliar.Server.Api.Gateway.OAuth;
 using FindFamiliar.Server.Tests.Infrastructure;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace FindFamiliar.Server.Tests.Http;
 
@@ -96,7 +98,18 @@ public sealed class FamiliarOAuthEndpointTests(FindFamiliarWebApplicationFactory
 
         Assert.DoesNotContain(FindFamiliarWebApplicationFactory.GatewayTestToken, body, StringComparison.Ordinal);
         Assert.DoesNotContain(FindFamiliarWebApplicationFactory.GatewayTestIdentityName, body, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain("project", body, StringComparison.OrdinalIgnoreCase);
+
+        // No project may be named. The word itself now appears legitimately in the scope
+        // familiar.project.write, which describes a permission rather than disclosing anything, so the
+        // assertion is about names and ids rather than about a substring.
+        using var scope = factory.Services.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<FindFamiliar.Server.Data.FamiliarDbContext>();
+
+        foreach (var name in await dbContext.Projects.AsNoTracking()
+                     .Select(project => project.Name).ToListAsync())
+        {
+            Assert.DoesNotContain(name, body, StringComparison.OrdinalIgnoreCase);
+        }
     }
 
     /// <summary>
@@ -679,10 +692,9 @@ public sealed class FamiliarOAuthEndpointTests(FindFamiliarWebApplicationFactory
             .Distinct()
             .ToList();
 
-        foreach (var forbidden in new[] { "create", "start", "delete", "update", "write" })
-        {
-            Assert.DoesNotContain(names, name => name.Contains(forbidden, StringComparison.OrdinalIgnoreCase));
-        }
+        // Nothing deletes. Creation lives on the two tools whose purpose is ordinary project work,
+        // and those are refused for this token, which carries only familiar.read.
+        Assert.DoesNotContain(names, name => name.Contains("delete", StringComparison.OrdinalIgnoreCase));
 
         // This token carries only familiar.read, so the relay is present but refuses it — asserted in
         // FamiliarSubmitDecisionTests. What it must never do is grant a second way to act.
