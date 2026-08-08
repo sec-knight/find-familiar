@@ -188,21 +188,48 @@ public sealed record FamiliarProjectSummary(
 /// What the finished session found, in the Familiar's own plain-language account of persisted history.
 /// This is what lets a client explain the decision rather than merely announce it.
 /// </param>
+/// <param name="DecisionKind">
+/// Which kind of decision this is: <c>SessionHandoff</c> — whether to run a proposed next step on an
+/// existing task — or <c>PlanProposal</c> — whether to turn a drafted plan into work. They are
+/// reported together because from the human's side they are one question, "what needs me", and a
+/// client that had to know to ask twice would eventually ask once.
+/// </param>
+/// <param name="TaskId">The task this concerns, or null for a plan, which has no task until approved.</param>
+/// <param name="PlannedItems">
+/// What approving a plan would create, exactly as drafted. Null for a handoff.
+///
+/// Present so a person can be told what they are agreeing to before they agree. It is a description,
+/// not a menu: the relay carries approve or reject and cannot include, exclude or reword an item.
+/// </param>
 public sealed record FamiliarOpenDecision(
     Guid DecisionId,
     string DecisionKind,
     Guid ProjectId,
     string ProjectName,
-    Guid TaskId,
-    string TaskTitle,
+    Guid? TaskId,
+    string? TaskTitle,
     string Reason,
-    string ProposedRole,
-    string ProposedKind,
+    string? ProposedRole,
+    string? ProposedKind,
     string? PriorOutcome,
     string? Evidence,
     IReadOnlyList<string> LegalChoices,
     Guid ExpectedConcurrencyToken,
-    DateTime UpdatedUtc);
+    DateTime UpdatedUtc,
+    IReadOnlyList<FamiliarPlannedItem>? PlannedItems = null);
+
+/// <summary>
+/// One task a plan would create if approved, as drafted.
+///
+/// <see cref="Role"/> is the role that would run on it — and only the first included item naming one
+/// starts a session, because a plan written before any of it ran is a guess and the first result is
+/// the best evidence about whether the next step is still right (ADR-0014).
+/// </summary>
+public sealed record FamiliarPlannedItem(
+    string Title,
+    string RequestedOutcome,
+    string? Role,
+    bool IsIncluded);
 
 /// <summary>
 /// Everything waiting on the human, across every project this caller may read.

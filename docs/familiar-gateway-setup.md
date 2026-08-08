@@ -123,10 +123,10 @@ Expect four tools, each with `readOnlyHint: true`.
 | `search_familiar_context` | `POST /api/gateway/context/search` | Up to 6 recorded items with ids, excerpts, dates, and a disclosure sentence |
 | `list_familiar_projects` | `GET /api/gateway/projects` | Readable projects and a count of withheld ones |
 | `get_project_context` | `GET /api/gateway/projects/{id}` | One project's shape, tasks needing attention, newest record date, and the project's own recorded context enumerated |
-| `open_decisions` | `GET /api/gateway/decisions` | What is waiting on the human: task, reason, evidence, legal choices, and the identifiers a decision needs |
+| `open_decisions` | `GET /api/gateway/decisions` | What is waiting on the human — session handoffs and plan proposals alike: reason, evidence, what a plan would create, legal choices, and the identifiers a decision needs |
 | `get_task_detail` | `GET /api/gateway/tasks/{id}` | One task in full: state and reason, the sessions that ran, the records they produced, and any decision it awaits |
 | `inspect_familiar_runtime` | `GET /api/gateway/runtime` | Workers, per-role readiness and provider capacity — why a role work is waiting on can or cannot start |
-| `submit_familiar_decision` | `POST /api/gateway/decisions/submit` | Relays a decision the human explicitly made. **Requires `familiar.decide`.** |
+| `submit_familiar_decision` | `POST /api/gateway/decisions/submit` | Relays a decision the human explicitly made, for either decision kind. A plan is approved exactly as drafted — no item can be added, removed or reworded. **Requires `familiar.decide`.** |
 
 Every response is bounded, carries stable ids, and states what it could not show. A search that finds
 nothing says so explicitly, and says whether near-misses existed — a client that is handed an empty

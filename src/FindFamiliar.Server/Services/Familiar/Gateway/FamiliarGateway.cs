@@ -2,6 +2,7 @@ using FindFamiliar.Server.Domain;
 using FindFamiliar.Server.Services.Demiplane;
 using FindFamiliar.Server.Services.Providers;
 using FindFamiliar.Server.Services.Familiar.Chat.Brief;
+using FindFamiliar.Server.Services.Familiar.Chat.Planning;
 using FindFamiliar.Server.Services.Familiar.Chat.Retrieval;
 using Microsoft.Extensions.Options;
 
@@ -87,6 +88,7 @@ public sealed class FamiliarGateway(
     IWorkerOverviewService workers,
     IProviderCapacityService providers,
     IContextProjectionService taskContext,
+    IPendingPlanReader pendingPlans,
     IOptions<FamiliarIdentityOptions> identity) : IFamiliarGateway
 {
     /// <summary>
@@ -383,6 +385,54 @@ public sealed class FamiliarGateway(
                     token,
                     task.UpdatedUtc));
             }
+        }
+
+        // Plans awaiting a human, in the projects this caller may read. Reported beside handoffs
+        // because from the person's side "what needs me" is one question, and a client that had to
+        // know to ask twice would eventually ask once.
+        var readable = brief.Projects.ToDictionary(project => project.ProjectId, project => project.Name);
+
+        foreach (var plan in await pendingPlans.ListPendingAsync(cancellationToken))
+        {
+            if (!readable.TryGetValue(plan.ProjectId, out var projectName))
+            {
+                // The plan's project is sensitive or otherwise not this caller's to see. Absent, and
+                // not counted separately: the sensitive-project count already says a project was
+                // withheld, and a second count would say how much was in it.
+                continue;
+            }
+
+            if (decisions.Count >= FamiliarOpenDecisionList.MaxDecisions)
+            {
+                omitted++;
+                continue;
+            }
+
+            var included = plan.Items.Where(item => item.IsIncluded).ToList();
+
+            decisions.Add(new FamiliarOpenDecision(
+                plan.PlanId,
+                "PlanProposal",
+                plan.ProjectId,
+                projectName,
+                TaskId: null,
+                TaskTitle: null,
+                Reason: $"A plan is waiting for your approval: {included.Count} task"
+                    + $"{(included.Count == 1 ? "" : "s")} would be created"
+                    + (included.FirstOrDefault(item => item.Role is not null) is { } starting
+                        ? $", and a {starting.Role} session would start on \"{starting.Title}\"."
+                        : ", and no session would start."),
+                ProposedRole: included.FirstOrDefault(item => item.Role is not null)?.Role?.ToString(),
+                ProposedKind: null,
+                PriorOutcome: null,
+                Evidence: Bound(plan.Summary),
+                LegalChoices: ["approve", "decline"],
+                plan.ConcurrencyToken,
+                plan.UpdatedUtc,
+                plan.Items
+                    .Select(item => new FamiliarPlannedItem(
+                        item.Title, item.RequestedOutcome, item.Role?.ToString(), item.IsIncluded))
+                    .ToList()));
         }
 
         return new FamiliarOpenDecisionList(

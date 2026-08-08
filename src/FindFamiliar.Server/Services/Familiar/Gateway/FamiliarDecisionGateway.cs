@@ -1,4 +1,5 @@
 using FindFamiliar.Server.Services;
+using FindFamiliar.Server.Services.Familiar.Chat.Planning;
 
 namespace FindFamiliar.Server.Services.Familiar.Gateway;
 
@@ -90,7 +91,9 @@ public interface IFamiliarDecisionGateway
 /// </summary>
 public sealed class FamiliarDecisionGateway(
     IFamiliarGateway gateway,
-    ISessionHandoffApprovalService approvals) : IFamiliarDecisionGateway
+    ISessionHandoffApprovalService approvals,
+    IPendingPlanReader pendingPlans,
+    IFamiliarPlanApprovalService planApprovals) : IFamiliarDecisionGateway
 {
     public async Task<FamiliarDecisionResult> SubmitAsync(
         Guid decisionId,
@@ -115,6 +118,22 @@ public sealed class FamiliarDecisionGateway(
                 + "may not be one this connection can see. Nothing was changed.");
         }
 
+        // Two decision kinds, two authoritative services, and the kind comes from the row rather than
+        // from the caller — a client cannot choose which gate its decision is carried to.
+        return decision.DecisionKind switch
+        {
+            "PlanProposal" => await SubmitPlanAsync(decisionId, expectedConcurrencyToken, choice, cancellationToken),
+            _ => await SubmitHandoffAsync(decisionId, expectedConcurrencyToken, choice, decision, cancellationToken)
+        };
+    }
+
+    private async Task<FamiliarDecisionResult> SubmitHandoffAsync(
+        Guid decisionId,
+        Guid expectedConcurrencyToken,
+        FamiliarDecisionChoice choice,
+        FamiliarOpenDecision decision,
+        CancellationToken cancellationToken)
+    {
         var request = new SessionHandoffDecisionRequest(decisionId, expectedConcurrencyToken);
 
         var outcome = choice switch
@@ -127,8 +146,111 @@ public sealed class FamiliarDecisionGateway(
             _ => throw new ArgumentOutOfRangeException(nameof(choice))
         };
 
-        return Translate(decisionId, decision.ProposedRole, outcome);
+        return Translate(decisionId, decision.ProposedRole ?? "session", outcome);
     }
+
+    /// <summary>
+    /// A plan decision, carried to the same service the chat page's buttons post to.
+    ///
+    /// <b>Approved exactly as drafted, and that is the whole design.</b> The request carries no item
+    /// decisions, which the approval service reads as "the human changed nothing" — every item keeps
+    /// the inclusion and the wording they were shown. The Familiar therefore cannot include an item
+    /// the person excluded, exclude one they wanted, or reword a task into something they never read.
+    /// Editing a plan stays where the editing controls are; what travels through here is a yes or a no.
+    /// </summary>
+    private async Task<FamiliarDecisionResult> SubmitPlanAsync(
+        Guid planId,
+        Guid expectedConcurrencyToken,
+        FamiliarDecisionChoice choice,
+        CancellationToken cancellationToken)
+    {
+        // The chat the plan belongs to. The approval service is addressed by chat and checks the two
+        // agree, so this is resolved from the row rather than accepted from the caller.
+        var plan = (await pendingPlans.ListPendingAsync(cancellationToken))
+            .SingleOrDefault(candidate => candidate.PlanId == planId);
+
+        if (plan is null)
+        {
+            return new FamiliarDecisionResult(
+                FamiliarDecisionOutcome.NotFound, planId, null, null,
+                "That plan is no longer waiting. It may have been decided already. Nothing was changed.");
+        }
+
+        var request = new FamiliarPlanDecisionRequest(planId, expectedConcurrencyToken, []);
+
+        var outcome = choice switch
+        {
+            FamiliarDecisionChoice.Approve => await planApprovals.ApproveAsync(plan.ChatId, request, cancellationToken),
+            FamiliarDecisionChoice.Decline => await planApprovals.DeclineAsync(plan.ChatId, request, cancellationToken),
+            _ => throw new ArgumentOutOfRangeException(nameof(choice))
+        };
+
+        return TranslatePlan(planId, outcome);
+    }
+
+    /// <summary>
+    /// The plan service's outcome, restated. The distinctions it draws are preserved rather than
+    /// flattened — a stale token, a project whose context moved, and a busy database are three
+    /// different things to tell a person, and only one of them means "ask again".
+    /// </summary>
+    private static FamiliarDecisionResult TranslatePlan(Guid planId, FamiliarPlanOutcome outcome) =>
+        outcome.Status switch
+        {
+            FamiliarPlanOutcomeStatus.Approved => new FamiliarDecisionResult(
+                FamiliarDecisionOutcome.Approved, planId, outcome.StartedSessionId, outcome.StartedRole?.ToString(),
+                $"Approved. {outcome.CreatedTaskCount} task{(outcome.CreatedTaskCount == 1 ? "" : "s")} created"
+                + (outcome.StartedRole is { } role ? $", and a {role} session has started." : ", and no session started.")),
+
+            FamiliarPlanOutcomeStatus.Declined => new FamiliarDecisionResult(
+                FamiliarDecisionOutcome.Declined, planId, null, null,
+                "Declined. Nothing was created."),
+
+            FamiliarPlanOutcomeStatus.AlreadyApproved => new FamiliarDecisionResult(
+                FamiliarDecisionOutcome.AlreadyDecided, planId, outcome.StartedSessionId, null,
+                "This plan was already approved. The work from that first approval is unchanged, and "
+                + "this request created nothing."),
+
+            FamiliarPlanOutcomeStatus.AlreadyDeclined => new FamiliarDecisionResult(
+                FamiliarDecisionOutcome.AlreadyDecided, planId, null, null,
+                "This plan was already declined. Nothing was changed."),
+
+            FamiliarPlanOutcomeStatus.StaleToken => new FamiliarDecisionResult(
+                FamiliarDecisionOutcome.StaleDecision, planId, null, null,
+                "This plan changed after you were shown it, so nothing was done. Ask me what needs you "
+                + "again, and decide against the current plan."),
+
+            // Distinct from a stale token on purpose: the plan is unchanged, but the project it was
+            // drafted against has moved, so the plan is about a world that no longer exists.
+            FamiliarPlanOutcomeStatus.ContextMoved => new FamiliarDecisionResult(
+                FamiliarDecisionOutcome.StaleDecision, planId, null, null,
+                "The project's context changed after this plan was drafted, so it was not applied. "
+                + "Nothing was created."),
+
+            FamiliarPlanOutcomeStatus.NotFound => new FamiliarDecisionResult(
+                FamiliarDecisionOutcome.NotFound, planId, null, null,
+                "That plan is no longer available. Nothing was changed."),
+
+            FamiliarPlanOutcomeStatus.NothingIncluded => new FamiliarDecisionResult(
+                FamiliarDecisionOutcome.NotCurrentlyLegal, planId, null, null,
+                "Every item in that plan is excluded, so approving it would create nothing."),
+
+            FamiliarPlanOutcomeStatus.TaskAlreadyRunning => new FamiliarDecisionResult(
+                FamiliarDecisionOutcome.NotCurrentlyLegal, planId, null, null,
+                "A session is already running on the task this plan would have started. Nothing was changed."),
+
+            FamiliarPlanOutcomeStatus.ProjectInactive => new FamiliarDecisionResult(
+                FamiliarDecisionOutcome.NotCurrentlyLegal, planId, null, null,
+                "That project is not active. Nothing was changed."),
+
+            FamiliarPlanOutcomeStatus.DatabaseBusy => new FamiliarDecisionResult(
+                FamiliarDecisionOutcome.Busy, planId, null, null,
+                "The database was busy. Nothing was changed and nobody else decided anything — this can "
+                + "be retried."),
+
+            _ => new FamiliarDecisionResult(
+                FamiliarDecisionOutcome.NotCurrentlyLegal, planId, null, null,
+                "The workflow did not accept that decision. Nothing was changed.")
+        };
 
     /// <summary>
     /// The workflow's outcome, restated for a client that must explain it to a person.

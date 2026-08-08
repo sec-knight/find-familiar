@@ -167,6 +167,10 @@ builder.Services.AddScoped<IFamiliarActionService, FamiliarActionService>();
 // already exists must keep working even if the provider that drafted it is later unconfigured.
 builder.Services.AddScoped<IFamiliarPlanApprovalService, FamiliarPlanApprovalService>();
 
+// Reads plans awaiting a human so a frontend that is not the chat page can show them. Separate from
+// the approval service on purpose: that one decides, this one looks.
+builder.Services.AddScoped<IPendingPlanReader, PendingPlanReader>();
+
 // What is waiting on a human, across every project the Familiar may be told about. Read-only:
 // deciding a handoff goes through ISessionHandoffApprovalService, the same transaction the task
 // pages use.

@@ -3,6 +3,7 @@ using FindFamiliar.Server.Domain;
 using FindFamiliar.Server.Services;
 using FindFamiliar.Server.Services.Demiplane;
 using FindFamiliar.Server.Services.Familiar.Chat.Brief;
+using FindFamiliar.Server.Services.Familiar.Chat.Planning;
 using FindFamiliar.Server.Services.Familiar.Chat.Retrieval;
 using FindFamiliar.Server.Services.Familiar.Gateway;
 using FindFamiliar.Server.Services.Providers;
@@ -534,6 +535,7 @@ public sealed class FamiliarGatewayTests
             // The real context projection, for the same reason: task detail's claim is that it shows
             // the same document the Demiplane's task page shows, minus what this boundary filters.
             new ContextProjectionService(dbContext),
+            new PendingPlanReader(dbContext),
             Options.Create(new FamiliarIdentityOptions { Name = name, Guidance = guidance }));
     }
 

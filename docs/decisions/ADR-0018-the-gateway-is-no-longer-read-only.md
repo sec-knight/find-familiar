@@ -23,6 +23,19 @@ where the person's own judgement was required.
 
 ## Decision
 
+### 0. Amendment: two decision kinds, one relay
+
+Plan proposals joined session handoffs as a relayable decision. The shape is unchanged — the relay
+still carries only a decision id, the concurrency token it was read with, and approve or decline — and
+the kind is read from the row rather than chosen by the caller, so a client cannot select which gate
+its decision reaches.
+
+One thing is specific to plans and worth stating. A plan is a list of tasks a person may edit before
+agreeing to it, so the risk is not that a model approves the wrong plan but that it approves a
+*different* plan from the one the person read. The relay therefore sends no item decisions at all,
+which the approval service reads as "the human changed nothing": every item keeps the inclusion and
+the wording they were shown. Editing a plan stays where the editing controls are.
+
 ### 1. One write, and it is a relay
 
 `submit_familiar_decision` carries a decision the human has explicitly made to a gate Find Familiar
