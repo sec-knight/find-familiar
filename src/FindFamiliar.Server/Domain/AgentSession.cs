@@ -22,6 +22,17 @@ public sealed class AgentSession
 
     public DateTime? CompletedUtc { get; set; }
 
+    /// <summary>Structured adapter/provider failure metadata. Null for successful or human-cancelled sessions.</summary>
+    public string? FailureCategory { get; set; }
+
+    public int? FailureAdapterExitCode { get; set; }
+
+    public bool? FailureProviderLaunched { get; set; }
+
+    public int? FailureProviderExitCode { get; set; }
+
+    public string? FailureMessage { get; set; }
+
     /// <summary>
     /// Worker currently holding this session's execution claim, or null when unclaimed (ADR-0008).
     /// A claim is an execution lease only — it never substitutes for <see cref="Status"/>, which

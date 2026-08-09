@@ -127,6 +127,28 @@ public sealed class FamiliarMcpTools(
         return detail ?? (object)new FamiliarGatewayError("No readable task has that id.");
     }
 
+    [McpServerTool(Name = "get_session_handoff_plan", ReadOnly = true, Destructive = false, Idempotent = true)]
+    [Description(
+        "Read the complete bounded human-relevant Planner artifact behind a SessionHandoff decision. "
+        + "Call this after open_decisions returns a SessionHandoff and before explaining what approval "
+        + "would do. It includes the task goal and requested outcome plus the stored Plan artifact, "
+        + "paged at a fixed maximum; call again with offset equal to offset + content length while "
+        + "hasMore is true. Raw provider prompts, output, credentials and transcripts are never returned. "
+        + "This tool only reports and cannot approve or decline the handoff.")]
+    public async Task<object> GetSessionHandoffPlan(
+        [Description("The handoff id returned as decisionId by open_decisions.")] Guid handoffId,
+        [Description("Optional character offset from the complete Plan artifact; use the prior page end to continue.")] int? offset = null,
+        [Description("Optional page size from 1 to 4000; defaults to 4000.")] int? maxCharacters = null,
+        CancellationToken cancellationToken = default)
+    {
+        Require(FamiliarGatewayOptions.ReadScope);
+
+        var detail = await gateway.GetSessionHandoffPlanAsync(
+            handoffId, offset, maxCharacters, cancellationToken);
+
+        return detail ?? (object)new FamiliarGatewayError("No readable handoff plan has that id.");
+    }
+
     [McpServerTool(Name = "inspect_familiar_runtime", ReadOnly = true, Destructive = false, Idempotent = true)]
     [Description(
         "Inspect the workers and providers the user's automated work actually runs on. Call this when "

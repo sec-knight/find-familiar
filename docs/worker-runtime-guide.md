@@ -230,3 +230,38 @@ the worker appears as `Online` on the Workers page.
 - Every result and cancellation from the worker carries the claim's fencing token. An expired or
   replaced claim cannot change the session even if a stale process later regains connectivity.
 - Familiar and the worker stay on the private tailnet. Do not expose either publicly.
+
+## Session workspace lifecycle
+
+For a mapping with `projectPath`, the worker creates a new detached Git worktree for every claimed
+session under `allowedRoot`. The source checkout is checked for a clean status first, and the new lease
+starts from its current `HEAD`; the old `worktree` path is not reused as a mutable session workspace.
+Planner and Reviewer leases use read-only mode, while only an approved Implementer receives
+edit-worktree mode. The adapter still repeats containment and clean-worktree checks.
+
+A clean lease is removed after success, cancellation, failure, or lease-loss cleanup. A dirty lease is
+never force-deleted: it is moved into `allowedRoot/quarantine` and remains available for review. A
+small local lease sidecar records the session owner and state; on worker startup, stale managed leases
+are reclaimed. Clean abandoned leases are removed, and dirty ones are quarantined. This prevents clean
+orphan accumulation while preserving meaningful implementation work. Do not manually delete a
+quarantine until its diff has been reviewed.
+
+The canonical source checkout must remain clean and current. If it is not, the worker records a
+bounded `WorktreeNotClean` preflight failure and does not launch Claude. A mapping without
+`projectPath` retains the legacy static read-only behavior; supply `projectPath` for automatic
+per-session isolation and for any edit-worktree mapping.
+
+## Diagnosing a failed session
+
+A failed worker session now carries a structured diagnostic: adapter category, adapter exit code,
+whether the provider was launched, provider exit code when reported, and a canonical bounded message.
+The task detail/MCP read shows this under the failed session, and the task reason distinguishes adapter
+preflight from provider execution. Raw stderr, prompts, output, credentials, and filesystem paths are
+not stored or returned. For example, a dirty edit workspace is reported as: `Implementer could not
+start: WorktreeNotClean (adapter exit 5). Provider was not launched.`
+
+If a task is waiting for approval after a Planner session, call Sakura's
+`get_session_handoff_plan` with the `decisionId` from `open_decisions`. It returns the complete stored
+Planner artifact in bounded pages; continue until `hasMore` is false. The artifact contract requires
+Goal and outcome, Scope, Concrete changes, Architecture and approach, Risks and migrations, Non-goals,
+and Acceptance and verification.

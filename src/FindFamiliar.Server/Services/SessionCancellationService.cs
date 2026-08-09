@@ -18,7 +18,8 @@ public sealed record SessionCancellationRequest(
     Guid SessionId,
     string? Reason,
     Guid? ClaimId = null,
-    bool RequireClaimOwnership = false);
+    bool RequireClaimOwnership = false,
+    SessionFailureDiagnostic? Diagnostic = null);
 
 public sealed record SessionCancellationOutcome(
     SessionCancellationStatus Status,
@@ -67,6 +68,12 @@ public sealed class SessionCancellationService(
         {
             return SessionCancellationOutcome.ValidationFailed(
                 new Dictionary<string, string> { ["Reason"] = $"Reason must be {ReasonMaxLength} characters or fewer." });
+        }
+
+        if (!SessionFailureDiagnostic.TryNormalize(request.Diagnostic, out var diagnostic, out var diagnosticError))
+        {
+            return SessionCancellationOutcome.ValidationFailed(
+                new Dictionary<string, string> { ["Diagnostic"] = diagnosticError! });
         }
 
         var session = await dbContext.AgentSessions
@@ -126,6 +133,11 @@ public sealed class SessionCancellationService(
 
         session.Status = AgentSessionStatus.Cancelled;
         session.CompletedUtc = cancelledUtc;
+        session.FailureCategory = diagnostic?.Category;
+        session.FailureAdapterExitCode = diagnostic?.AdapterExitCode;
+        session.FailureProviderLaunched = diagnostic?.ProviderLaunched;
+        session.FailureProviderExitCode = diagnostic?.ProviderExitCode;
+        session.FailureMessage = diagnostic?.Message;
         dbContext.Entry(session).Property(candidate => candidate.Status).OriginalValue = AgentSessionStatus.Cancelled;
         dbContext.Entry(session).Property(candidate => candidate.CompletedUtc).OriginalValue = cancelledUtc;
 
@@ -137,7 +149,7 @@ public sealed class SessionCancellationService(
             SourceSessionId = session.Id,
             Kind = ContextEntryKind.Handoff,
             Title = $"{role} session cancelled",
-            Content = request.Reason.Trim(),
+            Content = diagnostic?.ToCancellationReason(role) ?? request.Reason.Trim(),
             State = ContextEntryState.Active,
             CreatedUtc = cancelledUtc
         });

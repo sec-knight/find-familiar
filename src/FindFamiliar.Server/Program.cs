@@ -255,6 +255,7 @@ builder.Services.Configure<FamiliarIdentityOptions>(
     builder.Configuration.GetSection(FamiliarIdentityOptions.SectionName));
 builder.Services.Configure<FamiliarGatewayOptions>(
     builder.Configuration.GetSection(FamiliarGatewayOptions.SectionName));
+builder.Services.AddScoped<IFamiliarSessionHandoffPlanReader, FamiliarSessionHandoffPlanReader>();
 builder.Services.AddScoped<IFamiliarGateway, FamiliarGateway>();
 
 // The one write an external client can reach, behind its own type so the read gateway above stays

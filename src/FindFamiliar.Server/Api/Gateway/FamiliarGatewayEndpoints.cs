@@ -100,6 +100,21 @@ public static class FamiliarGatewayEndpoints
                 : Results.Ok(detail);
         });
 
+        group.MapGet("/handoffs/{handoffId:guid}", async (
+            Guid handoffId,
+            int? offset,
+            int? maxCharacters,
+            IFamiliarGateway gateway,
+            CancellationToken cancellationToken) =>
+        {
+            var detail = await gateway.GetSessionHandoffPlanAsync(
+                handoffId, offset, maxCharacters, cancellationToken);
+
+            return detail is null
+                ? Results.NotFound(new FamiliarGatewayError("No readable handoff plan has that id."))
+                : Results.Ok(detail);
+        });
+
         // Ordinary project work, in its own group with its own scope. Not in the read group and not in
         // the decision group: three different permissions, three different mappings, so holding one
         // never implies another.

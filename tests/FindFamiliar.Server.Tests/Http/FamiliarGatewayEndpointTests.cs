@@ -338,7 +338,7 @@ public sealed class FamiliarGatewayEndpointTests(FindFamiliarWebApplicationFacto
         var tools = result.GetProperty("tools").EnumerateArray().ToList();
 
         // Twelve: seven reads, and five writes — the decision relay plus ordinary project work.
-        Assert.Equal(14, tools.Count);
+        Assert.Equal(15, tools.Count);
 
         foreach (var tool in tools)
         {

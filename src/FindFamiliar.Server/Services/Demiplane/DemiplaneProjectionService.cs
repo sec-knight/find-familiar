@@ -340,7 +340,8 @@ public sealed class DemiplaneProjectionService(
         if (latestTerminal.Status == AgentSessionStatus.Cancelled)
         {
             var reason = SessionOutcomeClassifier.FindCancellationReason(cancellationEntries, latestTerminal.Id);
-            var category = SessionOutcomeClassifier.ClassifyCancellation(reason);
+            var category = SessionOutcomeClassifier.ClassifyFailure(latestTerminal)
+                ?? SessionOutcomeClassifier.ClassifyCancellation(reason);
 
             if (category is null)
             {
@@ -356,7 +357,7 @@ public sealed class DemiplaneProjectionService(
             return (
                 TaskDisplayState.Failed,
                 category.Value,
-                DescribeFailure(category.Value, latestTerminal.Role),
+                DescribeFailure(category.Value, latestTerminal.Role, latestTerminal),
                 true,
                 reason);
         }
@@ -410,8 +411,16 @@ public sealed class DemiplaneProjectionService(
 
     }
 
-    private static string DescribeFailure(TaskDisplayReasonCode code, AgentSessionRole role) => code switch
+    private static string DescribeFailure(
+        TaskDisplayReasonCode code,
+        AgentSessionRole role,
+        AgentSession session) => code switch
     {
+        TaskDisplayReasonCode.AdapterPreflightFailed =>
+            $"{role} could not start: {session.FailureCategory ?? "adapter preflight failure"}"
+            + $"{(session.FailureAdapterExitCode is { } adapterCode ? $" (adapter exit {adapterCode})" : string.Empty)}. "
+            + "Provider was not launched.",
+
         TaskDisplayReasonCode.ProviderRuntimeLaunchFailed =>
             $"The {role} session could not start: the provider runtime failed to launch.",
 
@@ -419,7 +428,8 @@ public sealed class DemiplaneProjectionService(
             $"The {role} session exceeded its time limit and was stopped.",
 
         TaskDisplayReasonCode.ProviderRequestFailed =>
-            $"The provider request failed during the {role} session. A usage limit would also appear here — the adapter cannot yet tell exhaustion apart from other provider errors.",
+            $"The provider runtime exited non-zero during the {role} session"
+            + $"{(session.FailureProviderExitCode is { } providerCode ? $" (provider exit {providerCode})" : string.Empty)}.",
 
         TaskDisplayReasonCode.ProviderResponseUnusable =>
             $"The provider returned a response the {role} session could not use.",

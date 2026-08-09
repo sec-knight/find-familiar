@@ -29,7 +29,7 @@
       "//mode": "read-only, or edit-worktree to let approved Implementer sessions change files here. Even then only the Implementer writes; Planner and Reviewer stay read-only. edit-worktree needs a clean LINKED git worktree and refuses to start otherwise.",
       "mode": "read-only",
 
-      "//projectPath": "Optional. The canonical checkout this worktree mirrors. When an assignment names an absolute path under it, the runner restates that path relative to the workspace so an Implementer and a Reviewer resolve the same file; without it such a path is flagged as unreachable instead of guessed at. It grants nothing — containment is still decided by allowedRoot.",
+      "//projectPath": "Recommended, and required for automatic per-session worktree isolation: the clean canonical checkout used as the current baseline. Each session receives a fresh detached worktree under allowedRoot; without it, only legacy static read-only execution is available.",
       "projectPath": "/absolute/path/to/canonical-checkout"
     }
   ]

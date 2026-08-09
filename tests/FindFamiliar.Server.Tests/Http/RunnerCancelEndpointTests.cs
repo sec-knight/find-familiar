@@ -40,6 +40,32 @@ public sealed class RunnerCancelEndpointTests(FindFamiliarWebApplicationFactory 
     }
 
     [Fact]
+    public async Task Adapter_failure_diagnostic_is_persisted_without_raw_provider_text()
+    {
+        var (_, task, session) = await SeedStartedSessionAsync(AgentSessionRole.Implementer);
+
+        var response = await PostAsync(
+            $"/api/runner/tasks/{task.Id}/sessions/{session.Id}/cancel",
+            """{"contractVersion":1,"reason":"Runner cancelled: adapter-non-zero-exit.","diagnostic":{"category":"WorktreeNotClean","adapterExitCode":5,"providerLaunched":false,"providerExitCode":null,"message":"adapter: edit mode requires a clean git worktree (Dirty)."}}""");
+
+        Assert.True(response.StatusCode is HttpStatusCode.NoContent or HttpStatusCode.OK);
+
+        using var scope = factory.Services.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<FamiliarDbContext>();
+        var refreshed = await dbContext.AgentSessions.SingleAsync(candidate => candidate.Id == session.Id);
+        Assert.Equal("WorktreeNotClean", refreshed.FailureCategory);
+        Assert.Equal(5, refreshed.FailureAdapterExitCode);
+        Assert.False(refreshed.FailureProviderLaunched);
+        Assert.Equal(
+            "Implementer could not start: WorktreeNotClean (adapter exit 5). Provider was not launched.",
+            await dbContext.ContextEntries
+                .Where(entry => entry.SourceSessionId == session.Id && entry.Kind == ContextEntryKind.Handoff)
+                .Select(entry => entry.Content)
+                .SingleAsync());
+        Assert.DoesNotContain("clean git worktree", refreshed.FailureMessage!, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public async Task Cancellation_does_not_accept_provenance_fields()
     {
         // The cancel contract has only ContractVersion and Reason — there is no project/task/

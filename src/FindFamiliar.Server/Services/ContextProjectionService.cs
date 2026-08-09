@@ -57,7 +57,12 @@ public sealed class ContextProjectionService(FamiliarDbContext dbContext) : ICon
                 session.Status,
                 session.ContextRevisionRead,
                 session.StartedUtc,
-                session.CompletedUtc))
+                session.CompletedUtc,
+                session.FailureCategory,
+                session.FailureAdapterExitCode,
+                session.FailureProviderLaunched,
+                session.FailureProviderExitCode,
+                session.FailureMessage))
             .ToListAsync(cancellationToken);
 
         var projectEntries = entries

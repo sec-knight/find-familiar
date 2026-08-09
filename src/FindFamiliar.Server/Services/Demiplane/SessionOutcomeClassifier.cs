@@ -23,6 +23,17 @@ public static class SessionOutcomeClassifier
     /// Maps a cancellation reason to a failure category, or null when it was not machine-recorded —
     /// which means a human cancelled it deliberately.
     /// </summary>
+    public static TaskDisplayReasonCode? ClassifyFailure(AgentSession session) => session.FailureCategory switch
+    {
+        "ConfigurationInvalid" or "InvocationInvalid" or "WorktreeRejected" or "WorktreeNotClean"
+            when session.FailureProviderLaunched == false => TaskDisplayReasonCode.AdapterPreflightFailed,
+        "RuntimeLaunchFailed" => TaskDisplayReasonCode.ProviderRuntimeLaunchFailed,
+        "RuntimeTimeout" => TaskDisplayReasonCode.ProviderRunTimedOut,
+        "RuntimeNonZeroExit" => TaskDisplayReasonCode.ProviderRequestFailed,
+        "RuntimeOutputInvalid" or "PermissionDenialReported" => TaskDisplayReasonCode.ProviderResponseUnusable,
+        _ => null
+    };
+
     public static TaskDisplayReasonCode? ClassifyCancellation(string? reason)
     {
         if (string.IsNullOrWhiteSpace(reason))

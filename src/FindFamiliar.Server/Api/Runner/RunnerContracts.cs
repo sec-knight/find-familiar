@@ -42,7 +42,18 @@ public sealed record RunnerResultRequest(
     Guid? ClaimId = null);
 
 /// <summary>Posted to the cancel endpoint. Same route-authoritative-identity rule as the result contract.</summary>
-public sealed record RunnerCancelRequest(int ContractVersion, string? Reason, Guid? ClaimId = null);
+public sealed record RunnerCancelRequest(
+    int ContractVersion,
+    string? Reason,
+    Guid? ClaimId = null,
+    RunnerFailureDiagnostic? Diagnostic = null);
+
+public sealed record RunnerFailureDiagnostic(
+    string? Category,
+    int? AdapterExitCode,
+    bool? ProviderLaunched,
+    int? ProviderExitCode,
+    string? Message);
 
 /// <summary>
 /// Posted by a worker to announce availability. Carries no repository path, adapter path, or other

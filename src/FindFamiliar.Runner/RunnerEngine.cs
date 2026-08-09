@@ -98,11 +98,14 @@ public sealed class RunnerEngine(HttpClient httpClient, AdapterProcessExecutor a
             cancellationToken,
             environmentOverrides: request.AdapterEnvironment);
 
-        var failureReason = ClassifyAdapterFailure(execution, out var adapterResult);
-        if (failureReason is not null)
+        var failure = ClassifyAdapterFailure(execution, out var adapterResult);
+        if (failure is not null)
         {
-            diagnostics.WriteLine($"runner: adapter failure ({failureReason}). Requesting durable cancellation.");
-            var cancelled = await CancelDurablyAsync(request, failureReason, cancellationToken);
+            diagnostics.WriteLine(
+                $"runner: adapter failure ({failure.CancellationCategory}, adapter={failure.Diagnostic.Category}, "
+                + $"provider-launched={failure.Diagnostic.ProviderLaunched?.ToString() ?? "unknown"}). "
+                + "Requesting durable cancellation.");
+            var cancelled = await CancelDurablyAsync(request, failure, cancellationToken);
             return cancelled ? RunnerExitCode.CancelledAfterAdapterFailure : RunnerExitCode.CancellationFailed;
         }
 
@@ -148,48 +151,135 @@ public sealed class RunnerEngine(HttpClient httpClient, AdapterProcessExecutor a
             && assignment.AssignmentMarkdown.Length <= RunnerProtocol.MaxAssignmentMarkdownLength;
     }
 
-    private static string? ClassifyAdapterFailure(AdapterExecutionResult execution, out AdapterResult? adapterResult)
+    private static AdapterFailureClassification? ClassifyAdapterFailure(
+        AdapterExecutionResult execution,
+        out AdapterResult? adapterResult)
     {
         adapterResult = null;
 
         if (execution.LaunchFailed)
         {
-            return "adapter-launch-failed";
+            return Failure(
+                "adapter-launch-failed",
+                "RunnerLaunchFailed",
+                null,
+                providerLaunched: null,
+                providerExitCode: null,
+                "The adapter process could not be launched.");
         }
 
         if (execution.TimedOut)
         {
-            return "adapter-timeout";
+            return Failure(
+                "adapter-timeout",
+                "RunnerTimeout",
+                null,
+                providerLaunched: null,
+                providerExitCode: null,
+                "The adapter exceeded its timeout and was terminated.");
         }
 
         if (execution.ExitCode != 0)
         {
-            return "adapter-non-zero-exit";
+            if (RunnerProtocol.TryParseAdapterDiagnostic(execution.StderrBytes, out var parsed) && parsed is not null)
+            {
+                return new AdapterFailureClassification(
+                    "adapter-non-zero-exit",
+                    new RunnerFailureDiagnostic(
+                        parsed.Category,
+                        parsed.AdapterExitCode,
+                        parsed.ProviderLaunched,
+                        parsed.ProviderExitCode,
+                        parsed.Message));
+            }
+
+            return Failure(
+                "adapter-non-zero-exit",
+                CategoryForExitCode(execution.ExitCode),
+                execution.ExitCode,
+                ProviderLaunchedForExitCode(execution.ExitCode),
+                null,
+                "The adapter exited with a non-zero status.");
         }
 
         if (execution.StdoutOversized)
         {
-            return "adapter-output-oversized";
+            return Failure(
+                "adapter-output-oversized",
+                "RuntimeOutputInvalid",
+                9,
+                providerLaunched: true,
+                providerExitCode: null,
+                "The adapter result exceeded the bounded output limit.");
         }
 
-        AdapterResult? parsed;
+        AdapterResult? parsedResult;
         try
         {
-            parsed = ParseSingleJsonDocument<AdapterResult>(execution.StdoutBytes);
+            parsedResult = ParseSingleJsonDocument<AdapterResult>(execution.StdoutBytes);
         }
         catch (JsonException)
         {
-            return "adapter-output-malformed";
+            return Failure(
+                "adapter-output-malformed",
+                "RuntimeOutputInvalid",
+                9,
+                providerLaunched: true,
+                providerExitCode: null,
+                "The adapter result was not one valid JSON document.");
         }
 
-        if (parsed is null || !IsAdapterResultValid(parsed))
+        if (parsedResult is null || !IsAdapterResultValid(parsedResult))
         {
-            return "adapter-output-invalid";
+            return Failure(
+                "adapter-output-invalid",
+                "RuntimeOutputInvalid",
+                9,
+                providerLaunched: true,
+                providerExitCode: null,
+                "The adapter result failed protocol validation.");
         }
 
-        adapterResult = parsed;
+        adapterResult = parsedResult;
         return null;
     }
+
+    private static AdapterFailureClassification Failure(
+        string cancellationCategory,
+        string category,
+        int? adapterExitCode,
+        bool? providerLaunched,
+        int? providerExitCode,
+        string message) =>
+        new(
+            cancellationCategory,
+            new RunnerFailureDiagnostic(
+                category, adapterExitCode, providerLaunched, providerExitCode, message));
+
+    private static string CategoryForExitCode(int? exitCode) => exitCode switch
+    {
+        2 => "ConfigurationInvalid",
+        3 => "InvocationInvalid",
+        4 => "WorktreeRejected",
+        5 => "WorktreeNotClean",
+        6 => "RuntimeLaunchFailed",
+        7 => "RuntimeTimeout",
+        8 => "RuntimeNonZeroExit",
+        9 => "RuntimeOutputInvalid",
+        10 => "PermissionDenialReported",
+        _ => "AdapterNonZeroExit"
+    };
+
+    private static bool? ProviderLaunchedForExitCode(int? exitCode) => exitCode switch
+    {
+        >= 7 and <= 10 => true,
+        2 or 3 or 4 or 5 or 6 => false,
+        _ => null
+    };
+
+    private sealed record AdapterFailureClassification(
+        string CancellationCategory,
+        RunnerFailureDiagnostic Diagnostic);
 
     private static bool IsAdapterResultValid(AdapterResult result)
     {
@@ -230,6 +320,18 @@ public sealed class RunnerEngine(HttpClient httpClient, AdapterProcessExecutor a
     }
 
     private static bool IsJsonWhitespace(byte value) => value is 0x20 or 0x09 or 0x0A or 0x0D;
+
+    public async Task<RunnerExitCode> CancelBeforeAdapterFailureAsync(
+        RunnerExecutionRequest request,
+        RunnerFailureDiagnostic diagnostic,
+        CancellationToken cancellationToken = default)
+    {
+        var failure = new AdapterFailureClassification(
+            "adapter-non-zero-exit",
+            diagnostic);
+        var cancelled = await CancelDurablyAsync(request, failure, cancellationToken);
+        return cancelled ? RunnerExitCode.CancelledAfterAdapterFailure : RunnerExitCode.CancellationFailed;
+    }
 
     private async Task<RunnerExitCode> SubmitResultAsync(
         RunnerExecutionRequest request,
@@ -276,7 +378,7 @@ public sealed class RunnerEngine(HttpClient httpClient, AdapterProcessExecutor a
 
     private async Task<bool> CancelDurablyAsync(
         RunnerExecutionRequest request,
-        string reasonCategory,
+        AdapterFailureClassification failure,
         CancellationToken cancellationToken)
     {
         try
@@ -288,8 +390,9 @@ public sealed class RunnerEngine(HttpClient httpClient, AdapterProcessExecutor a
                 Content = JsonContent.Create(
                     new CancelRequest(
                         RunnerProtocol.ContractVersion,
-                        $"Runner cancelled: {reasonCategory}.",
-                        request.ClaimId),
+                        $"Runner cancelled: {failure.CancellationCategory}.",
+                        request.ClaimId,
+                        failure.Diagnostic),
                     options: JsonOptions)
             };
             httpRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", request.FamiliarToken);
@@ -297,7 +400,7 @@ public sealed class RunnerEngine(HttpClient httpClient, AdapterProcessExecutor a
             using var response = await httpClient.SendAsync(httpRequest, cancellationToken);
             if (response.IsSuccessStatusCode)
             {
-                diagnostics.WriteLine($"runner: durable cancellation recorded ({reasonCategory}).");
+                diagnostics.WriteLine($"runner: durable cancellation recorded ({failure.CancellationCategory}).");
                 return true;
             }
 

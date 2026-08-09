@@ -353,13 +353,22 @@ public sealed class ClaudeAdapterProcessTests
         InitializeGitRepository(worktree.Path);
         await File.WriteAllTextAsync(Path.Combine(worktree.Path, "uncommitted.txt"), "dirty");
 
+        var marker = Path.Combine(worktree.RootPath, "provider-launched.marker");
         var run = await RunAdapterAsync(
             "success",
             worktree,
             ValidInvocationJson(),
+            extraEnvironment: new Dictionary<string, string>
+            {
+                ["FAKE_CLAUDE_LAUNCH_MARKER"] = marker
+            },
             overrideEnvironment: environment => environment[ClaudeAdapterConfiguration.ModeVariable] = "edit-worktree");
 
         Assert.Equal((int)ClaudeAdapterExitCode.WorktreeNotClean, run.ExitCode);
+        Assert.Contains("WorktreeNotClean", run.Stderr, StringComparison.Ordinal);
+        Assert.Contains("\"ProviderLaunched\":false", run.Stderr, StringComparison.Ordinal);
+        Assert.DoesNotContain(worktree.RootPath, run.Stderr, StringComparison.Ordinal);
+        Assert.False(File.Exists(marker), "The provider must not launch after dirty-worktree preflight failure.");
     }
 
     [Fact]

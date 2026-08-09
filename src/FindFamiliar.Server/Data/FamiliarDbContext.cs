@@ -85,6 +85,8 @@ public sealed class FamiliarDbContext(DbContextOptions<FamiliarDbContext> option
             entity.Property(session => session.Role).HasConversion<string>().HasMaxLength(32);
             entity.Property(session => session.Provider).HasMaxLength(120);
             entity.Property(session => session.ExternalSessionReference).HasMaxLength(500);
+            entity.Property(session => session.FailureCategory).HasMaxLength(SessionFailureDiagnostic.CategoryMaxLength);
+            entity.Property(session => session.FailureMessage).HasMaxLength(SessionFailureDiagnostic.MessageMaxLength);
             entity.Property(session => session.Status).HasConversion<string>().HasMaxLength(32).IsConcurrencyToken();
             entity.Property(session => session.ClaimId).IsConcurrencyToken();
             entity.HasIndex(session => new { session.TaskId, session.StartedUtc });

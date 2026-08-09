@@ -276,7 +276,15 @@ public static class RunnerEndpoints
                 sessionId,
                 payload!.Reason,
                 payload.ClaimId,
-                RequireClaimOwnership: true),
+                RequireClaimOwnership: true,
+                Diagnostic: payload.Diagnostic is null
+                    ? null
+                    : new SessionFailureDiagnostic(
+                        payload.Diagnostic.Category ?? string.Empty,
+                        payload.Diagnostic.AdapterExitCode,
+                        payload.Diagnostic.ProviderLaunched,
+                        payload.Diagnostic.ProviderExitCode,
+                        payload.Diagnostic.Message ?? string.Empty)),
             cancellationToken);
 
         return outcome.Status switch

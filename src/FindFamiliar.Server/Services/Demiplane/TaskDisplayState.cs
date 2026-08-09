@@ -101,6 +101,9 @@ public enum TaskDisplayReasonCode
     // runner writes when it records a durable cancellation. They are never inferred from
     // model-authored text.
 
+    /// <summary>The adapter rejected the session before the provider was launched.</summary>
+    AdapterPreflightFailed,
+
     /// <summary>The provider runtime could not be launched.</summary>
     ProviderRuntimeLaunchFailed,
 

@@ -22,7 +22,7 @@ namespace FindFamiliar.Server.Tests.Infrastructure;
 /// after, and an EF <c>SELECT</c> names the new column just as an <c>INSERT</c> does. So both
 /// directions live here.
 ///
-/// Only the two tables that gained columns need this treatment; everything else is still inserted and
+/// Only the tables that gained columns need this treatment; everything else is still inserted and
 /// read through EF, because for those the current model and the historical schema agree. If a future
 /// migration adds a column to another existing table, that table joins this file — which is the
 /// signal, not the inconvenience.
@@ -73,6 +73,34 @@ internal static class LegacyRowSeeder
                 {id}, {projectId}, {taskId}, {sourceSessionId}, {kind.ToString()}, {title}, {content},
                 {state.ToString()}, NULL, {nowUtc});
             """);
+
+    /// <summary>Insert an AgentSession using the schema before WorkerFailureDiagnostics existed.</summary>
+    public static Task InsertAgentSessionAsync(
+        FamiliarDbContext dbContext,
+        AgentSession session) =>
+        dbContext.Database.ExecuteSqlAsync(
+            $"""
+            INSERT INTO "AgentSessions" (
+                "Id", "TaskId", "Role", "Provider", "ExternalSessionReference", "Status",
+                "ContextRevisionRead", "StartedUtc", "CompletedUtc", "ClaimedByWorkerId",
+                "ClaimedUtc", "ClaimExpiresUtc", "ClaimId")
+            VALUES (
+                {session.Id}, {session.TaskId}, {session.Role.ToString()}, {session.Provider},
+                {session.ExternalSessionReference}, {session.Status.ToString()}, {session.ContextRevisionRead},
+                {session.StartedUtc}, {session.CompletedUtc}, {session.ClaimedByWorkerId},
+                {session.ClaimedUtc}, {session.ClaimExpiresUtc}, {session.ClaimId});
+            """);
+
+    /// <summary>Read sessions without naming the later diagnostic columns.</summary>
+    public static Task<List<string>> ReadAgentSessionRowsAsync(FamiliarDbContext dbContext) =>
+        dbContext.Database
+            .SqlQuery<string>(
+                $"""
+                SELECT 'Session ' || "Id" || ' ' || "TaskId" || ' ' || "Role" || ' ' || "Status" || ' '
+                    || "ContextRevisionRead" || ' ' || "StartedUtc" || ' ' || COALESCE("CompletedUtc", '-') AS "Value"
+                FROM "AgentSessions" ORDER BY "Id";
+                """)
+            .ToListAsync();
 
     /// <summary>
     /// Every project row, rendered as ordered text, reading only the columns that predate Sprint 12.

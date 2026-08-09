@@ -83,7 +83,10 @@ public static class SessionAssignmentMarkdownRenderer
         """
         Inspect the repository and the context above. Do not edit any files. Design the smallest change that
         achieves the requested outcome, respecting every constraint and decision already recorded as durable
-        context. Return a concrete Plan artifact.
+        context. Return one concrete, approval-ready Plan artifact with these exact sections: Goal and outcome;
+        Scope; Concrete changes; Architecture and approach; Risks and migrations; Non-goals; Acceptance and
+        verification. If a section does not apply, say so explicitly. Do not include hidden reasoning, provider
+        transcripts, credentials, or raw tool chatter.
         """;
 
     private const string ImplementerBody =

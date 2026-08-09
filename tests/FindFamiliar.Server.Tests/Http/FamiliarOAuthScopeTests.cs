@@ -369,7 +369,7 @@ public sealed class FamiliarOAuthScopeTests(FindFamiliarWebApplicationFactory fa
         Assert.Equal(
             [
                 "cancel_familiar_session", "create_familiar_project", "create_familiar_task",
-                "familiar_manifest", "get_project_context", "get_task_detail",
+                "familiar_manifest", "get_project_context", "get_session_handoff_plan", "get_task_detail",
                 "inspect_familiar_runtime", "list_familiar_projects", "open_decisions",
                 "record_familiar_context", "search_familiar_context", "set_familiar_task_status",
                 "start_familiar_session", "submit_familiar_decision"
@@ -384,8 +384,8 @@ public sealed class FamiliarOAuthScopeTests(FindFamiliarWebApplicationFactory fa
             Assert.DoesNotContain(names, name => name.Contains(forbidden, StringComparison.OrdinalIgnoreCase));
         }
 
-        // Seven reads; the other five are writes, each behind its own scope.
-        Assert.Equal(7, System.Text.RegularExpressions.Regex.Matches(body, "\"readOnlyHint\":true").Count);
+        // Eight reads; the other five are writes, each behind its own scope.
+        Assert.Equal(8, System.Text.RegularExpressions.Regex.Matches(body, "\"readOnlyHint\":true").Count);
         Assert.Single(names, name => name == "submit_familiar_decision");
     }
 

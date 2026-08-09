@@ -124,3 +124,15 @@ non-secret strings — they never contain prompts, model output, credentials, or
   Claude.
 - Claude's own credentials stay on this machine and are never sent to Familiar.
 - Never commit local configuration, tokens, worktree paths, or session output.
+
+## Failure diagnostics
+
+The adapter emits a fixed machine-readable failure envelope in addition to its human stderr line.
+The runner forwards only bounded category and exit metadata to Familiar. It never forwards provider
+stderr, prompts, transcripts, credentials, or paths. Exit `5` is `WorktreeNotClean`: the adapter
+returns before starting Claude, and the durable task detail says that the provider was not launched.
+A provider runtime failure includes the provider launch state and provider exit code when available.
+
+When automatic pickup is enabled, do not repair a dirty session directory in place. The worker owns
+per-session detached worktrees and quarantines dirty ones after the run. Inspect the quarantine diff,
+then perform any cleanup deliberately.

@@ -51,4 +51,9 @@ public sealed record AgentSessionDocument(
     AgentSessionStatus Status,
     int ContextRevisionRead,
     DateTime StartedUtc,
-    DateTime? CompletedUtc);
+    DateTime? CompletedUtc,
+    string? FailureCategory = null,
+    int? FailureAdapterExitCode = null,
+    bool? FailureProviderLaunched = null,
+    int? FailureProviderExitCode = null,
+    string? FailureMessage = null);

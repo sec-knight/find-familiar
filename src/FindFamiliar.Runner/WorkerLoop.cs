@@ -33,13 +33,16 @@ public sealed class WorkerLoop(
     RunnerEngine engine,
     WorkerConfiguration configuration,
     TextWriter diagnostics,
-    TimeProvider timeProvider)
+    TimeProvider timeProvider,
+    ISessionWorkspaceLifecycle? workspaceLifecycle = null)
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
     private DateTimeOffset _nextHeartbeatUtc = DateTimeOffset.MinValue;
     private Guid? _workerId;
     private bool _workerEnabled;
+    private readonly ISessionWorkspaceLifecycle _workspaceLifecycle =
+        workspaceLifecycle ?? new SessionWorkspaceLifecycle(diagnostics);
 
     public async Task<RunnerExitCode> RunAsync(CancellationToken cancellationToken)
     {
@@ -122,22 +125,55 @@ public sealed class WorkerLoop(
         diagnostics.WriteLine(
             $"worker: claimed session (task={claim.TaskId}, session={claim.SessionId}, role={claim.Role}). Executing.");
 
-        var exitCode = await ExecuteWithMaintenanceAsync(
-            claim,
-            new RunnerExecutionRequest(
-                claim.TaskId,
-                claim.SessionId,
-                configuration.FamiliarToken,
-                configuration.AdapterPath,
-                configuration.AdapterArguments,
-                configuration.AdapterTimeout,
-                claim.RolePrompt,
-                claim.AssignmentMarkdown,
-                claim.Role,
-                mapping.ToAdapterEnvironment(claim.Role),
-                claim.ClaimId,
-                mapping.ToWorkspaceContract(claim.Role)),
-            cancellationToken);
+        var baseRequest = new RunnerExecutionRequest(
+            claim.TaskId,
+            claim.SessionId,
+            configuration.FamiliarToken,
+            configuration.AdapterPath,
+            configuration.AdapterArguments,
+            configuration.AdapterTimeout,
+            claim.RolePrompt,
+            claim.AssignmentMarkdown,
+            claim.Role,
+            mapping.ToAdapterEnvironment(claim.Role),
+            claim.ClaimId,
+            mapping.ToWorkspaceContract(claim.Role));
+
+        SessionWorkspaceLease? workspaceLease = null;
+        RunnerExitCode? exitCode;
+        try
+        {
+            workspaceLease = await _workspaceLifecycle.AcquireAsync(
+                mapping, claim.TaskId, claim.SessionId, claim.Role, cancellationToken);
+
+            var request = baseRequest with
+            {
+                AdapterEnvironment = workspaceLease.Environment,
+                Workspace = workspaceLease.Contract
+            };
+
+            exitCode = await ExecuteWithMaintenanceAsync(claim, request, cancellationToken);
+        }
+        catch (WorkspacePreparationException ex)
+        {
+            diagnostics.WriteLine("worker: session workspace preflight failed; recording durable cancellation.");
+            exitCode = await engine.CancelBeforeAdapterFailureAsync(
+                baseRequest, ex.Diagnostic, cancellationToken);
+        }
+        finally
+        {
+            if (workspaceLease is not null)
+            {
+                try
+                {
+                    await _workspaceLifecycle.ReleaseAsync(workspaceLease, CancellationToken.None);
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
+                {
+                    diagnostics.WriteLine("worker: workspace cleanup failed; the lease was left recoverable for inspection.");
+                }
+            }
+        }
 
         if (exitCode is null)
         {

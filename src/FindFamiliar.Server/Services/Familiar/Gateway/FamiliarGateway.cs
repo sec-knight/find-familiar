@@ -47,6 +47,12 @@ public interface IFamiliarGateway
     /// and the decision it is waiting on if any. Null when no readable task has that id.
     /// </summary>
     Task<FamiliarTaskDetail?> GetTaskDetailAsync(Guid taskId, CancellationToken cancellationToken = default);
+
+    Task<FamiliarSessionHandoffPlan?> GetSessionHandoffPlanAsync(
+        Guid handoffId,
+        int? offset = null,
+        int? maxCharacters = null,
+        CancellationToken cancellationToken = default);
 }
 
 /// <summary>
@@ -89,7 +95,8 @@ public sealed class FamiliarGateway(
     IProviderCapacityService providers,
     IContextProjectionService taskContext,
     IPendingPlanReader pendingPlans,
-    IOptions<FamiliarIdentityOptions> identity) : IFamiliarGateway
+    IOptions<FamiliarIdentityOptions> identity,
+    IFamiliarSessionHandoffPlanReader? handoffPlans = null) : IFamiliarGateway
 {
     /// <summary>
     /// The most context items one call may return, and the ceiling on what a caller may ask for.
@@ -130,7 +137,8 @@ public sealed class FamiliarGateway(
         "list_familiar_projects",
         "open_decisions",
         "inspect_familiar_runtime",
-        "get_task_detail"
+        "get_task_detail",
+        "get_session_handoff_plan"
     ];
 
     /// <summary>
@@ -548,7 +556,15 @@ public sealed class FamiliarGateway(
                     session.Status.ToString(),
                     session.Provider,
                     session.StartedUtc,
-                    session.CompletedUtc))
+                    session.CompletedUtc,
+                    session.FailureCategory is null
+                        ? null
+                        : new FamiliarSessionFailure(
+                            session.FailureCategory,
+                            session.FailureAdapterExitCode,
+                            session.FailureProviderLaunched,
+                            session.FailureProviderExitCode,
+                            session.FailureMessage ?? "The session failed without a diagnostic message.")))
                 .ToList(),
             records,
             document.TaskEntries.Count - records.Count,
@@ -556,6 +572,73 @@ public sealed class FamiliarGateway(
             document.Task.CreatedUtc,
             document.Task.UpdatedUtc,
             DiscloseTask(records.Count, document.TaskEntries.Count - records.Count, awaiting is not null));
+    }
+
+    public async Task<FamiliarSessionHandoffPlan?> GetSessionHandoffPlanAsync(
+        Guid handoffId,
+        int? offset = null,
+        int? maxCharacters = null,
+        CancellationToken cancellationToken = default)
+    {
+        if (handoffPlans is null)
+        {
+            return null;
+        }
+
+        var source = await handoffPlans.ReadAsync(handoffId, cancellationToken);
+        if (source is null)
+        {
+            return null;
+        }
+
+        var brief = await briefs.GetBriefAsync(source.ProjectId, cancellationToken);
+        var project = brief.Projects.SingleOrDefault(candidate => candidate.ProjectId == source.ProjectId);
+        if (project is null)
+        {
+            return null;
+        }
+
+        var document = await taskContext.GetTaskContextAsync(source.TaskId, cancellationToken);
+        var artifact = document?.TaskEntries
+            .Where(entry => !entry.IsSensitive
+                && entry.Kind == (source.SourceRole == AgentSessionRole.Planner
+                    ? ContextEntryKind.Plan
+                    : source.SourceRole == AgentSessionRole.Implementer
+                        ? ContextEntryKind.Implementation
+                        : ContextEntryKind.Review)
+                && entry.SourceSessionId == source.SourceSessionId)
+            .OrderByDescending(entry => entry.CreatedUtc)
+            .FirstOrDefault();
+
+        if (document is null || artifact is null)
+        {
+            return null;
+        }
+
+        var completeContent = artifact.Content;
+        var start = Math.Clamp(offset ?? 0, 0, completeContent.Length);
+        var length = Math.Clamp(maxCharacters ?? FamiliarSessionHandoffPlanDefaults.DefaultPageLength, 1, FamiliarSessionHandoffPlanDefaults.MaxPageLength);
+        var page = completeContent.Substring(start, Math.Min(length, completeContent.Length - start));
+
+        return new FamiliarSessionHandoffPlan(
+            source.HandoffId,
+            source.TaskId,
+            source.ProjectId,
+            project.Name,
+            document.Task.Title,
+            $"Complete the task: {document.Task.Title}",
+            document.Task.RequestedOutcome,
+            source.SourceRole.ToString(),
+            source.ProposedRole.ToString(),
+            source.Kind.ToString(),
+            source.Status.ToString(),
+            artifact.Title,
+            page,
+            start,
+            completeContent.Length,
+            start + page.Length < completeContent.Length,
+            $"Showing a complete bounded Planner artifact page ({start + 1}-{start + page.Length} of {completeContent.Length} characters). "
+                + "Use the returned offset and page length to inspect the remainder. Raw provider input and output are never returned.");
     }
 
     /// <summary>

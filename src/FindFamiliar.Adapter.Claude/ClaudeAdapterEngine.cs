@@ -26,33 +26,49 @@ public sealed class ClaudeAdapterEngine(AdapterProcessExecutor processExecutor, 
         var parseOutcome = InvocationValidator.TryParse(stdin, out var invocation);
         if (parseOutcome != InvocationParseOutcome.Valid)
         {
-            diagnostics.WriteLine($"adapter: invocation rejected ({Describe(parseOutcome)}).");
-            return ClaudeAdapterExitCode.InvocationInvalid;
+            return Fail(
+                ClaudeAdapterExitCode.InvocationInvalid,
+                $"adapter: invocation rejected ({Describe(parseOutcome)}).",
+                "InvocationInvalid",
+                providerLaunched: false);
         }
 
         var configuration = ClaudeAdapterConfiguration.TryParse(environment, diagnostics);
         if (configuration is null)
         {
-            return ClaudeAdapterExitCode.ConfigurationInvalid;
+            return Fail(
+                ClaudeAdapterExitCode.ConfigurationInvalid,
+                "adapter: configuration was rejected.",
+                "ConfigurationInvalid",
+                providerLaunched: false);
         }
 
         var pathOutcome = WorktreePathPolicy.Evaluate(configuration.AllowedRoot, configuration.Worktree);
         if (pathOutcome != PathPolicyOutcome.Allowed)
         {
-            diagnostics.WriteLine($"adapter: worktree rejected ({pathOutcome}).");
-            return ClaudeAdapterExitCode.WorktreeRejected;
+            return Fail(
+                ClaudeAdapterExitCode.WorktreeRejected,
+                $"adapter: worktree rejected ({pathOutcome}).",
+                "WorktreeRejected",
+                providerLaunched: false);
         }
 
         if (!File.Exists(configuration.RuntimePath))
         {
-            diagnostics.WriteLine("adapter: configured Claude runtime does not exist.");
-            return ClaudeAdapterExitCode.ConfigurationInvalid;
+            return Fail(
+                ClaudeAdapterExitCode.ConfigurationInvalid,
+                "adapter: configured Claude runtime does not exist.",
+                "ConfigurationInvalid",
+                providerLaunched: false);
         }
 
         if (configuration.Entrypoint is not null && !File.Exists(configuration.Entrypoint))
         {
-            diagnostics.WriteLine("adapter: configured Claude entrypoint does not exist.");
-            return ClaudeAdapterExitCode.ConfigurationInvalid;
+            return Fail(
+                ClaudeAdapterExitCode.ConfigurationInvalid,
+                "adapter: configured Claude entrypoint does not exist.",
+                "ConfigurationInvalid",
+                providerLaunched: false);
         }
 
         if (configuration.Mode == ClaudeAdapterMode.EditWorktree)
@@ -60,8 +76,11 @@ public sealed class ClaudeAdapterEngine(AdapterProcessExecutor processExecutor, 
             var cleanliness = GitWorktreeInspector.Inspect(configuration.Worktree, TimeSpan.FromSeconds(30));
             if (cleanliness != WorktreeCleanliness.Clean)
             {
-                diagnostics.WriteLine($"adapter: edit mode requires a clean git worktree ({cleanliness}).");
-                return ClaudeAdapterExitCode.WorktreeNotClean;
+                return Fail(
+                    ClaudeAdapterExitCode.WorktreeNotClean,
+                    $"adapter: edit mode requires a clean git worktree ({cleanliness}).",
+                    "WorktreeNotClean",
+                    providerLaunched: false);
             }
         }
 
@@ -78,26 +97,39 @@ public sealed class ClaudeAdapterEngine(AdapterProcessExecutor processExecutor, 
 
         if (execution.LaunchFailed)
         {
-            diagnostics.WriteLine("adapter: Claude runtime failed to launch.");
-            return ClaudeAdapterExitCode.RuntimeLaunchFailed;
+            return Fail(
+                ClaudeAdapterExitCode.RuntimeLaunchFailed,
+                "adapter: Claude runtime failed to launch.",
+                "RuntimeLaunchFailed",
+                providerLaunched: false);
         }
 
         if (execution.TimedOut)
         {
-            diagnostics.WriteLine("adapter: Claude runtime timed out; process tree terminated.");
-            return ClaudeAdapterExitCode.RuntimeTimeout;
+            return Fail(
+                ClaudeAdapterExitCode.RuntimeTimeout,
+                "adapter: Claude runtime timed out; process tree terminated.",
+                "RuntimeTimeout",
+                providerLaunched: true);
         }
 
         if (execution.ExitCode != 0)
         {
-            diagnostics.WriteLine("adapter: Claude runtime exited non-zero.");
-            return ClaudeAdapterExitCode.RuntimeNonZeroExit;
+            return Fail(
+                ClaudeAdapterExitCode.RuntimeNonZeroExit,
+                "adapter: Claude runtime exited non-zero.",
+                "RuntimeNonZeroExit",
+                providerLaunched: true,
+                providerExitCode: execution.ExitCode);
         }
 
         if (execution.StdoutOversized)
         {
-            diagnostics.WriteLine("adapter: Claude runtime output exceeded the bounded read limit.");
-            return ClaudeAdapterExitCode.RuntimeOutputInvalid;
+            return Fail(
+                ClaudeAdapterExitCode.RuntimeOutputInvalid,
+                "adapter: Claude runtime output exceeded the bounded read limit.",
+                "RuntimeOutputInvalid",
+                providerLaunched: true);
         }
 
         var claudeStdout = System.Text.Encoding.UTF8.GetString(execution.StdoutBytes);
@@ -105,18 +137,37 @@ public sealed class ClaudeAdapterEngine(AdapterProcessExecutor processExecutor, 
 
         if (resultOutcome == ClaudeResultOutcome.PermissionDenied)
         {
-            diagnostics.WriteLine("adapter: Claude reported a blocked tool attempt; treating as policy failure.");
-            return ClaudeAdapterExitCode.PermissionDenialReported;
+            return Fail(
+                ClaudeAdapterExitCode.PermissionDenialReported,
+                "adapter: Claude reported a blocked tool attempt; treating as policy failure.",
+                "PermissionDenialReported",
+                providerLaunched: true);
         }
 
         if (resultOutcome != ClaudeResultOutcome.Valid)
         {
-            diagnostics.WriteLine($"adapter: Claude output rejected ({resultOutcome}).");
-            return ClaudeAdapterExitCode.RuntimeOutputInvalid;
+            return Fail(
+                ClaudeAdapterExitCode.RuntimeOutputInvalid,
+                $"adapter: Claude output rejected ({resultOutcome}).",
+                "RuntimeOutputInvalid",
+                providerLaunched: true);
         }
 
         await stdout.WriteAsync(JsonSerializer.Serialize(adapterResult, JsonOptions));
         return ClaudeAdapterExitCode.Success;
+    }
+
+    private ClaudeAdapterExitCode Fail(
+        ClaudeAdapterExitCode exitCode,
+        string message,
+        string category,
+        bool providerLaunched,
+        int? providerExitCode = null)
+    {
+        diagnostics.WriteLine(message);
+        diagnostics.WriteLine(RunnerProtocol.FormatAdapterDiagnostic(
+            category, (int)exitCode, providerLaunched, providerExitCode, message));
+        return exitCode;
     }
 
     private static string Describe(InvocationParseOutcome outcome) => outcome switch

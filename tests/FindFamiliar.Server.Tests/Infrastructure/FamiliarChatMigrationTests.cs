@@ -174,8 +174,7 @@ public sealed class FamiliarChatMigrationTests
         rows.AddRange(await LegacyRowSeeder.ReadProjectRowsAsync(dbContext));
         rows.AddRange((await dbContext.Tasks.AsNoTracking().ToListAsync())
             .Select(task => $"Task {task.Id} {task.ProjectId} {task.Title} {task.Status} {task.RequestedOutcome} {task.CreatedUtc:O} {task.UpdatedUtc:O}"));
-        rows.AddRange((await dbContext.AgentSessions.AsNoTracking().ToListAsync())
-            .Select(session => $"Session {session.Id} {session.TaskId} {session.Role} {session.Status} {session.ContextRevisionRead} {session.StartedUtc:O} {session.CompletedUtc:O}"));
+        rows.AddRange(await LegacyRowSeeder.ReadAgentSessionRowsAsync(dbContext));
         rows.AddRange(await LegacyRowSeeder.ReadContextEntryRowsAsync(dbContext));
         rows.AddRange((await dbContext.Workers.AsNoTracking().ToListAsync())
             .Select(worker => $"Worker {worker.Id} {worker.WorkerKey} {worker.DisplayName} {worker.Capabilities} {worker.Enabled} {worker.RegisteredUtc:O}"));
@@ -294,7 +293,10 @@ public sealed class FamiliarChatMigrationTests
             UpdatedUtc = now
         };
 
-        dbContext.AddRange(task, session, worker, conversation, message, evidence, proposal);
+        dbContext.Tasks.Add(task);
+        await dbContext.SaveChangesAsync();
+        await LegacyRowSeeder.InsertAgentSessionAsync(dbContext, session);
+        dbContext.AddRange(worker, conversation, message, evidence, proposal);
         await dbContext.SaveChangesAsync();
 
         // Same reason as the project above: ContextEntries gained a column after this baseline.

@@ -109,6 +109,12 @@ public sealed class ClaudeAdapterEndToEndTests(FindFamiliarWebApplicationFactory
         var entries = await dbContext.ContextEntries.Where(e => e.SourceSessionId == session.Id).ToListAsync();
         Assert.Single(entries);
         Assert.Equal(ContextEntryKind.Handoff, entries[0].Kind);
+
+        Assert.Equal("RuntimeOutputInvalid", refreshedSession.FailureCategory);
+        Assert.Equal(9, refreshedSession.FailureAdapterExitCode);
+        Assert.True(refreshedSession.FailureProviderLaunched);
+        Assert.Null(refreshedSession.FailureProviderExitCode);
+        Assert.DoesNotContain("fake-claude", refreshedSession.FailureMessage!, StringComparison.OrdinalIgnoreCase);
     }
 
     private async Task<RunnerExitCode> RunEngineAsync(Guid taskId, Guid sessionId, TimeSpan timeout)

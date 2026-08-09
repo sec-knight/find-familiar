@@ -60,8 +60,10 @@ public sealed class SessionHandoffMigrationTests
             var loser = NewStartedSession(task.Id, AgentSessionRole.Planner, DateTime.UtcNow.AddHours(-2));
             var survivor = NewStartedSession(task.Id, AgentSessionRole.Implementer, DateTime.UtcNow.AddHours(-1));
 
-            before.AddRange(task, loser, survivor);
+            before.Tasks.Add(task);
             await before.SaveChangesAsync();
+            await LegacyRowSeeder.InsertAgentSessionAsync(before, loser);
+            await LegacyRowSeeder.InsertAgentSessionAsync(before, survivor);
 
             projectId = seededProjectId;
             taskId = task.Id;
@@ -177,8 +179,10 @@ public sealed class SessionHandoffMigrationTests
 
             var started = NewStartedSession(task.Id, AgentSessionRole.Implementer, DateTime.UtcNow.AddHours(-1));
 
-            before.AddRange(task, completed, started);
+            before.Tasks.Add(task);
             await before.SaveChangesAsync();
+            await LegacyRowSeeder.InsertAgentSessionAsync(before, completed);
+            await LegacyRowSeeder.InsertAgentSessionAsync(before, started);
 
             taskId = task.Id;
             startedId = started.Id;

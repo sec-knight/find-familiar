@@ -334,7 +334,15 @@ public sealed record FamiliarTaskSession(
     string Status,
     string? Provider,
     DateTime StartedUtc,
-    DateTime? CompletedUtc);
+    DateTime? CompletedUtc,
+    FamiliarSessionFailure? Failure = null);
+
+public sealed record FamiliarSessionFailure(
+    string Category,
+    int? AdapterExitCode,
+    bool? ProviderLaunched,
+    int? ProviderExitCode,
+    string Message);
 
 /// <summary>
 /// A record produced about this task, as an external client is shown it.
@@ -349,6 +357,35 @@ public sealed record FamiliarTaskRecord(
     string Excerpt,
     DateTime RecordedUtc,
     Guid? SourceSessionId);
+
+/// <summary>
+/// A complete, bounded human-relevant Planner artifact for a session handoff. The content is paged
+/// so the whole stored artifact can be inspected without ever returning raw provider I/O.
+/// </summary>
+public static class FamiliarSessionHandoffPlanDefaults
+{
+    public const int DefaultPageLength = 4_000;
+    public const int MaxPageLength = 4_000;
+}
+
+public sealed record FamiliarSessionHandoffPlan(
+    Guid HandoffId,
+    Guid TaskId,
+    Guid ProjectId,
+    string ProjectName,
+    string TaskTitle,
+    string Goal,
+    string RequestedOutcome,
+    string SourceRole,
+    string? ProposedRole,
+    string? ProposedKind,
+    string HandoffStatus,
+    string ArtifactTitle,
+    string Content,
+    int Offset,
+    int TotalLength,
+    bool HasMore,
+    string Disclosure);
 
 /// <summary>
 /// Everything the Demiplane's task page shows about one task, for a caller entitled to see it.

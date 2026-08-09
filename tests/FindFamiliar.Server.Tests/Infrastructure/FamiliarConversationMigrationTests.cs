@@ -184,8 +184,7 @@ public sealed class FamiliarConversationMigrationTests
         rows.AddRange(await LegacyRowSeeder.ReadProjectRowsAsync(dbContext));
         rows.AddRange((await dbContext.Tasks.AsNoTracking().ToListAsync())
             .Select(task => $"Task {task.Id} {task.ProjectId} {task.Title} {task.Status} {task.RequestedOutcome} {task.CreatedUtc:O} {task.UpdatedUtc:O}"));
-        rows.AddRange((await dbContext.AgentSessions.AsNoTracking().ToListAsync())
-            .Select(session => $"Session {session.Id} {session.TaskId} {session.Role} {session.Status} {session.ContextRevisionRead} {session.StartedUtc:O} {session.CompletedUtc:O}"));
+        rows.AddRange(await LegacyRowSeeder.ReadAgentSessionRowsAsync(dbContext));
         rows.AddRange((await dbContext.SessionHandoffs.AsNoTracking().ToListAsync())
             .Select(handoff => $"Handoff {handoff.Id} {handoff.TaskId} {handoff.SourceSessionId} {handoff.Status} {handoff.Kind} {handoff.ProposedRole} {handoff.ConcurrencyToken} {handoff.CreatedSessionId}"));
         rows.AddRange(await LegacyRowSeeder.ReadContextEntryRowsAsync(dbContext));
@@ -307,7 +306,10 @@ public sealed class FamiliarConversationMigrationTests
             UpdatedUtc = now
         };
 
-        dbContext.AddRange(task, session, handoff, worker, conversation, message, proposal);
+        dbContext.Tasks.Add(task);
+        await dbContext.SaveChangesAsync();
+        await LegacyRowSeeder.InsertAgentSessionAsync(dbContext, session);
+        dbContext.AddRange(handoff, worker, conversation, message, proposal);
         await dbContext.SaveChangesAsync();
 
         // Same reason as the project above: ContextEntries gained a column after this baseline.

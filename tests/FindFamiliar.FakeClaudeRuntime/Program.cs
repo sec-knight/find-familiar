@@ -23,6 +23,11 @@ using System.Text.Json;
 Console.InputEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
 
 var mode = Environment.GetEnvironmentVariable("FAKE_CLAUDE_MODE") ?? "success";
+var launchMarker = Environment.GetEnvironmentVariable("FAKE_CLAUDE_LAUNCH_MARKER");
+if (!string.IsNullOrWhiteSpace(launchMarker))
+{
+    await File.WriteAllTextAsync(launchMarker, "launched");
+}
 
 if (mode == "timeout")
 {
