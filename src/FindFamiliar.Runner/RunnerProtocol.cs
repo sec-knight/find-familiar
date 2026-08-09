@@ -17,8 +17,30 @@ public static class RunnerProtocol
     public const int MaxSummaryLength = 4_000;
     public const int MaxArtifactTitleLength = 200;
 
-    /// <summary>Maximum bytes read from the adapter's stdout/stderr before treating output as oversized.</summary>
-    public const int MaxAdapterOutputBytes = 256 * 1024;
+    /// <summary>
+    /// The ceiling on the complete role artifact, which is retained whole rather than excerpted.
+    ///
+    /// <b>Why this is not <see cref="MaxLongFieldLength"/>.</b> That bound exists so a record stays
+    /// cheap to display and to carry in a retrieval budget, and it is the right bound for an excerpt.
+    /// It is the wrong bound for the artifact a human approves: a Planner proposal cut at 12,000
+    /// characters is not a shorter plan, it is a plan whose remainder nobody has read. The excerpt is
+    /// still produced and still bounded; this field is what makes it an excerpt *of* something rather
+    /// than the only copy (ADR-0020).
+    ///
+    /// It is bounded too, because unbounded is not a design. An artifact longer than this is retained
+    /// up to the bound and reports its true original length, so a reader is told what it did not get
+    /// instead of being handed a silent cut.
+    /// </summary>
+    public const int MaxCompleteArtifactLength = 200_000;
+
+    /// <summary>
+    /// Maximum bytes read from the adapter's stdout/stderr before treating output as oversized.
+    ///
+    /// Must exceed a result document carrying <see cref="MaxCompleteArtifactLength"/> characters plus
+    /// the bounded fields beside it; at the previous 256 KB a complete Planner artifact made the
+    /// adapter's own output oversized and the session failed instead of reporting.
+    /// </summary>
+    public const int MaxAdapterOutputBytes = 1024 * 1024;
 
     /// <summary>Prefix for the bounded machine-readable adapter failure envelope on stderr.</summary>
     public const string AdapterDiagnosticPrefix = "find-familiar-adapter-diagnostic-v1:";
@@ -89,7 +111,9 @@ public sealed record ResultRequest(
     string Summary,
     string ArtifactTitle,
     string ArtifactContent,
-    Guid? ClaimId = null);
+    Guid? ClaimId = null,
+    string? CompleteArtifactContent = null,
+    int? CompleteArtifactLength = null);
 
 public sealed record CancelRequest(
     int ContractVersion,
@@ -169,10 +193,20 @@ public sealed record AdapterInvocation(
     string RolePrompt,
     string AssignmentMarkdown);
 
-/// <summary>Read from the adapter's stdout. Contains only the result fields the capture service needs.</summary>
+/// <summary>
+/// Read from the adapter's stdout. Contains only the result fields the capture service needs.
+///
+/// <see cref="ArtifactContent"/> is the bounded excerpt. <see cref="CompleteArtifactContent"/> is the
+/// same artifact whole, and <see cref="CompleteArtifactLength"/> is its true length before any bound
+/// was applied — so a reader can tell a complete artifact from a retained prefix of a longer one
+/// without guessing. Both are optional: an adapter built against the older contract omits them, and
+/// the excerpt is then honestly reported as all that was retained.
+/// </summary>
 public sealed record AdapterResult(
     int ContractVersion,
     string RawOutput,
     string Summary,
     string ArtifactTitle,
-    string ArtifactContent);
+    string ArtifactContent,
+    string? CompleteArtifactContent = null,
+    int? CompleteArtifactLength = null);

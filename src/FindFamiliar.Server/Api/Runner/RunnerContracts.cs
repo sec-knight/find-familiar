@@ -11,8 +11,16 @@ public static class RunnerContracts
 {
     public const int ContractVersion = 1;
 
-    /// <summary>Maximum accepted size, in bytes, for a runner result/cancel request body.</summary>
-    public const int MaxRequestBodyBytes = 64 * 1024;
+    /// <summary>
+    /// Maximum accepted size, in bytes, for a runner result/cancel request body.
+    ///
+    /// Sized so a result carrying the complete role artifact fits: 200,000 characters of artifact plus
+    /// the bounded excerpt, summary and prompt fields, plus JSON escaping and multi-byte encoding, with
+    /// room to spare. Raised from 64 KB when the complete artifact began travelling with the result —
+    /// at the old bound a long Planner proposal was refused as oversized rather than stored (ADR-0020).
+    /// Still a bound, and still far below Kestrel's own default.
+    /// </summary>
+    public const int MaxRequestBodyBytes = 1024 * 1024;
 
     /// <summary>Maximum accepted length, in characters, for rendered assignment Markdown.</summary>
     public const int MaxAssignmentMarkdownLength = 500_000;
@@ -39,7 +47,9 @@ public sealed record RunnerResultRequest(
     string? Summary,
     string? ArtifactTitle,
     string? ArtifactContent,
-    Guid? ClaimId = null);
+    Guid? ClaimId = null,
+    string? CompleteArtifactContent = null,
+    int? CompleteArtifactLength = null);
 
 /// <summary>Posted to the cancel endpoint. Same route-authoritative-identity rule as the result contract.</summary>
 public sealed record RunnerCancelRequest(

@@ -139,6 +139,16 @@
                                         will read the current revision. This does not block approval.
                                     </p>
                                 }
+                                @* The artifact this decision authorizes, in full, before the buttons that
+                                   decide on it. The records further down this page show a bounded excerpt
+                                   of it, which is enough to recognise the plan and not enough to approve
+                                   it (ADR-0020). *@
+                                <p class="handoff-plan-link">
+                                    <a asp-page="Plan" asp-route-id="@handoff.Id">
+                                        Read the complete @session.Role artifact this decision acts on
+                                    </a>
+                                    — the whole thing, not the excerpt shown further down the page.
+                                </p>
                                 <form method="post" asp-page-handler="ApproveHandoff" class="handoff-approve-form">
                                     <input type="hidden" name="HandoffDecision.HandoffId" value="@handoff.Id" />
                                     <input type="hidden" name="HandoffDecision.ExpectedConcurrencyToken" value="@handoff.ConcurrencyToken" />

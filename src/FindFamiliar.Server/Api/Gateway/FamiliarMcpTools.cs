@@ -129,15 +129,26 @@ public sealed class FamiliarMcpTools(
 
     [McpServerTool(Name = "get_session_handoff_plan", ReadOnly = true, Destructive = false, Idempotent = true)]
     [Description(
-        "Read the complete bounded human-relevant Planner artifact behind a SessionHandoff decision. "
+        "Read the complete human-reviewable Planner artifact behind a SessionHandoff decision. "
         + "Call this after open_decisions returns a SessionHandoff and before explaining what approval "
-        + "would do. It includes the task goal and requested outcome plus the stored Plan artifact, "
-        + "paged at a fixed maximum; call again with offset equal to offset + content length while "
-        + "hasMore is true. Raw provider prompts, output, credentials and transcripts are never returned. "
-        + "This tool only reports and cannot approve or decline the handoff.")]
+        + "would do. It includes the task goal and requested outcome plus the stored Plan artifact. "
+        + "\n\n"
+        + "The plan is paged. Call again with offset set to the returned nextOffset while hasMore is "
+        + "true, and concatenate the content in order; you hold the entire plan when a response has "
+        + "isWholeArtifactRetrieved true. Never summarise a plan for approval before reaching that point. "
+        + "\n\n"
+        + "The completeness field says what you were given: 'Complete' is the whole plan in one "
+        + "response; 'Page' is part of a stored whole plan, so keep paging; 'PartiallyRetained' means "
+        + "the plan exceeded what may be stored and the missing characters cannot be fetched by paging; "
+        + "'Excerpt' means only a bounded excerpt was ever stored and there is no remainder to page to. "
+        + "For the last two, tell the user plainly that you cannot show them the whole plan, and do not "
+        + "present what you have as if it were complete. "
+        + "\n\n"
+        + "Raw provider prompts, output, credentials and transcripts are never returned. This tool only "
+        + "reports and cannot approve or decline the handoff.")]
     public async Task<object> GetSessionHandoffPlan(
         [Description("The handoff id returned as decisionId by open_decisions.")] Guid handoffId,
-        [Description("Optional character offset from the complete Plan artifact; use the prior page end to continue.")] int? offset = null,
+        [Description("Optional character offset into the complete Plan artifact; pass the prior response's nextOffset to continue.")] int? offset = null,
         [Description("Optional page size from 1 to 4000; defaults to 4000.")] int? maxCharacters = null,
         CancellationToken cancellationToken = default)
     {

@@ -67,7 +67,16 @@ switch (mode)
         return 0;
 
     case "oversized":
-        await Console.Out.WriteAsync(new string('x', 300_000));
+        // Must exceed the runner's bounded read limit, which rose to 1 MB when the complete artifact
+        // began travelling with the result. A fixture sized to the old limit would silently stop
+        // testing oversized handling and start testing an ordinary large success.
+        await Console.Out.WriteAsync(new string('x', 1_200_000));
+        return 0;
+
+    case "long-plan":
+        // A synthetic Planner artifact well past the 12,000-character excerpt bound, for proving that
+        // the complete plan survives the whole runner → capture → retrieval path (ADR-0020).
+        await Console.Out.WriteAsync(BuildLongPlanJson());
         return 0;
 
     case "stderr-noise":
@@ -84,6 +93,27 @@ switch (mode)
     default:
         await Console.Out.WriteAsync(BuildResultJson($"Deterministic fixture output. Received {stdin.Length} stdin bytes."));
         return 0;
+}
+
+static string BuildLongPlanJson()
+{
+    // Head and tail markers bracket the filler so a test can prove it received both ends, which a
+    // truncated artifact could not provide.
+    var plan = "# Synthetic plan\nPLAN_HEAD_MARKER\n"
+        + string.Join('\n', Enumerable.Range(0, 900).Select(index => $"Step {index}: dummy fixture planning line, not a real proposal."))
+        + "\nPLAN_TAIL_MARKER\n";
+
+    var result = new
+    {
+        contractVersion = 1,
+        rawOutput = "[fake-adapter] Long plan fixture. This is dummy fixture output, not a real AI response.",
+        summary = "Dummy fixture summary for the long-plan fixture — not a real result.",
+        artifactTitle = "Fake adapter long plan",
+        artifactContent = plan.Length <= 12_000 ? plan : plan[..12_000],
+        completeArtifactContent = plan,
+        completeArtifactLength = plan.Length
+    };
+    return JsonSerializer.Serialize(result);
 }
 
 static string BuildResultJson(string note)

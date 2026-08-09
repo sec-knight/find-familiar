@@ -1,0 +1,81 @@
+@page "/handoffs/{id:guid}/plan"
+@* Routed on the handoff rather than the task: the artifact under review belongs to one proposed
+   decision, and a task with three Planner runs has three of them. *@
+@using FindFamiliar.Server.Services.Familiar.Gateway
+@model FindFamiliar.Server.Pages.Tasks.PlanModel
+@{
+    ViewData["Title"] = $"Plan awaiting decision — {Model.TaskTitle}";
+}
+
+<section class="dashboard-intro" aria-labelledby="plan-title">
+    <p class="eyebrow">@Model.TaskTitle · @Model.Handoff.SourceSession.Role artifact</p>
+    <h1 id="plan-title">@Model.ArtifactTitle</h1>
+    <p>
+        <a asp-page="Details" asp-route-id="@Model.TaskId">Back to the task</a>
+        — approve or decline this handoff there, once you have read the plan.
+    </p>
+</section>
+
+@* The completeness statement comes first, because whether this is the whole plan changes what
+   reading it entitles you to conclude — and that is not something a reader should have to infer
+   from whether the text looks like it stops mid-sentence. *@
+<section class="plan-completeness" role="status" aria-labelledby="plan-completeness-title">
+    <h2 id="plan-completeness-title">What you are looking at</h2>
+    @switch (Model.Completeness)
+    {
+        case FamiliarPlanCompleteness.Complete:
+            <p class="plan-complete">
+                <strong>This is the complete plan</strong> — all @Model.OriginalLength characters of it.
+                Nothing has been withheld or cut, and there is nothing further to load.
+            </p>
+            break;
+        case FamiliarPlanCompleteness.Page:
+            <p class="plan-page">
+                <strong>This is part of the complete plan</strong> — characters
+                @(Model.Offset + 1)–@(Model.Offset + Model.PlanText.Length) of @Model.RetainedLength.
+                The whole plan is stored; use the page links below to read the rest before deciding.
+            </p>
+            break;
+        case FamiliarPlanCompleteness.PartiallyRetained:
+            <p class="plan-partial">
+                <strong>This plan is longer than what may be stored.</strong> It was
+                @Model.OriginalLength characters; @Model.RetainedLength were retained, and the remaining
+                @(Model.OriginalLength - Model.RetainedLength) were never stored and cannot be loaded.
+                You are not able to read all of it here.
+            </p>
+            break;
+        default:
+            <p class="plan-excerpt">
+                <strong>Only a bounded excerpt of this plan exists.</strong> This session ran before
+                complete plans were retained, so the rest of it was never stored anywhere and there is
+                no page to advance to. Treat this as a summary — it is not the plan itself.
+            </p>
+            break;
+    }
+</section>
+
+<section aria-labelledby="plan-content-title">
+    <h2 id="plan-content-title">The plan</h2>
+    <pre class="plan-content">@Model.PlanText</pre>
+</section>
+
+@if (Model.Offset > 0 || Model.HasMore)
+{
+    <nav class="plan-paging" aria-label="Plan pages">
+        @if (Model.Offset > 0)
+        {
+            <a asp-page="Plan" asp-route-id="@Model.Handoff.Id" asp-route-offset="@Model.PreviousOffset">← Previous</a>
+        }
+        <span>
+            Characters @(Model.Offset + 1)–@(Model.Offset + Model.PlanText.Length) of @Model.RetainedLength
+        </span>
+        @if (Model.HasMore)
+        {
+            <a asp-page="Plan" asp-route-id="@Model.Handoff.Id" asp-route-offset="@Model.NextOffset">Next →</a>
+        }
+        else
+        {
+            <span class="plan-end">You have reached the end of the plan.</span>
+        }
+    </nav>
+}

@@ -615,10 +615,28 @@ public sealed class FamiliarGateway(
             return null;
         }
 
-        var completeContent = artifact.Content;
+        // The complete artifact where one was retained; the bounded entry content otherwise. The
+        // fallback is not a silent equivalence — it is reported as an Excerpt below, because a plan
+        // captured before complete retention existed genuinely has no remainder to fetch, and telling
+        // a caller to keep paging for text that was never stored is the failure this path exists to
+        // end (ADR-0020).
+        var complete = await handoffPlans.ReadCompleteArtifactAsync(artifact.Id, cancellationToken);
+        var completeContent = complete?.Content ?? artifact.Content;
+        var originalLength = complete?.OriginalLength ?? completeContent.Length;
+        var fullyRetained = complete is not null && complete.OriginalLength <= complete.Content.Length;
+
         var start = Math.Clamp(offset ?? 0, 0, completeContent.Length);
         var length = Math.Clamp(maxCharacters ?? FamiliarSessionHandoffPlanDefaults.DefaultPageLength, 1, FamiliarSessionHandoffPlanDefaults.MaxPageLength);
         var page = completeContent.Substring(start, Math.Min(length, completeContent.Length - start));
+        var hasMore = start + page.Length < completeContent.Length;
+
+        var completeness = complete is null
+            ? FamiliarPlanCompleteness.Excerpt
+            : !fullyRetained
+                ? FamiliarPlanCompleteness.PartiallyRetained
+                : hasMore || start > 0
+                    ? FamiliarPlanCompleteness.Page
+                    : FamiliarPlanCompleteness.Complete;
 
         return new FamiliarSessionHandoffPlan(
             source.HandoffId,
@@ -636,9 +654,50 @@ public sealed class FamiliarGateway(
             page,
             start,
             completeContent.Length,
-            start + page.Length < completeContent.Length,
-            $"Showing a complete bounded Planner artifact page ({start + 1}-{start + page.Length} of {completeContent.Length} characters). "
-                + "Use the returned offset and page length to inspect the remainder. Raw provider input and output are never returned.");
+            hasMore,
+            DisclosePlan(completeness, start, page.Length, completeContent.Length, originalLength),
+            completeness,
+            originalLength,
+            start + page.Length,
+            fullyRetained);
+    }
+
+    /// <summary>
+    /// Says in words what the completeness field says in a value, because the two audiences differ: a
+    /// tool caller branches on the enum, and the human it is speaking for hears the sentence. Both must
+    /// carry the same fact, and neither may imply a remainder exists when it does not.
+    /// </summary>
+    private static string DisclosePlan(
+        FamiliarPlanCompleteness completeness,
+        int offset,
+        int pageLength,
+        int retainedLength,
+        int originalLength)
+    {
+        const string neverReturned = " Raw provider prompts and output, credentials and transcripts are never returned.";
+        var span = $"characters {offset + 1}-{offset + pageLength} of {retainedLength}";
+
+        return completeness switch
+        {
+            FamiliarPlanCompleteness.Complete =>
+                $"This is the complete plan ({retainedLength} characters). Nothing further remains to retrieve."
+                + neverReturned,
+
+            FamiliarPlanCompleteness.Page =>
+                $"This is a page of the complete plan — {span}. "
+                + "Request the next page from the returned nextOffset while hasMore is true; the plan is "
+                + "complete only once hasMore is false." + neverReturned,
+
+            FamiliarPlanCompleteness.PartiallyRetained =>
+                $"This plan was {originalLength} characters and exceeded what may be retained, so {retainedLength} "
+                + $"were kept — {span}. The remaining {originalLength - retainedLength} characters were never stored "
+                + "and cannot be retrieved by paging. Do not treat this as the whole plan." + neverReturned,
+
+            _ =>
+                $"Only a bounded excerpt of this plan exists ({retainedLength} characters); the complete artifact "
+                + "was never retained, because this session ran before complete plans were stored. There is no "
+                + "remainder to page to. Treat this as a summary and not as the plan being approved." + neverReturned
+        };
     }
 
     /// <summary>

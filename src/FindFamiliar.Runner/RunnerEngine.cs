@@ -287,7 +287,27 @@ public sealed class RunnerEngine(HttpClient httpClient, AdapterProcessExecutor a
             && !string.IsNullOrWhiteSpace(result.RawOutput) && result.RawOutput.Length <= RunnerProtocol.MaxLongFieldLength
             && !string.IsNullOrWhiteSpace(result.Summary) && result.Summary.Length <= RunnerProtocol.MaxSummaryLength
             && !string.IsNullOrWhiteSpace(result.ArtifactTitle) && result.ArtifactTitle.Length <= RunnerProtocol.MaxArtifactTitleLength
-            && !string.IsNullOrWhiteSpace(result.ArtifactContent) && result.ArtifactContent.Length <= RunnerProtocol.MaxLongFieldLength;
+            && !string.IsNullOrWhiteSpace(result.ArtifactContent) && result.ArtifactContent.Length <= RunnerProtocol.MaxLongFieldLength
+            && IsCompleteArtifactValid(result);
+    }
+
+    /// <summary>
+    /// The complete artifact is optional, so absence is valid. Present-but-out-of-bounds is not: a
+    /// retained artifact shorter than the excerpt it supposedly contains, or a declared length below
+    /// what was actually retained, would make the completeness report a lie, and the whole point of
+    /// carrying it is that a reader may trust that report (ADR-0020).
+    /// </summary>
+    private static bool IsCompleteArtifactValid(AdapterResult result)
+    {
+        if (result.CompleteArtifactContent is null && result.CompleteArtifactLength is null)
+        {
+            return true;
+        }
+
+        return result.CompleteArtifactContent is { Length: > 0 } complete
+            && complete.Length <= RunnerProtocol.MaxCompleteArtifactLength
+            && result.CompleteArtifactLength is { } declared
+            && declared >= complete.Length;
     }
 
     /// <summary>
@@ -345,7 +365,9 @@ public sealed class RunnerEngine(HttpClient httpClient, AdapterProcessExecutor a
             adapterResult.Summary,
             adapterResult.ArtifactTitle,
             adapterResult.ArtifactContent,
-            request.ClaimId);
+            request.ClaimId,
+            adapterResult.CompleteArtifactContent,
+            adapterResult.CompleteArtifactLength);
 
         try
         {

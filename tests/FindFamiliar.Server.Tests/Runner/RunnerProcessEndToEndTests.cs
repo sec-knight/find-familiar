@@ -3,6 +3,7 @@ using System.Diagnostics;
 using FindFamiliar.Runner;
 using FindFamiliar.Server.Data;
 using FindFamiliar.Server.Domain;
+using FindFamiliar.Server.Services.Familiar.Gateway;
 using FindFamiliar.Server.Tests.Infrastructure;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -43,6 +44,68 @@ public sealed class RunnerProcessEndToEndTests(FindFamiliarWebApplicationFactory
 
         var refreshedSession = await dbContext.AgentSessions.SingleAsync(s => s.Id == session.Id);
         Assert.Equal(AgentSessionStatus.Completed, refreshedSession.Status);
+    }
+
+    /// <summary>
+    /// The whole invariant, proven rather than inferred, across every real boundary: a synthetic Planner
+    /// artifact far past the excerpt bound leaves a real adapter process, crosses the runner's stdout
+    /// pipe and the HTTP result endpoint, is captured, and is then read back through the gateway by
+    /// paging until it says the plan is complete — and what comes back is byte-for-byte what the adapter
+    /// produced.
+    ///
+    /// Each of those hops previously had its own bound that would have destroyed or refused this plan:
+    /// the adapter's excerpt cut, the runner's stdout limit, the result body limit, the capture
+    /// validator, and the entry column (ADR-0020).
+    /// </summary>
+    [Fact]
+    public async Task A_long_plan_survives_the_whole_path_and_is_reassembled_completely()
+    {
+        var (_, task, session) = await SeedStartedSessionAsync(AgentSessionRole.Planner);
+        var arguments = BuildArguments(task.Id, session.Id, TimeSpan.FromSeconds(30));
+
+        var exitCode = await WithFakeAdapterModeAsync("long-plan", () => RunEngineAsync(arguments));
+        Assert.Equal(RunnerExitCode.Success, exitCode);
+
+        using var scope = factory.Services.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<FamiliarDbContext>();
+
+        var plan = await dbContext.ContextEntries
+            .SingleAsync(entry => entry.SourceSessionId == session.Id && entry.Kind == ContextEntryKind.Plan);
+        var stored = await dbContext.ContextEntryArtifacts
+            .SingleAsync(document => document.ContextEntryId == plan.Id);
+
+        // The excerpt is still bounded, and it genuinely lost the tail — which is exactly why the
+        // artifact beside it has to exist.
+        Assert.True(plan.Content.Length <= 12_000);
+        Assert.DoesNotContain("PLAN_TAIL_MARKER", plan.Content, StringComparison.Ordinal);
+
+        Assert.True(stored.IsComplete);
+        Assert.True(stored.Content.Length > 12_000);
+        Assert.Contains("PLAN_HEAD_MARKER", stored.Content, StringComparison.Ordinal);
+        Assert.Contains("PLAN_TAIL_MARKER", stored.Content, StringComparison.Ordinal);
+
+        // Now read it back the way Sakura would: page until the response says the plan is complete.
+        var handoff = await dbContext.SessionHandoffs.SingleAsync(candidate => candidate.SourceSessionId == session.Id);
+        var gateway = scope.ServiceProvider.GetRequiredService<IFamiliarGateway>();
+
+        var assembled = new System.Text.StringBuilder();
+        var offset = 0;
+        FamiliarSessionHandoffPlan page;
+        var pages = 0;
+
+        do
+        {
+            page = (await gateway.GetSessionHandoffPlanAsync(handoff.Id, offset, 4_000))!;
+            assembled.Append(page.Content);
+            offset = page.NextOffset;
+            pages++;
+            Assert.True(pages < 100, "Paging failed to terminate.");
+        }
+        while (page.HasMore);
+
+        Assert.True(pages > 1, "The proof requires an artifact that genuinely needed more than one page.");
+        Assert.True(page.IsWholeArtifactRetrieved);
+        Assert.Equal(stored.Content, assembled.ToString());
     }
 
     [Fact]

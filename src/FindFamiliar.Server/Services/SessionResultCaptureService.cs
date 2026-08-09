@@ -22,7 +22,9 @@ public sealed record SessionResultCaptureRequest(
     string? ArtifactTitle,
     string? ArtifactContent,
     Guid? ClaimId = null,
-    bool RequireClaimOwnership = false);
+    bool RequireClaimOwnership = false,
+    string? CompleteArtifactContent = null,
+    int? CompleteArtifactLength = null);
 
 public sealed record SessionResultCaptureOutcome(
     SessionResultCaptureStatus Status,
@@ -58,6 +60,7 @@ public sealed class SessionResultCaptureService(
     public const int LongFieldMaxLength = 12_000;
     public const int SummaryMaxLength = 4_000;
     public const int ArtifactTitleMaxLength = 200;
+    public const int CompleteArtifactMaxLength = ContextEntryArtifact.MaxContentLength;
 
     public async Task<SessionResultCaptureOutcome> CaptureAsync(
         SessionResultCaptureRequest request,
@@ -137,6 +140,19 @@ public sealed class SessionResultCaptureService(
         dbContext.Entry(session).Property(candidate => candidate.Status).OriginalValue = AgentSessionStatus.Completed;
         dbContext.Entry(session).Property(candidate => candidate.CompletedUtc).OriginalValue = capturedUtc;
 
+        var artifactEntry = new ContextEntry
+        {
+            Id = Guid.NewGuid(),
+            ProjectId = session.Task.ProjectId,
+            TaskId = session.TaskId,
+            SourceSessionId = session.Id,
+            Kind = artifactKind,
+            Title = request.ArtifactTitle!.Trim(),
+            Content = request.ArtifactContent!.Trim(),
+            State = ContextEntryState.Active,
+            CreatedUtc = capturedUtc
+        };
+
         dbContext.ContextEntries.AddRange(
             new ContextEntry
             {
@@ -174,18 +190,26 @@ public sealed class SessionResultCaptureService(
                 State = ContextEntryState.Active,
                 CreatedUtc = capturedUtc
             },
-            new ContextEntry
+            artifactEntry);
+
+        // The complete artifact, when the producer sent one. This is what a human approves; the entry
+        // above is the excerpt they skim. Same transaction as the entry it belongs to, so a session
+        // never completes having stored an excerpt whose artifact went missing (ADR-0020).
+        if (request.CompleteArtifactContent is { } complete)
+        {
+            // Stored verbatim, unlike the excerpt beside it. Trimming would be a second, silent edit to
+            // the artifact a human approves, and it would also make the retained length disagree with
+            // the declared one — turning ordinary trailing whitespace into a phantom "characters were
+            // lost" report. Leading and trailing whitespace is part of the artifact.
+            dbContext.ContextEntryArtifacts.Add(new ContextEntryArtifact
             {
                 Id = Guid.NewGuid(),
-                ProjectId = session.Task.ProjectId,
-                TaskId = session.TaskId,
-                SourceSessionId = session.Id,
-                Kind = artifactKind,
-                Title = request.ArtifactTitle!.Trim(),
-                Content = request.ArtifactContent!.Trim(),
-                State = ContextEntryState.Active,
+                ContextEntryId = artifactEntry.Id,
+                Content = complete,
+                OriginalLength = Math.Max(request.CompleteArtifactLength ?? complete.Length, complete.Length),
                 CreatedUtc = capturedUtc
             });
+        }
 
         session.Task.UpdatedUtc = capturedUtc;
         session.Task.Project.IncrementContextRevision();
@@ -222,6 +246,35 @@ public sealed class SessionResultCaptureService(
         ValidateField(errors, nameof(request.Summary), request.Summary, SummaryMaxLength);
         ValidateField(errors, nameof(request.ArtifactTitle), request.ArtifactTitle, ArtifactTitleMaxLength);
         ValidateField(errors, nameof(request.ArtifactContent), request.ArtifactContent, LongFieldMaxLength);
+
+        // Optional, because an adapter built against the older contract sends neither field. Present
+        // but inconsistent is refused rather than repaired: a declared length below what was actually
+        // sent would make the completeness report wrong, and a reader trusting that report to decide
+        // whether they have read the whole plan is the entire point of storing it.
+        if (request.CompleteArtifactContent is { } complete)
+        {
+            if (string.IsNullOrWhiteSpace(complete))
+            {
+                errors[nameof(request.CompleteArtifactContent)] =
+                    $"{nameof(request.CompleteArtifactContent)} must not be blank when supplied.";
+            }
+            else if (complete.Length > CompleteArtifactMaxLength)
+            {
+                errors[nameof(request.CompleteArtifactContent)] =
+                    $"{nameof(request.CompleteArtifactContent)} must be {CompleteArtifactMaxLength} characters or fewer.";
+            }
+            else if (request.CompleteArtifactLength is { } declared && declared < complete.Length)
+            {
+                errors[nameof(request.CompleteArtifactLength)] =
+                    $"{nameof(request.CompleteArtifactLength)} must be at least the length of the content supplied.";
+            }
+        }
+        else if (request.CompleteArtifactLength is not null)
+        {
+            errors[nameof(request.CompleteArtifactLength)] =
+                $"{nameof(request.CompleteArtifactLength)} requires {nameof(request.CompleteArtifactContent)}.";
+        }
+
         return errors;
     }
 

@@ -389,6 +389,131 @@ public sealed class SessionResultCaptureServiceTests
             (await verifyContext.AgentSessions.SingleAsync(candidate => candidate.Id == session.Id)).Status);
     }
 
+    /// <summary>
+    /// The core of the fix: a Planner artifact far longer than the excerpt bound survives capture whole,
+    /// while the entry beside it stays bounded. Both halves matter — keeping the artifact is the point,
+    /// and keeping the excerpt bounded is what stops every retrieval path paying for it.
+    /// </summary>
+    [Fact]
+    public async Task A_plan_longer_than_the_excerpt_bound_is_retained_whole_beside_a_bounded_excerpt()
+    {
+        using var database = new TemporarySqliteDatabase();
+        await using var dbContext = await database.CreateContextAsync();
+
+        var (_, task, session) = await SeedStartedSessionAsync(dbContext, AgentSessionRole.Planner);
+        var complete = "# Plan\n" + new string('x', 60_000) + "\nTAIL";
+        var excerpt = complete[..SessionResultCaptureService.LongFieldMaxLength];
+
+        var service = new SessionResultCaptureService(dbContext, new SessionHandoffService(dbContext));
+        var outcome = await service.CaptureAsync(new SessionResultCaptureRequest(
+            task.Id,
+            session.Id,
+            "The exact prompt.",
+            "A bounded raw output excerpt.",
+            "A concise summary.",
+            "Approval-ready plan",
+            excerpt,
+            CompleteArtifactContent: complete,
+            CompleteArtifactLength: complete.Length));
+
+        Assert.Equal(SessionResultCaptureStatus.Success, outcome.Status);
+
+        var plan = dbContext.ContextEntries.Single(entry =>
+            entry.SourceSessionId == session.Id && entry.Kind == ContextEntryKind.Plan);
+        Assert.Equal(SessionResultCaptureService.LongFieldMaxLength, plan.Content.Length);
+
+        var artifact = dbContext.ContextEntryArtifacts.Single(document => document.ContextEntryId == plan.Id);
+        Assert.Equal(complete, artifact.Content);
+        Assert.Equal(complete.Length, artifact.OriginalLength);
+        Assert.True(artifact.IsComplete);
+        Assert.EndsWith("TAIL", artifact.Content, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// An artifact that overran the retention bound records its true original length, so the shortfall
+    /// is measurable rather than invisible.
+    /// </summary>
+    [Fact]
+    public async Task A_partially_retained_artifact_records_the_length_it_could_not_keep()
+    {
+        using var database = new TemporarySqliteDatabase();
+        await using var dbContext = await database.CreateContextAsync();
+
+        var (_, task, session) = await SeedStartedSessionAsync(dbContext, AgentSessionRole.Planner);
+        var retained = new string('y', 5_000);
+
+        var service = new SessionResultCaptureService(dbContext, new SessionHandoffService(dbContext));
+        var outcome = await service.CaptureAsync(new SessionResultCaptureRequest(
+            task.Id, session.Id, "Prompt.", "Raw.", "Summary.", "Plan", retained,
+            CompleteArtifactContent: retained,
+            CompleteArtifactLength: 40_000));
+
+        Assert.Equal(SessionResultCaptureStatus.Success, outcome.Status);
+
+        var artifact = dbContext.ContextEntryArtifacts.Single();
+        Assert.Equal(40_000, artifact.OriginalLength);
+        Assert.Equal(5_000, artifact.Content.Length);
+        Assert.False(artifact.IsComplete);
+    }
+
+    /// <summary>
+    /// A producer that sends no complete artifact still captures — an older adapter must keep working —
+    /// and no artifact row is invented for it, so the retrieval path can tell the two cases apart.
+    /// </summary>
+    [Fact]
+    public async Task A_capture_without_a_complete_artifact_stores_no_artifact_row()
+    {
+        using var database = new TemporarySqliteDatabase();
+        await using var dbContext = await database.CreateContextAsync();
+
+        var (_, task, session) = await SeedStartedSessionAsync(dbContext, AgentSessionRole.Planner);
+        var service = new SessionResultCaptureService(dbContext, new SessionHandoffService(dbContext));
+        var outcome = await service.CaptureAsync(new SessionResultCaptureRequest(
+            task.Id, session.Id, "Prompt.", "Raw.", "Summary.", "Plan", "Bounded plan excerpt."));
+
+        Assert.Equal(SessionResultCaptureStatus.Success, outcome.Status);
+        Assert.Empty(dbContext.ContextEntryArtifacts);
+    }
+
+    /// <summary>
+    /// A declared length below what was actually sent would make the completeness report wrong, and a
+    /// wrong completeness report at an approval boundary is worse than a refused capture.
+    /// </summary>
+    [Fact]
+    public async Task A_complete_artifact_shorter_than_its_declared_length_is_refused()
+    {
+        using var database = new TemporarySqliteDatabase();
+        await using var dbContext = await database.CreateContextAsync();
+
+        var (_, task, session) = await SeedStartedSessionAsync(dbContext, AgentSessionRole.Planner);
+        var service = new SessionResultCaptureService(dbContext, new SessionHandoffService(dbContext));
+        var outcome = await service.CaptureAsync(new SessionResultCaptureRequest(
+            task.Id, session.Id, "Prompt.", "Raw.", "Summary.", "Plan", "Excerpt.",
+            CompleteArtifactContent: new string('z', 900),
+            CompleteArtifactLength: 100));
+
+        Assert.Equal(SessionResultCaptureStatus.ValidationFailed, outcome.Status);
+        Assert.Contains("CompleteArtifactLength", outcome.ValidationErrors!.Keys);
+    }
+
+    /// <summary>An artifact beyond the retention bound is refused rather than silently cut here.</summary>
+    [Fact]
+    public async Task A_complete_artifact_beyond_the_retention_bound_is_refused()
+    {
+        using var database = new TemporarySqliteDatabase();
+        await using var dbContext = await database.CreateContextAsync();
+
+        var (_, task, session) = await SeedStartedSessionAsync(dbContext, AgentSessionRole.Planner);
+        var service = new SessionResultCaptureService(dbContext, new SessionHandoffService(dbContext));
+        var outcome = await service.CaptureAsync(new SessionResultCaptureRequest(
+            task.Id, session.Id, "Prompt.", "Raw.", "Summary.", "Plan", "Excerpt.",
+            CompleteArtifactContent: new string('z', SessionResultCaptureService.CompleteArtifactMaxLength + 1),
+            CompleteArtifactLength: SessionResultCaptureService.CompleteArtifactMaxLength + 1));
+
+        Assert.Equal(SessionResultCaptureStatus.ValidationFailed, outcome.Status);
+        Assert.Contains("CompleteArtifactContent", outcome.ValidationErrors!.Keys);
+    }
+
     private static async Task<(FamiliarProject Project, FamiliarTask Task, AgentSession Session)> SeedStartedSessionAsync(
         Data.FamiliarDbContext dbContext, AgentSessionRole role)
     {

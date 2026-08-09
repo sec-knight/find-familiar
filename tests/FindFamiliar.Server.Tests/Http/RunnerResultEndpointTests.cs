@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Headers;
 using System.Text;
+using FindFamiliar.Server.Api.Runner;
 using FindFamiliar.Server.Data;
 using FindFamiliar.Server.Domain;
 using FindFamiliar.Server.Tests.Infrastructure;
@@ -148,7 +149,14 @@ public sealed class RunnerResultEndpointTests(FindFamiliarWebApplicationFactory 
         using var client = factory.CreateClient();
         using var request = new HttpRequestMessage(HttpMethod.Post, $"/api/runner/tasks/{task.Id}/sessions/{session.Id}/result");
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", FindFamiliarWebApplicationFactory.RunnerBridgeTestToken);
-        request.Content = new StringContent(new string('x', 128 * 1024), Encoding.UTF8, "application/json");
+        // Sized from the contract rather than a literal, so this keeps testing oversized handling if
+        // the bound moves again — it rose to 1 MB when the complete artifact began travelling with the
+        // result, and a fixture pinned to the old 64 KB limit would have quietly become a test that a
+        // large valid body is accepted.
+        request.Content = new StringContent(
+            new string('x', RunnerContracts.MaxRequestBodyBytes + 1024),
+            Encoding.UTF8,
+            "application/json");
 
         var response = await client.SendAsync(request);
 

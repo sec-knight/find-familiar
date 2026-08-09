@@ -72,12 +72,21 @@ public static class ClaudeResultParser
 
         var text = envelope.Result;
 
+        // The excerpt fields stay bounded — they are what a list, a brief and a retrieval budget can
+        // afford. The complete artifact is carried beside them, because the excerpt is what a human
+        // skims and the artifact is what a human approves, and the two must not be the same string.
+        // CompleteArtifactLength is the length before any bound, so an artifact longer than even the
+        // complete bound reports the gap rather than presenting a prefix as the whole (ADR-0020).
         result = new AdapterResult(
             RunnerProtocol.ContractVersion,
             Truncate(text, RunnerProtocol.MaxLongFieldLength),
             Truncate(text, RunnerProtocol.MaxSummaryLength),
             ArtifactTitle,
-            Truncate(text, RunnerProtocol.MaxLongFieldLength));
+            Truncate(text, RunnerProtocol.MaxLongFieldLength),
+            text.Length <= RunnerProtocol.MaxCompleteArtifactLength
+                ? text
+                : text[..RunnerProtocol.MaxCompleteArtifactLength],
+            text.Length);
 
         return ClaudeResultOutcome.Valid;
     }

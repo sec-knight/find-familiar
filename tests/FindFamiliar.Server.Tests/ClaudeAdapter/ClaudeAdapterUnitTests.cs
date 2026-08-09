@@ -502,6 +502,44 @@ public sealed class ClaudeAdapterUnitTests
         Assert.True(result.ArtifactTitle.Length <= RunnerProtocol.MaxArtifactTitleLength);
     }
 
+    /// <summary>
+    /// The excerpt fields are still cut, and the artifact behind them no longer is. This is the exact
+    /// point where a Planner's plan used to stop existing: the adapter cut 50,000 characters down to
+    /// 12,000 and nothing kept the rest, so the plan a human was later asked to approve had a remainder
+    /// nobody had ever stored (ADR-0020).
+    /// </summary>
+    [Fact]
+    public void An_oversized_result_keeps_the_complete_artifact_beside_the_cut_excerpt()
+    {
+        var text = new string('y', 50_000) + "TAIL_MARKER";
+        var outcome = ClaudeResultParser.TryParse(Envelope(text), out var result);
+
+        Assert.Equal(ClaudeResultOutcome.Valid, outcome);
+        Assert.NotNull(result);
+
+        Assert.Equal(RunnerProtocol.MaxLongFieldLength, result.ArtifactContent.Length);
+        Assert.DoesNotContain("TAIL_MARKER", result.ArtifactContent, StringComparison.Ordinal);
+
+        Assert.Equal(text, result.CompleteArtifactContent);
+        Assert.Equal(text.Length, result.CompleteArtifactLength);
+        Assert.EndsWith("TAIL_MARKER", result.CompleteArtifactContent!, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Beyond the retention bound the adapter keeps a prefix and still reports the true length, so the
+    /// shortfall is stated downstream rather than hidden behind a plausible-looking cut.
+    /// </summary>
+    [Fact]
+    public void A_result_beyond_the_retention_bound_reports_its_true_length()
+    {
+        var text = new string('y', RunnerProtocol.MaxCompleteArtifactLength + 5_000);
+        var outcome = ClaudeResultParser.TryParse(Envelope(text), out var result);
+
+        Assert.Equal(ClaudeResultOutcome.Valid, outcome);
+        Assert.Equal(RunnerProtocol.MaxCompleteArtifactLength, result!.CompleteArtifactContent!.Length);
+        Assert.Equal(text.Length, result.CompleteArtifactLength);
+    }
+
     // ---------- helpers ----------
 
     private const string Worktree = @"C:\Users\dev\Documents\GitHub\FindFamiliar";

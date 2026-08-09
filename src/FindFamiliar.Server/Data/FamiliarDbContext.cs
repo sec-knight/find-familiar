@@ -13,6 +13,9 @@ public sealed class FamiliarDbContext(DbContextOptions<FamiliarDbContext> option
 
     public DbSet<ContextEntry> ContextEntries => Set<ContextEntry>();
 
+    /// <summary>The complete artifacts behind bounded context entries. See <see cref="ContextEntryArtifact"/>.</summary>
+    public DbSet<ContextEntryArtifact> ContextEntryArtifacts => Set<ContextEntryArtifact>();
+
     public DbSet<Worker> Workers => Set<Worker>();
 
     public DbSet<Conversation> Conversations => Set<Conversation>();
@@ -515,6 +518,26 @@ public sealed class FamiliarDbContext(DbContextOptions<FamiliarDbContext> option
                 .WithMany()
                 .HasForeignKey(entry => entry.SupersedesContextEntryId)
                 .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<ContextEntryArtifact>(entity =>
+        {
+            entity.ToTable("ContextEntryArtifacts");
+            entity.HasKey(document => document.Id);
+            entity.Property(document => document.Content)
+                .HasMaxLength(ContextEntryArtifact.MaxContentLength)
+                .IsRequired();
+            entity.Ignore(document => document.IsComplete);
+
+            // One document per entry, enforced by the schema rather than by the one service that
+            // writes them: two complete artifacts for one excerpt would make "the complete plan"
+            // ambiguous at exactly the boundary that must not be ambiguous. Cascade, because a
+            // document without its entry has no visibility rules and must not outlive it.
+            entity.HasOne(document => document.ContextEntry)
+                .WithOne()
+                .HasForeignKey<ContextEntryArtifact>(document => document.ContextEntryId)
+                .OnDelete(DeleteBehavior.Cascade);
+            entity.HasIndex(document => document.ContextEntryId).IsUnique();
         });
     }
 }

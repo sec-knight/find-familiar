@@ -368,6 +368,38 @@ public static class FamiliarSessionHandoffPlanDefaults
     public const int MaxPageLength = 4_000;
 }
 
+/// <summary>
+/// What the returned <see cref="FamiliarSessionHandoffPlan.Content"/> actually is.
+///
+/// <b>Why a caller must be told rather than left to infer.</b> A page of text carries no evidence of
+/// what it is: the same 4,000 characters could be the whole plan, the first slice of a long one, or all
+/// that was ever kept of a plan whose remainder no longer exists anywhere. Those three call for three
+/// different actions — approve, keep paging, or refuse to approve until a complete plan exists — and a
+/// reader that has to guess between them will eventually guess wrong at an approval boundary. So the
+/// distinction is a field, not a tone of voice in the disclosure sentence (ADR-0020).
+/// </summary>
+public enum FamiliarPlanCompleteness
+{
+    /// <summary>The whole artifact is in this response. Nothing further to fetch.</summary>
+    Complete,
+
+    /// <summary>A page of the complete artifact. Continue from the offset until HasMore is false.</summary>
+    Page,
+
+    /// <summary>
+    /// A bounded excerpt, and the only representation that exists — the complete artifact was never
+    /// retained. Produced by sessions that ran before complete retention, and by any producer that
+    /// sends no complete artifact. It may be read, but it may not be treated as the plan.
+    /// </summary>
+    Excerpt,
+
+    /// <summary>
+    /// The artifact exceeded what may be retained, so a bounded prefix is stored and its true length is
+    /// known. Distinct from <see cref="Excerpt"/>: here the shortfall is measurable.
+    /// </summary>
+    PartiallyRetained
+}
+
 public sealed record FamiliarSessionHandoffPlan(
     Guid HandoffId,
     Guid TaskId,
@@ -385,7 +417,28 @@ public sealed record FamiliarSessionHandoffPlan(
     int Offset,
     int TotalLength,
     bool HasMore,
-    string Disclosure);
+    string Disclosure,
+    FamiliarPlanCompleteness Completeness = FamiliarPlanCompleteness.Complete,
+    int? OriginalLength = null,
+    int NextOffset = 0,
+    bool IsCompleteArtifactAvailable = true)
+{
+    /// <summary>
+    /// True when this response ends a fully retained artifact — nothing remains to fetch, and nothing
+    /// was lost before storage. A caller that paged from offset 0 until this is true holds the whole
+    /// human-reviewable plan.
+    ///
+    /// This is the single flag an approval flow should gate on, so "have I read all of it?" is answered
+    /// mechanically rather than by reading the text for an ellipsis. It is false for an
+    /// <see cref="FamiliarPlanCompleteness.Excerpt"/> or a
+    /// <see cref="FamiliarPlanCompleteness.PartiallyRetained"/> artifact however many pages were
+    /// fetched, because in those cases no amount of paging will produce the rest.
+    /// </summary>
+    public bool IsWholeArtifactRetrieved =>
+        !HasMore
+        && IsCompleteArtifactAvailable
+        && Completeness is FamiliarPlanCompleteness.Complete or FamiliarPlanCompleteness.Page;
+}
 
 /// <summary>
 /// Everything the Demiplane's task page shows about one task, for a caller entitled to see it.

@@ -239,7 +239,9 @@ public static class RunnerEndpoints
                 payload.ArtifactTitle,
                 payload.ArtifactContent,
                 payload.ClaimId,
-                RequireClaimOwnership: true),
+                RequireClaimOwnership: true,
+                payload.CompleteArtifactContent,
+                payload.CompleteArtifactLength),
             cancellationToken);
 
         return outcome.Status switch

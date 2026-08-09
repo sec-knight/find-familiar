@@ -260,8 +260,30 @@ preflight from provider execution. Raw stderr, prompts, output, credentials, and
 not stored or returned. For example, a dirty edit workspace is reported as: `Implementer could not
 start: WorktreeNotClean (adapter exit 5). Provider was not launched.`
 
+## Reading a plan before approving it
+
 If a task is waiting for approval after a Planner session, call Sakura's
-`get_session_handoff_plan` with the `decisionId` from `open_decisions`. It returns the complete stored
-Planner artifact in bounded pages; continue until `hasMore` is false. The artifact contract requires
-Goal and outcome, Scope, Concrete changes, Architecture and approach, Risks and migrations, Non-goals,
-and Acceptance and verification.
+`get_session_handoff_plan` with the `decisionId` from `open_decisions`, or open
+`/handoffs/{handoffId}/plan` on the Demiplane. Both return the complete Planner artifact in bounded
+pages.
+
+Page with `offset` set to the previous response's `nextOffset` until `hasMore` is false. You hold the
+entire plan when a response reports `isWholeArtifactRetrieved: true` — do not judge completeness by
+whether the text reads like it ends.
+
+The `completeness` field says what you were given:
+
+| Value | Meaning |
+| --- | --- |
+| `Complete` | The whole plan, in one response |
+| `Page` | Part of a stored whole plan — keep paging |
+| `PartiallyRetained` | The plan exceeded the 200,000-character retention bound; the missing characters cannot be fetched |
+| `Excerpt` | Only a bounded excerpt was ever stored — there is no remainder to page to |
+
+`Excerpt` is expected for any session captured before complete plan retention existed (anything at or
+before commit `d671d84`). Those plans were cut to 12,000 characters at the adapter and the rest was
+never stored anywhere, so it cannot be recovered. Treat such a plan as a summary and not as the
+artifact you are approving. See ADR-0020.
+
+The artifact contract requires Goal and outcome, Scope, Concrete changes, Architecture and approach,
+Risks and migrations, Non-goals, and Acceptance and verification.
