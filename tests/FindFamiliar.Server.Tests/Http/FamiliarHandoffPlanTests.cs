@@ -113,7 +113,29 @@ public sealed class FamiliarHandoffPlanTests(FindFamiliarWebApplicationFactory f
 
         var disclosure = page.GetProperty("disclosure").GetString()!;
         Assert.Contains("never retained", disclosure, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("no remainder", disclosure, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Nothing beyond this excerpt can be recovered", disclosure, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// An excerpt longer than one page still pages, and the disclosure must not therefore say both
+    /// "there is more to fetch" and "there is no remainder" — those are true of different things, and
+    /// side by side they read as a contradiction at the one boundary that cannot afford one.
+    /// </summary>
+    [Fact]
+    public async Task A_multi_page_excerpt_separates_paging_through_it_from_recovering_what_was_lost()
+    {
+        var seeded = await SeedAsync(planLength: 11_000, retainComplete: false);
+        using var client = Authenticated();
+        var page = await client.GetFromJsonAsync<JsonElement>(
+            $"/api/gateway/handoffs/{seeded.HandoffId}?maxCharacters=4000");
+
+        Assert.Equal("Excerpt", page.GetProperty("completeness").GetString());
+        Assert.True(page.GetProperty("hasMore").GetBoolean());
+
+        var disclosure = page.GetProperty("disclosure").GetString()!;
+        Assert.Contains("Further pages of what was kept remain", disclosure, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Nothing beyond this excerpt can be recovered", disclosure, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("no remainder to page to", disclosure, StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>
@@ -132,7 +154,7 @@ public sealed class FamiliarHandoffPlanTests(FindFamiliarWebApplicationFactory f
         Assert.Equal(seeded.Content.Length, page.GetProperty("totalLength").GetInt32());
         Assert.False(page.GetProperty("isWholeArtifactRetrieved").GetBoolean());
         Assert.Contains(
-            $"remaining {9_000 - seeded.Content.Length} characters were never stored",
+            $"other {9_000 - seeded.Content.Length} characters were never stored",
             page.GetProperty("disclosure").GetString()!,
             StringComparison.OrdinalIgnoreCase);
     }

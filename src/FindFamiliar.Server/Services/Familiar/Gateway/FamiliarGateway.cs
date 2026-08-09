@@ -655,7 +655,7 @@ public sealed class FamiliarGateway(
             start,
             completeContent.Length,
             hasMore,
-            DisclosePlan(completeness, start, page.Length, completeContent.Length, originalLength),
+            DisclosePlan(completeness, start, page.Length, completeContent.Length, originalLength, hasMore),
             completeness,
             originalLength,
             start + page.Length,
@@ -672,10 +672,19 @@ public sealed class FamiliarGateway(
         int offset,
         int pageLength,
         int retainedLength,
-        int originalLength)
+        int originalLength,
+        bool hasMore)
     {
         const string neverReturned = " Raw provider prompts and output, credentials and transcripts are never returned.";
         var span = $"characters {offset + 1}-{offset + pageLength} of {retainedLength}";
+
+        // What was retained can still be longer than one page, even when the plan itself is
+        // incomplete. Saying "there is no remainder" while hasMore is true would read as a
+        // contradiction, so the two cases below distinguish paging through what was kept from
+        // recovering what was not.
+        var remainingOfRetained = hasMore
+            ? " Further pages of what was kept remain; continue from nextOffset to read the rest of it."
+            : string.Empty;
 
         return completeness switch
         {
@@ -690,13 +699,15 @@ public sealed class FamiliarGateway(
 
             FamiliarPlanCompleteness.PartiallyRetained =>
                 $"This plan was {originalLength} characters and exceeded what may be retained, so {retainedLength} "
-                + $"were kept — {span}. The remaining {originalLength - retainedLength} characters were never stored "
-                + "and cannot be retrieved by paging. Do not treat this as the whole plan." + neverReturned,
+                + $"were kept — {span}.{remainingOfRetained} The other {originalLength - retainedLength} characters "
+                + "were never stored and cannot be recovered by paging. Do not treat this as the whole plan."
+                + neverReturned,
 
             _ =>
-                $"Only a bounded excerpt of this plan exists ({retainedLength} characters); the complete artifact "
-                + "was never retained, because this session ran before complete plans were stored. There is no "
-                + "remainder to page to. Treat this as a summary and not as the plan being approved." + neverReturned
+                $"Only a bounded excerpt of this plan exists ({retainedLength} characters) — {span}. The complete "
+                + "artifact was never retained, because this session ran before complete plans were stored."
+                + remainingOfRetained + " Nothing beyond this excerpt can be recovered. Treat it as a summary and "
+                + "not as the plan being approved." + neverReturned
         };
     }
 
