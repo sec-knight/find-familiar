@@ -286,8 +286,49 @@ Requires ChatGPT Pro, Team, Enterprise or Edu, and Developer Mode.
    supports dynamic client registration, so ChatGPT registers itself. If the form insists on a bearer
    token instead, the static gateway token still works.
 5. ChatGPT opens the consent screen. Paste the gateway token there and approve.
-6. Confirm the connector lists four tools.
+6. Confirm the connector lists the tools this server currently exposes. Check the count against the
+   server rather than against a number written here — this document will go stale and the server will
+   not:
+
+   ```bash
+   curl -s -X POST https://familiar.example.ts.net/mcp \
+     -H "Authorization: Bearer $FAMILIAR_GATEWAY_TOKEN" \
+     -H "Content-Type: application/json" \
+     -H "Accept: application/json, text/event-stream" \
+     -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' \
+     | sed 's/^data: //' | python3 -c 'import json,sys; t=json.load(sys.stdin)["result"]["tools"]; print(len(t)); [print(x["name"]) for x in sorted(t, key=lambda i: i["name"])]'
+   ```
+
+   If ChatGPT shows fewer tools than that command prints, the connector is serving a cached tool list.
+   See §7.1.
 7. In a new chat, enable the connector for that conversation.
+
+## 7.1 When ChatGPT does not see a newly added tool
+
+**ChatGPT caches the tool list at registration time.** Adding a tool to this server does not reach an
+existing connector, and neither does an in-place "refresh" or an MCP reset — both have been observed
+to keep serving a tool list captured when the connector was first created, including tool
+*descriptions* from that moment. The symptom is a connector whose tool set matches an older commit of
+`FamiliarMcpTools.cs`: a missing tool, and descriptions that contradict tools that are present.
+
+Confirm it is a cache rather than a server problem first — if the `curl` above lists the tool, the
+server is serving it to anyone who asks, including ChatGPT:
+
+```bash
+# Same command against localhost; the two responses should be identical.
+curl -s -X POST http://127.0.0.1:5199/mcp ... | wc -c
+```
+
+**The fix is a full re-registration, not a refresh:**
+
+1. **Settings → Connectors**, open the Find Familiar connector, and **delete** it.
+2. Recreate it from step 2 above, with the same URL.
+3. Paste the gateway token at the consent screen again.
+4. Re-enable it in each conversation that used it.
+
+Nothing needs to change on this server, and no token needs rotating: OAuth artifacts here are
+stateless and signed, so there is no server-side registration record to clear. Deleting the connector
+discards ChatGPT's cached copy, which is the only stale thing in the system.
 
 ### The acceptance phrase
 

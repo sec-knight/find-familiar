@@ -88,9 +88,9 @@ public sealed class FamiliarMcpTools(
         + "exactly what approving would create, so tell the user that before they answer. "
         + "Present those choices and no others, and read the disclosure sentence — it says what was "
         + "withheld or omitted, and an empty list means nothing is waiting rather than nothing exists. "
-        + "This tool only reports. You cannot approve, decline, or otherwise act on any of these "
-        + "decisions; if the user tells you to act, say plainly that you can see the decision but "
-        + "cannot submit it, and that they must use Find Familiar directly.")]
+        + "This tool only reports; it cannot approve or decline anything. To act on a decision the user "
+        + "has explicitly made, use submit_familiar_decision — never infer a decision from the fact "
+        + "that they asked about it.")]
     public Task<FamiliarOpenDecisionList> OpenDecisions(CancellationToken cancellationToken)
     {
         // Reading what needs the human is a read. Submitting the answer is not, and requires the other
@@ -129,21 +129,17 @@ public sealed class FamiliarMcpTools(
 
     [McpServerTool(Name = "get_session_handoff_plan", ReadOnly = true, Destructive = false, Idempotent = true)]
     [Description(
-        "Read the complete human-reviewable Planner artifact behind a SessionHandoff decision. "
-        + "Call this after open_decisions returns a SessionHandoff and before explaining what approval "
-        + "would do. It includes the task goal and requested outcome plus the stored Plan artifact. "
-        + "\n\n"
-        + "The plan is paged. Call again with offset set to the returned nextOffset while hasMore is "
-        + "true, and concatenate the content in order; you hold the entire plan when a response has "
-        + "isWholeArtifactRetrieved true. Never summarise a plan for approval before reaching that point. "
-        + "\n\n"
-        + "The completeness field says what you were given: 'Complete' is the whole plan in one "
-        + "response; 'Page' is part of a stored whole plan, so keep paging; 'PartiallyRetained' means "
-        + "the plan exceeded what may be stored and the missing characters cannot be fetched by paging; "
-        + "'Excerpt' means only a bounded excerpt was ever stored and there is no remainder to page to. "
-        + "For the last two, tell the user plainly that you cannot show them the whole plan, and do not "
+        "Read the complete human-reviewable Planner artifact behind a SessionHandoff decision. Call "
+        + "this after open_decisions returns a SessionHandoff and before explaining what approval would "
+        + "do. Returns the task goal and requested outcome plus the stored Plan artifact, paged. "
+        + "To read all of it: call again with offset set to the returned nextOffset while hasMore is "
+        + "true, joining the content in order. You hold the entire plan only when a response reports "
+        + "isWholeArtifactRetrieved true; do not summarise a plan for approval before that. "
+        + "The completeness field says what you were given. Complete is the whole plan. Page is part of "
+        + "a stored whole plan, so keep paging. PartiallyRetained means the plan exceeded what may be "
+        + "stored. Excerpt means only a bounded excerpt was ever stored. For the last two the missing "
+        + "text cannot be fetched by paging: say plainly that you cannot show the whole plan, and never "
         + "present what you have as if it were complete. "
-        + "\n\n"
         + "Raw provider prompts, output, credentials and transcripts are never returned. This tool only "
         + "reports and cannot approve or decline the handoff.")]
     public async Task<object> GetSessionHandoffPlan(
