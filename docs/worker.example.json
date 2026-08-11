@@ -26,11 +26,37 @@
       "worktree": "/absolute/path/to/repository",
       "allowedRoot": "/absolute/path/to/parent-of-repository",
 
-      "//mode": "read-only, or edit-worktree to let approved Implementer sessions change files here. Even then only the Implementer writes; Planner and Reviewer stay read-only. edit-worktree needs a clean LINKED git worktree and refuses to start otherwise.",
+      "//mode": "read-only, or edit-worktree to let approved Implementer sessions change files here. Even then only the Implementer writes; Planner and Reviewer stay read-only. edit-worktree needs a clean LINKED git worktree and refuses to start otherwise. A third mode, local-maintenance, is documented at the end of this file.",
       "mode": "read-only",
 
       "//projectPath": "Recommended, and required for automatic per-session worktree isolation: the clean canonical checkout used as the current baseline. Each session receives a fresh detached worktree under allowedRoot; without it, only legacy static read-only execution is available.",
       "projectPath": "/absolute/path/to/canonical-checkout"
     }
+  ],
+
+  "//host-maintenance": [
+    "A third mode, local-maintenance, exists for work whose subject is the MACHINE rather than a",
+    "repository on it — restarting a unit, reading a disk's health, finding out why a worker stopped.",
+    "It grants Bash and runs as this worker's own OS user. See ADR-0021 before using it.",
+    "",
+    "Read this before you copy it: a session in this mode can damage the host. Unlike the other two",
+    "modes there is no directory boundary, because a shell has none — allowedRoot '/' is the honest",
+    "value, and writing something narrower only misleads the next reader. What bounds it is the OS",
+    "user, the single project mapped to it, the Implementer-only role rule, and a human approving the",
+    "plan first. Give it its own worker process and its own systemd unit, never a second mapping on",
+    "the worker that builds your code, so that stopping one unit is a complete off switch.",
+    "",
+    "A mapping using it looks like this — note that the mode alone does not load, the same mapping",
+    "must also acknowledge what it is turning on:",
+    "",
+    "  {",
+    "    \"projectId\": \"<the project you created for this host>\",",
+    "    \"worktree\": \"/srv/yourapp\",        // where the session starts; not a limit on its reach",
+    "    \"allowedRoot\": \"/\",",
+    "    \"mode\": \"local-maintenance\",",
+    "    \"acknowledgeHostAccess\": true      // required; without it the worker refuses to start",
+    "  }",
+    "",
+    "There is deliberately no projectPath: nothing is cloned and no worktree is created."
   ]
 }

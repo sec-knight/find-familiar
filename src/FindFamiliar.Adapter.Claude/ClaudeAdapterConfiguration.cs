@@ -69,7 +69,8 @@ public sealed record ClaudeAdapterConfiguration(
         var modeRaw = Read(environment, ModeVariable);
         if (string.IsNullOrWhiteSpace(modeRaw))
         {
-            diagnostics.WriteLine($"adapter: {ModeVariable} is required (read-only or edit-worktree).");
+            diagnostics.WriteLine(
+                $"adapter: {ModeVariable} is required (read-only, edit-worktree or local-maintenance).");
             return null;
         }
 
@@ -82,8 +83,12 @@ public sealed record ClaudeAdapterConfiguration(
             case "edit-worktree":
                 mode = ClaudeAdapterMode.EditWorktree;
                 break;
+            case "local-maintenance":
+                mode = ClaudeAdapterMode.LocalMaintenance;
+                break;
             default:
-                diagnostics.WriteLine($"adapter: {ModeVariable} must be 'read-only' or 'edit-worktree'.");
+                diagnostics.WriteLine(
+                    $"adapter: {ModeVariable} must be 'read-only', 'edit-worktree' or 'local-maintenance'.");
                 return null;
         }
 

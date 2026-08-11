@@ -165,6 +165,22 @@ public sealed record WorkspaceContract(
         markdown.AppendLine($"- **Authorized workspace root:** `{WorkspaceRoot}`");
         markdown.AppendLine($"- **Permission mode:** {Mode}");
         markdown.AppendLine();
+
+        // Host maintenance has no workspace boundary to restate, and the repository wording would be
+        // actively misleading: it instructs the reader to treat paths outside the root as a
+        // different project and to re-resolve them inward. On this machine those paths are the
+        // subject of the work — /etc, a systemd unit, a device node — and rewriting them into the
+        // working directory would point the session at files that do not exist.
+        if (string.Equals(Mode, "local-maintenance", StringComparison.Ordinal))
+        {
+            markdown.AppendLine("This session maintains **this host**. The root above is where it starts, not the");
+            markdown.AppendLine("limit of what it can reach, and paths in the assignment mean exactly what they say");
+            markdown.AppendLine("on this machine — resolve them literally and do not restate them relative to the");
+            markdown.AppendLine("workspace root.");
+
+            return markdown.ToString();
+        }
+
         markdown.AppendLine("Every path in the assignment below is to be resolved **relative to the authorized");
         markdown.AppendLine("workspace root**, whatever prefix the assignment writes it with. This workspace is the");
         markdown.AppendLine("project: judging or editing anything outside it is not a stricter reading of the");

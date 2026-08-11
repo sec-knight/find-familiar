@@ -48,7 +48,7 @@ FAMILIAR_CLAUDE_RUNTIME_PATH     absolute path to the native claude executable
 FAMILIAR_CLAUDE_ENTRYPOINT       optional; only for a node + JS entrypoint installation
 FAMILIAR_CLAUDE_WORKTREE         absolute path to the exact repository/worktree Claude may use
 FAMILIAR_CLAUDE_ALLOWED_ROOT     absolute path to the directory the worktree must sit under
-FAMILIAR_CLAUDE_MODE             read-only | edit-worktree
+FAMILIAR_CLAUDE_MODE             read-only | edit-worktree | local-maintenance
 FAMILIAR_CLAUDE_TIMEOUT_SECONDS  optional, default 600, clamped to [5, 3600]
 FAMILIAR_CLAUDE_EXTRA_ARGS       optional JSON array, e.g. ["--model","<model-name>"]
 ```
@@ -92,6 +92,17 @@ dotnet FindFamiliar.Runner.dll \
   `git worktree add`. A primary checkout is rejected even when clean, as is a subdirectory of one.
   Inspect the diff yourself afterwards. Claude cannot commit or push; do not do it on its behalf
   without reviewing.
+- **`local-maintenance`** — Claude gets `Bash` and operates **this machine** as the worker's own OS
+  user. There is no worktree check and no meaningful path containment, because a shell has none. It
+  exists for work about the host — a stopped unit, a failing disk, a worker that will not restart —
+  which the other two modes cannot express at all. Do not reach for it as a more capable
+  `edit-worktree`: a repository mapping must never use it. Read
+  [ADR-0021](decisions/ADR-0021-host-maintenance-worker.md) first; it states plainly what does and
+  does not bound this mode.
+
+  Pre-approval here is an allow-list (`--allowedTools`), never a permission bypass. The adapter still
+  refuses to emit `--dangerously-skip-permissions` or `bypassPermissions` in any mode, including this
+  one.
 
 Automatic pickup can also run `edit-worktree`, for approved Implementer sessions only, when a project
 mapping opts in. The rules above are unchanged and still enforced by the adapter — the worker chooses

@@ -54,6 +54,57 @@ public sealed class SessionWorkspaceLifecycleTests
         Assert.True(laterCleanup.Cleaned);
     }
 
+    /// <summary>
+    /// A maintenance session works on the host, so there is nothing to clone and nothing to throw
+    /// away. Sending it down the ephemeral path would build session directories directly under the
+    /// allowed root — which on a maintenance mapping is a real system path, not a worktrees folder —
+    /// and then delete them again on every run.
+    /// </summary>
+    [Fact]
+    public async Task Local_maintenance_uses_the_configured_directory_and_creates_no_worktree()
+    {
+        using var fixture = GitFixture.Create();
+        var lifecycle = new SessionWorkspaceLifecycle(TextWriter.Null);
+        // The workspace is an existing directory on this machine, not a checkout to be copied.
+        var mapping = fixture.Mapping() with { Mode = "local-maintenance", Worktree = fixture.SourceRoot };
+
+        var lease = await lifecycle.AcquireAsync(mapping, Guid.NewGuid(), Guid.NewGuid(), "Implementer");
+
+        Assert.Equal(mapping.Worktree, lease.Worktree);
+        Assert.Equal("local-maintenance", lease.Mode);
+        Assert.False(lease.IsEphemeral);
+        Assert.Empty(Directory.EnumerateDirectories(fixture.AllowedRoot, "familiar-session-*"));
+
+        // Release must leave the host alone: there is no lease to reclaim and no directory to remove.
+        var cleanup = await lifecycle.ReleaseAsync(lease);
+
+        Assert.False(cleanup.Cleaned);
+        Assert.False(cleanup.Quarantined);
+        Assert.True(Directory.Exists(lease.Worktree));
+    }
+
+    /// <summary>
+    /// The non-writing roles on a maintenance project are still standing on the host, so they take
+    /// the same static path — but resolve to read-only, keeping shell access to the Implementer a
+    /// human approved.
+    /// </summary>
+    [Theory]
+    [InlineData("Planner")]
+    [InlineData("Reviewer")]
+    public async Task Local_maintenance_keeps_non_writing_roles_read_only(string role)
+    {
+        using var fixture = GitFixture.Create();
+        var lifecycle = new SessionWorkspaceLifecycle(TextWriter.Null);
+        // The workspace is an existing directory on this machine, not a checkout to be copied.
+        var mapping = fixture.Mapping() with { Mode = "local-maintenance", Worktree = fixture.SourceRoot };
+
+        var lease = await lifecycle.AcquireAsync(mapping, Guid.NewGuid(), Guid.NewGuid(), role);
+
+        Assert.Equal("read-only", lease.Mode);
+        Assert.Equal(mapping.Worktree, lease.Worktree);
+        Assert.Empty(Directory.EnumerateDirectories(fixture.AllowedRoot, "familiar-session-*"));
+    }
+
     [Fact]
     public async Task Dirty_canonical_baseline_fails_preflight_before_a_session_worktree_is_created()
     {

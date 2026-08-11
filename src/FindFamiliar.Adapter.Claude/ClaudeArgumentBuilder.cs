@@ -61,12 +61,35 @@ public static class ClaudeArgumentBuilder
             arguments.Add("--permission-mode");
             arguments.Add("plan");
         }
-        else
+        else if (configuration.Mode == ClaudeAdapterMode.EditWorktree)
         {
             // Bash is deliberately excluded: without it there is no tool path to git commit,
             // push, or any other process execution from inside the model's turn.
             arguments.Add("--tools");
             arguments.Add("Edit,Write,Read,Grep,Glob");
+            arguments.Add("--permission-mode");
+            arguments.Add("acceptEdits");
+            arguments.Add("--add-dir");
+            arguments.Add(configuration.Worktree);
+        }
+        else
+        {
+            // Host maintenance (ADR-0021). Bash is present here — it is the entire point of the
+            // mode, since no combination of Edit and Write restarts a unit or reads SMART data off
+            // a disk.
+            arguments.Add("--tools");
+            arguments.Add("Bash,Edit,Write,Read,Grep,Glob");
+
+            // Pre-approval is expressed as an allow-list, never as a bypass. The distinction is not
+            // cosmetic: --dangerously-skip-permissions and --permission-mode=bypassPermissions
+            // disable the permission system for everything at once, including tools this mode never
+            // asked for and any tool a future runtime version adds. An allow-list grants exactly the
+            // named tools and leaves the mechanism itself intact, so ProhibitedFlags stays true of
+            // every mode this adapter can emit — see the assertion in ClaudeAdapterUnitTests.
+            arguments.Add("--allowedTools");
+            arguments.Add("Bash");
+            arguments.Add("Edit");
+            arguments.Add("Write");
             arguments.Add("--permission-mode");
             arguments.Add("acceptEdits");
             arguments.Add("--add-dir");

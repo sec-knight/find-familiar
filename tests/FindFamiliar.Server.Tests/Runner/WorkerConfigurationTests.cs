@@ -126,6 +126,84 @@ public sealed class WorkerConfigurationTests
         Assert.Equal("read-only", mapping.ResolveMode(role));
     }
 
+    /// <summary>
+    /// Host maintenance is the one mode whose reach is the machine, so naming it is not enough. An
+    /// operator who copies a config file between hosts should not silently inherit shell access to
+    /// the new one; the acknowledgement is the second, deliberate statement of intent.
+    /// </summary>
+    [Fact]
+    public void Local_maintenance_without_an_acknowledgement_is_rejected()
+    {
+        using var directory = new TemporaryConfigDirectory();
+        var path = directory.WriteConfig(ValidConfigObject(mode: "local-maintenance"));
+
+        Assert.Null(WorkerConfiguration.TryLoad(Environment(path, Token), TextWriter.Null));
+    }
+
+    [Fact]
+    public void Local_maintenance_loads_when_the_operator_acknowledges_host_access()
+    {
+        using var directory = new TemporaryConfigDirectory();
+        var path = directory.WriteConfig(MaintenanceConfigObject());
+
+        var configuration = WorkerConfiguration.TryLoad(Environment(path, Token), TextWriter.Null);
+
+        Assert.NotNull(configuration);
+        Assert.Equal("local-maintenance", Assert.Single(configuration.Projects).Mode);
+    }
+
+    /// <summary>
+    /// Host access narrows by role exactly as edit-worktree does. A Planner and a Reviewer can
+    /// describe what should happen on the machine without being able to do it.
+    /// </summary>
+    [Theory]
+    [InlineData("Planner", "read-only")]
+    [InlineData("Reviewer", "read-only")]
+    [InlineData("Implementer", "local-maintenance")]
+    public void Local_maintenance_applies_to_the_implementer_only(string role, string expectedMode)
+    {
+        using var directory = new TemporaryConfigDirectory();
+        var path = directory.WriteConfig(MaintenanceConfigObject());
+
+        var configuration = WorkerConfiguration.TryLoad(Environment(path, Token), TextWriter.Null);
+
+        var mapping = Assert.Single(configuration!.Projects);
+        Assert.Equal(expectedMode, mapping.ResolveMode(role));
+        Assert.Equal(expectedMode, mapping.ToAdapterEnvironment(role)["FAMILIAR_CLAUDE_MODE"]);
+    }
+
+    /// <summary>
+    /// The acknowledgement is specific to the mode that needs it. It must not become a flag that
+    /// operators paste onto every mapping, so an ordinary mapping carrying it is unaffected.
+    /// </summary>
+    [Fact]
+    public void An_acknowledgement_does_not_widen_an_ordinary_mapping()
+    {
+        using var directory = new TemporaryConfigDirectory();
+        var path = directory.WriteConfig(new
+        {
+            baseUrl = "https://familiar.example.test",
+            workerKey = "workstation-01",
+            capabilities = new[] { "Implementer" },
+            adapterPath = AbsolutePath("adapter"),
+            projects = new[]
+            {
+                new
+                {
+                    projectId = Guid.NewGuid().ToString(),
+                    worktree = AbsolutePath("repo"),
+                    allowedRoot = AbsolutePath(""),
+                    mode = "read-only",
+                    acknowledgeHostAccess = true
+                }
+            }
+        });
+
+        var configuration = WorkerConfiguration.TryLoad(Environment(path, Token), TextWriter.Null);
+
+        Assert.Equal("read-only", Assert.Single(configuration!.Projects).ResolveMode("Implementer"));
+    }
+
     [Fact]
     public void Configuration_with_no_project_mapping_is_rejected()
     {
@@ -264,6 +342,25 @@ public sealed class WorkerConfigurationTests
                 worktree = worktree ?? AbsolutePath("repo"),
                 allowedRoot = AbsolutePath(""),
                 mode
+            }
+        }
+    };
+
+    private static object MaintenanceConfigObject() => new
+    {
+        baseUrl = "https://familiar.example.test",
+        workerKey = "host-maintenance",
+        capabilities = new[] { "Implementer" },
+        adapterPath = AbsolutePath("adapter"),
+        projects = new[]
+        {
+            new
+            {
+                projectId = Guid.NewGuid().ToString(),
+                worktree = AbsolutePath("host"),
+                allowedRoot = AbsolutePath(""),
+                mode = "local-maintenance",
+                acknowledgeHostAccess = true
             }
         }
     };

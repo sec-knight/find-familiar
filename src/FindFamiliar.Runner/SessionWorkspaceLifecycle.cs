@@ -66,6 +66,37 @@ public sealed class SessionWorkspaceLifecycle(TextWriter diagnostics) : ISession
         string role,
         CancellationToken cancellationToken = default)
     {
+        // Host maintenance has no repository to copy and nothing to isolate: the subject of the work
+        // is the machine this worker is already running on. Cloning a worktree for it would produce
+        // a directory the session has no reason to stand in, and — because the ephemeral path is
+        // built under allowedRoot — would create and delete directories at the root of the host on
+        // every session. The configured workspace is used exactly as the operator wrote it, and
+        // ReleaseAsync leaves it alone (IsEphemeral: false).
+        // Keyed on the configured mode, not the resolved one: a Planner or Reviewer on a maintenance
+        // project resolves to read-only, but it is still the host it is reading, so it must not be
+        // sent down the git-worktree path either. Only the lease's mode narrows by role.
+        if (string.Equals(mapping.Mode, WorkerProjectMapping.LocalMaintenanceMode, StringComparison.Ordinal))
+        {
+            if (!Directory.Exists(mapping.Worktree))
+            {
+                throw PreparationFailure("The configured maintenance workspace does not exist.");
+            }
+
+            diagnostics.WriteLine($"workspace: host maintenance workspace (session={sessionId}, role={role}).");
+
+            return new SessionWorkspaceLease(
+                taskId,
+                sessionId,
+                mapping.ProjectId,
+                role,
+                mapping.Worktree,
+                mapping.AllowedRoot,
+                mapping.ResolveMode(role),
+                mapping.ProjectPath,
+                null,
+                false);
+        }
+
         if (string.IsNullOrWhiteSpace(mapping.ProjectPath))
         {
             // Explicit test/legacy read-only mappings may intentionally point at a non-Git directory.

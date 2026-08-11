@@ -142,17 +142,31 @@ public sealed record WorkerConfiguration(
 
             // Sprint 07 automated read-only execution only. ADR-0010 allows a project to opt in to
             // writing, and even then only an Implementer session writes — see
-            // WorkerProjectMapping.ResolveMode. Anything other than these two values is rejected at
-            // configuration load rather than filtered later.
+            // WorkerProjectMapping.ResolveMode. ADR-0021 adds a third mode for maintaining the host
+            // itself. Anything other than these three values is rejected at configuration load
+            // rather than filtered later.
             var mode = string.IsNullOrWhiteSpace(project.Mode)
                 ? WorkerProjectMapping.ReadOnlyMode
                 : project.Mode.Trim();
 
-            if (!string.Equals(mode, WorkerProjectMapping.ReadOnlyMode, StringComparison.Ordinal)
-                && !string.Equals(mode, WorkerProjectMapping.EditWorktreeMode, StringComparison.Ordinal))
+            if (!WorkerProjectMapping.IsKnownMode(mode))
             {
                 diagnostics.WriteLine(
-                    $"worker: mode must be '{WorkerProjectMapping.ReadOnlyMode}' or '{WorkerProjectMapping.EditWorktreeMode}'.");
+                    $"worker: mode must be '{WorkerProjectMapping.ReadOnlyMode}', "
+                    + $"'{WorkerProjectMapping.EditWorktreeMode}' or '{WorkerProjectMapping.LocalMaintenanceMode}'.");
+                return null;
+            }
+
+            // A host-maintenance mapping is the one mode whose blast radius is the machine rather
+            // than a directory, so the operator states that intent twice: once as the mode and once
+            // as an explicit acknowledgement. A mode string arriving from a copied config file is
+            // otherwise indistinguishable from one an operator chose deliberately.
+            if (string.Equals(mode, WorkerProjectMapping.LocalMaintenanceMode, StringComparison.Ordinal)
+                && project.AcknowledgeHostAccess is not true)
+            {
+                diagnostics.WriteLine(
+                    $"worker: mode '{WorkerProjectMapping.LocalMaintenanceMode}' requires "
+                    + "\"acknowledgeHostAccess\": true on the same project mapping.");
                 return null;
             }
 
@@ -238,7 +252,8 @@ public sealed record WorkerConfiguration(
         string? Worktree,
         string? AllowedRoot,
         string? Mode,
-        string? ProjectPath);
+        string? ProjectPath,
+        bool? AcknowledgeHostAccess);
 }
 
 /// <summary>Machine-local mapping from a Familiar project to a repository on this host.</summary>
@@ -265,8 +280,32 @@ public sealed record WorkerProjectMapping(
     public const string ReadOnlyMode = "read-only";
     public const string EditWorktreeMode = "edit-worktree";
 
+    /// <summary>
+    /// Maintenance of the host this worker runs on, rather than of a repository checked out on it
+    /// (ADR-0021).
+    ///
+    /// Every other mode answers "which files may this session change?" with a directory, and the
+    /// directory is the boundary. This mode exists for work whose whole subject is the machine —
+    /// restarting a unit, reading SMART data off a disk, finding out why a sibling worker stopped
+    /// heartbeating — and for that work a directory boundary is not a weaker answer, it is an answer
+    /// to a different question. There is no path containment that makes `systemctl restart` safe and
+    /// no worktree whose cleanliness says anything about whether a service came back up.
+    ///
+    /// So this mode states the boundary it actually has instead of implying one it does not: the
+    /// session runs as the worker's own OS user and can do what that user can do. The controls are
+    /// the ones that survive that fact — a mapping that must name this mode explicitly and
+    /// acknowledge it, a project that must be created for it, and a human approving the plan before
+    /// any session is started at all.
+    /// </summary>
+    public const string LocalMaintenanceMode = "local-maintenance";
+
     /// <summary>The role whose sessions are allowed to write, when the mapping opts in.</summary>
     public const string WritingRole = "Implementer";
+
+    public static bool IsKnownMode(string mode) =>
+        string.Equals(mode, ReadOnlyMode, StringComparison.Ordinal)
+        || string.Equals(mode, EditWorktreeMode, StringComparison.Ordinal)
+        || string.Equals(mode, LocalMaintenanceMode, StringComparison.Ordinal);
 
     /// <summary>
     /// The mode this session actually runs in.
@@ -279,12 +318,20 @@ public sealed record WorkerProjectMapping(
     /// What edit mode permits is unchanged from ADR-0007 and enforced by the adapter, not here: a
     /// clean linked git worktree, whole-segment path containment with symlink resolution, and a tool
     /// list that deliberately excludes Bash so there is no path to git commit or push.
+    ///
+    /// <see cref="LocalMaintenanceMode"/> narrows by role the same way and for the same reason. A
+    /// Planner asked to plan and a Reviewer asked to review do not need to run commands on the host
+    /// to do it, so neither is given the ability; only the Implementer that a human approved
+    /// actually acts on the machine.
     /// </summary>
     public string ResolveMode(string role) =>
+        IsWritingMode && string.Equals(role, WritingRole, StringComparison.Ordinal)
+            ? Mode
+            : ReadOnlyMode;
+
+    private bool IsWritingMode =>
         string.Equals(Mode, EditWorktreeMode, StringComparison.Ordinal)
-            && string.Equals(role, WritingRole, StringComparison.Ordinal)
-                ? EditWorktreeMode
-                : ReadOnlyMode;
+        || string.Equals(Mode, LocalMaintenanceMode, StringComparison.Ordinal);
 
     /// <summary>
     /// The adapter environment for this project and role. These variable names are the adapter's

@@ -382,9 +382,46 @@ public sealed class ClaudeAdapterUnitTests
         Assert.DoesNotContain("Bash", tools);
     }
 
+    /// <summary>
+    /// Bash is the entire reason host maintenance exists: no arrangement of Edit and Write restarts
+    /// a unit or reads a disk's SMART data.
+    /// </summary>
+    [Fact]
+    public void Local_maintenance_mode_grants_bash()
+    {
+        var arguments = ClaudeArgumentBuilder.Build(NewConfiguration(ClaudeAdapterMode.LocalMaintenance));
+
+        var tools = arguments[arguments.ToList().IndexOf("--tools") + 1];
+        Assert.Contains("Bash", tools);
+        Assert.Contains("Edit", tools);
+        Assert.Contains("Read", tools);
+    }
+
+    /// <summary>
+    /// The distinction this mode rests on. Pre-approving named tools leaves the permission system
+    /// intact for everything else, including tools a future runtime version introduces; a bypass
+    /// would switch it off wholesale. Only the first is ever acceptable, which is why
+    /// <see cref="No_mode_ever_emits_a_permission_bypass"/> covers this mode too.
+    /// </summary>
+    [Fact]
+    public void Local_maintenance_mode_pre_approves_by_allow_list_not_by_bypass()
+    {
+        var arguments = ClaudeArgumentBuilder.Build(NewConfiguration(ClaudeAdapterMode.LocalMaintenance));
+
+        Assert.Contains("--allowedTools", arguments);
+
+        var allowed = arguments.Skip(arguments.ToList().IndexOf("--allowedTools") + 1)
+            .TakeWhile(argument => !argument.StartsWith("--", StringComparison.Ordinal))
+            .ToList();
+        Assert.Contains("Bash", allowed);
+
+        AssertFlagValue(arguments, "--permission-mode", "acceptEdits");
+    }
+
     [Theory]
     [InlineData(ClaudeAdapterMode.ReadOnly)]
     [InlineData(ClaudeAdapterMode.EditWorktree)]
+    [InlineData(ClaudeAdapterMode.LocalMaintenance)]
     public void No_mode_ever_emits_a_permission_bypass(ClaudeAdapterMode mode)
     {
         var arguments = ClaudeArgumentBuilder.Build(NewConfiguration(mode));
@@ -440,6 +477,39 @@ public sealed class ClaudeAdapterUnitTests
 
         Assert.Contains("EDIT mode", prompt);
         Assert.Contains("must not commit, push", prompt);
+    }
+
+    /// <summary>
+    /// The maintenance envelope must not inherit the repository one. Telling a session it may not
+    /// leave its directory or deploy anything, and then handing it Bash on a live host to restart a
+    /// service, contradicts itself — and a session that finds one rule false has been taught to read
+    /// the rest as advisory.
+    /// </summary>
+    [Fact]
+    public void Local_maintenance_prompt_states_host_rules_instead_of_worktree_rules()
+    {
+        var prompt = ClaudePromptBuilder.Build(NewInvocation(), ClaudeAdapterMode.LocalMaintenance, Worktree);
+
+        Assert.Contains("HOST MAINTENANCE", prompt);
+        Assert.Contains("untrusted", prompt);
+
+        // The claims that are simply untrue in this mode.
+        Assert.DoesNotContain("must not commit, push", prompt);
+        Assert.DoesNotContain("Do not read, write, or access anything outside that directory.", prompt);
+    }
+
+    /// <summary>
+    /// The rules that replace containment here: stay inside the assignment, and stop before a
+    /// destructive or security-weakening step rather than deciding it was implied.
+    /// </summary>
+    [Fact]
+    public void Local_maintenance_prompt_bounds_scope_and_destructive_action()
+    {
+        var prompt = ClaudePromptBuilder.Build(NewInvocation(), ClaudeAdapterMode.LocalMaintenance, Worktree);
+
+        Assert.Contains("Do only the work the assignment below describes", prompt);
+        Assert.Contains("stop and report what you would do", prompt);
+        Assert.Contains("Never weaken the security posture", prompt);
     }
 
     // ---------- provider response mapping ----------

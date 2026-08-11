@@ -82,7 +82,7 @@ Notes:
 - `projects` is the repository mapping. **Only** projects listed here are ever offered to this
   worker, and the paths never leave this machine — the worker sends project GUIDs to the server,
   never paths.
-- `mode` is `read-only` or `edit-worktree`, and defaults to `read-only`.
+- `mode` is `read-only`, `edit-worktree` or `local-maintenance`, and defaults to `read-only`.
 
   `edit-worktree` lets an **approved** Implementer session change files in that worktree. Opting a
   project in does not make every session a writing one: Planner and Reviewer stay read-only even
@@ -95,6 +95,10 @@ Notes:
 
   A session only ever writes if a human approved that specific step. If you would rather review a
   plan before any file changes, leave the mapping `read-only` and run Implementer work explicitly.
+
+  `local-maintenance` is a different kind of thing: it grants `Bash` and operates the host itself
+  rather than a checkout on it. It is not a stronger `edit-worktree` and does not belong on a
+  repository mapping. See "The host maintenance worker" below and ADR-0021.
 - The adapter still enforces its own containment (`allowedRoot`, worktree checks). The worker
   chooses *which* repository; the adapter still decides whether that repository is allowed.
 
@@ -226,7 +230,10 @@ the worker appears as `Online` on the Workers page.
 - Repository paths, adapter paths and credentials never reach the server. The database stores only
   a worker identity, capabilities and timestamps.
 - The Familiar token is removed from the adapter's child environment, so it never reaches Claude.
-- Automatic pickup is read-only. Editing, committing and pushing remain manual and reviewed.
+- Automatic pickup writes only where a mapping opted in and only for an approved Implementer.
+  Committing and pushing remain manual and reviewed: no repository mode grants `Bash`, so no session
+  can reach `git`. A `local-maintenance` mapping is the one exception to that sentence and grants a
+  shell on the host deliberately — see ADR-0021.
 - Every result and cancellation from the worker carries the claim's fencing token. An expired or
   replaced claim cannot change the session even if a stale process later regains connectivity.
 - Familiar and the worker stay on the private tailnet. Do not expose either publicly.
@@ -250,6 +257,47 @@ The canonical source checkout must remain clean and current. If it is not, the w
 bounded `WorktreeNotClean` preflight failure and does not launch Claude. A mapping without
 `projectPath` retains the legacy static read-only behavior; supply `projectPath` for automatic
 per-session isolation and for any edit-worktree mapping.
+
+## The host maintenance worker
+
+A `local-maintenance` mapping is for work whose subject is the machine rather than a repository on
+it: a unit that will not start, a disk whose health needs reading, a sibling worker that stopped
+heartbeating. It grants `Bash` and runs as the worker's own OS user. **Read ADR-0021 before setting
+one up** — a session in this mode can damage the host, and the reasoning behind each control is
+there rather than here.
+
+Two rules that are easy to get wrong:
+
+- **Give it its own worker process and its own systemd unit.** Do not add the mapping to the worker
+  that builds your code. Separate units mean stopping one is a complete off switch, a long
+  maintenance session does not block code sessions, and an editing slip in one JSON file cannot hand
+  host access to the repository worker.
+- **`allowedRoot` should be `/`, and there is no `projectPath`.** Once a session has a shell, path
+  containment does not bind it; a narrower root would restrain nothing and mislead the next reader.
+  Nothing is cloned and no worktree is created — `worktree` is only where the session starts.
+
+The mapping needs `acknowledgeHostAccess: true` alongside the mode; the mode alone will not load, so
+a config file copied from another machine does not silently bring shell access with it. Only the
+Implementer receives host access — Planner and Reviewer resolve to read-only here as everywhere else.
+
+Setting one up on this deployment:
+
+1. Create a project for the host in Find Familiar (the Demiplane's project list, or `/Projects`).
+   Its tasks are the maintenance work; keep it separate from your code project.
+2. Write `/srv/familiar/config/worker-local.json` from the `//host-maintenance` block in
+   `docs/worker.example.json`, with that project's id.
+3. Write `/srv/familiar/config/familiar-local-worker.env` pointing `FAMILIAR_WORKER_CONFIG` at it —
+   and remember `FAMILIAR_CLAUDE_RUNTIME_PATH`, without which the worker heartbeats and claims
+   normally and then fails every session at adapter configuration.
+4. Copy `familiar-worker.service` to `familiar-local-worker.service`, change the `EnvironmentFile`
+   and the log path, then `systemctl --user daemon-reload` and
+   `systemctl --user enable --now familiar-local-worker.service`.
+
+Verify it end to end before trusting it with anything real: ask for something diagnostic and
+reversible ("report `systemctl --user status familiar-worker` and the output of `df -h`") and confirm
+the durable result matches what the machine actually says. A session that reports a blocked tool
+attempt fails with adapter exit code 10 (`PermissionDenialReported`) rather than returning a partial
+answer, so a permission problem surfaces as a failed session and not as a plausible-looking result.
 
 ## Diagnosing a failed session
 
